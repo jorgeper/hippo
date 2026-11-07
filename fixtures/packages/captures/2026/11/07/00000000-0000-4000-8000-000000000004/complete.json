@@ -1,0 +1,26 @@
+{
+  "capture_id" : "00000000-0000-4000-8000-000000000004",
+  "files" : [
+    {
+      "byte_count" : 2487,
+      "relative_path" : "metadata.json",
+      "sha256" : "bdb0a52c231d867f5d1d7ec283d3dd2e0a357aad75082323648f2d672cecf53b"
+    },
+    {
+      "byte_count" : 439,
+      "relative_path" : "content/00000000-0000-4000-8000-000400000001.png",
+      "sha256" : "aecf2b5bece650205a6c3234959e6c93d0bc26034e268dc4e45b97a6cacef35b"
+    },
+    {
+      "byte_count" : 1369,
+      "relative_path" : "content/00000000-0000-4000-8000-000400000002.jpg",
+      "sha256" : "485acaeb6cd6758057cca78ff3ee1e7dd22c1efbadc6a09aa7888086d0e72236"
+    },
+    {
+      "byte_count" : 812,
+      "relative_path" : "content/00000000-0000-4000-8000-000400000003.pdf",
+      "sha256" : "c00647386a73663177304d041fc84c589bab7620181f4e0f08d9439907d71e8a"
+    }
+  ],
+  "schema_version" : 1
+}

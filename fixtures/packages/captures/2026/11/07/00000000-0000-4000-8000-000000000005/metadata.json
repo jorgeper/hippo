@@ -1,0 +1,43 @@
+{
+  "attachments" : [
+    {
+      "attachment_id" : "00000000-0000-4000-8000-000500000001",
+      "byte_count" : 2346,
+      "media" : {
+        "duration_seconds" : 1,
+        "height_pixels" : 48,
+        "width_pixels" : 64
+      },
+      "mime_type" : "video/quicktime",
+      "original_filename" : "clip.mov",
+      "relative_path" : "content/00000000-0000-4000-8000-000500000001.mov",
+      "representation_source" : "item_provider_file",
+      "sha256" : "6b08f8bae91df845512bb3f937f1a53de229818dfffedea24666bb6fe32d4d19",
+      "uti" : "com.apple.quicktime-movie"
+    }
+  ],
+  "capture_id" : "00000000-0000-4000-8000-000000000005",
+  "capture_method" : "share_extension",
+  "captured_at" : "2026-11-07T17:05:00.000Z",
+  "content_types" : [
+    "video"
+  ],
+  "extensions" : {
+
+  },
+  "local_datetime" : "2026-11-07T09:05:00-08:00",
+  "metadata_observations" : [
+
+  ],
+  "producer" : {
+    "app_version" : "0.1.0",
+    "build" : "1",
+    "os_version" : "fixture"
+  },
+  "schema_version" : 1,
+  "timezone_identifier" : "America/Los_Angeles",
+  "urls" : [
+
+  ],
+  "utc_offset_seconds" : -28800
+}

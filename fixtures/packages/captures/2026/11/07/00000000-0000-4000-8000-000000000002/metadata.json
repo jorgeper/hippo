@@ -1,0 +1,33 @@
+{
+  "attachments" : [
+
+  ],
+  "capture_id" : "00000000-0000-4000-8000-000000000002",
+  "capture_method" : "share_extension",
+  "captured_at" : "2026-11-07T17:02:00.000Z",
+  "content_types" : [
+    "url"
+  ],
+  "extensions" : {
+
+  },
+  "local_datetime" : "2026-11-07T09:02:00-08:00",
+  "metadata_observations" : [
+
+  ],
+  "producer" : {
+    "app_version" : "0.1.0",
+    "build" : "1",
+    "os_version" : "fixture"
+  },
+  "schema_version" : 1,
+  "shared_title" : "Example item",
+  "timezone_identifier" : "America/Los_Angeles",
+  "urls" : [
+    {
+      "source" : "shared_payload",
+      "url" : "https://example.com/item"
+    }
+  ],
+  "utc_offset_seconds" : -28800
+}

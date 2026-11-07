@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import CaptureCore
+import HippoTestSupport
 
 private struct FakeSpace: SpaceChecking {
     let bytes: Int64

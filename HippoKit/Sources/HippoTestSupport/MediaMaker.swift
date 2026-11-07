@@ -3,22 +3,24 @@ import ImageIO
 import UniformTypeIdentifiers
 import AVFoundation
 import CoreVideo
+import CoreGraphics
 
 /// Generates small media files for tests and fixtures. Self-contained: no test-framework imports.
-enum MediaMaker {
-    struct ImageOptions {
-        var exifDateTimeOriginal: String? = nil      // "2026:11:07 09:11:00"
-        var exifOffsetTimeOriginal: String? = nil    // "-08:00"
-        var gpsLatitude: Double? = nil               // signed
-        var gpsLongitude: Double? = nil              // signed
-        var gpsAltitude: Double? = nil               // signed; negative = below sea level
-        var make: String? = nil
-        var model: String? = nil
+public enum MediaMaker {
+    public struct ImageOptions {
+        public var exifDateTimeOriginal: String? = nil      // "2026:11:07 09:11:00"
+        public var exifOffsetTimeOriginal: String? = nil    // "-08:00"
+        public var gpsLatitude: Double? = nil               // signed
+        public var gpsLongitude: Double? = nil              // signed
+        public var gpsAltitude: Double? = nil               // signed; negative = below sea level
+        public var make: String? = nil
+        public var model: String? = nil
+        public init() {}
     }
 
-    struct MakerError: Error { let message: String }
+    public struct MakerError: Error { public let message: String }
 
-    static func imageData(width: Int, height: Int, type: UTType = .jpeg, options: ImageOptions = .init()) throws -> Data {
+    public static func imageData(width: Int, height: Int, type: UTType = .jpeg, options: ImageOptions = .init()) throws -> Data {
         let space = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
@@ -62,7 +64,7 @@ enum MediaMaker {
     }
 
     /// 1 s of silence, AAC, 44.1 kHz mono, in an .m4a container.
-    static func writeAudio(to url: URL) throws {
+    public static func writeAudio(to url: URL) throws {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 44100.0,
@@ -80,7 +82,7 @@ enum MediaMaker {
 
     /// 1 s H.264 .mov (30 frames at 30 fps), solid color. Uses the macOS 27 input-receiver API
     /// (the AVAssetWriterInputPixelBufferAdaptor path is deprecated there).
-    static func writeVideo(to url: URL, width: Int = 64, height: Int = 48) async throws {
+    public static func writeVideo(to url: URL, width: Int = 64, height: Int = 48) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
@@ -104,5 +106,18 @@ enum MediaMaker {
         receiver.finish()
         await writer.finishWriting()
         guard writer.status == .completed else { throw MakerError(message: "finish: \(String(describing: writer.error))") }
+    }
+
+    /// A one-page blank PDF.
+    public static func pdfData() throws -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 200, height: 200)
+        guard let consumer = CGDataConsumer(data: data), let ctx = CGContext(consumer: consumer, mediaBox: &box, nil) else {
+            throw MakerError(message: "pdf context")
+        }
+        ctx.beginPDFPage(nil)
+        ctx.endPDFPage()
+        ctx.closePDF()
+        return data as Data
     }
 }

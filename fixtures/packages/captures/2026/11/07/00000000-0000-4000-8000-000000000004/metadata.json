@@ -1,0 +1,83 @@
+{
+  "attachments" : [
+    {
+      "attachment_id" : "00000000-0000-4000-8000-000400000001",
+      "byte_count" : 439,
+      "media" : {
+        "height_pixels" : 80,
+        "width_pixels" : 120
+      },
+      "mime_type" : "image/png",
+      "original_filename" : "screenshot.png",
+      "relative_path" : "content/00000000-0000-4000-8000-000400000001.png",
+      "representation_source" : "item_provider_file",
+      "sha256" : "aecf2b5bece650205a6c3234959e6c93d0bc26034e268dc4e45b97a6cacef35b",
+      "uti" : "public.png"
+    },
+    {
+      "attachment_id" : "00000000-0000-4000-8000-000400000002",
+      "byte_count" : 1369,
+      "media" : {
+        "camera_make" : "Fixture",
+        "camera_model" : "Camera 1",
+        "embedded_created_at" : {
+          "has_utc_offset" : true,
+          "value" : "2026-11-07T08:30:00-08:00"
+        },
+        "embedded_location" : {
+          "altitude_meters" : 16,
+          "latitude" : 37.7749,
+          "longitude" : -122.4194
+        },
+        "height_pixels" : 120,
+        "width_pixels" : 160
+      },
+      "mime_type" : "image/jpeg",
+      "original_filename" : "trailhead.jpg",
+      "relative_path" : "content/00000000-0000-4000-8000-000400000002.jpg",
+      "representation_source" : "item_provider_file",
+      "sha256" : "485acaeb6cd6758057cca78ff3ee1e7dd22c1efbadc6a09aa7888086d0e72236",
+      "uti" : "public.jpeg"
+    },
+    {
+      "attachment_id" : "00000000-0000-4000-8000-000400000003",
+      "byte_count" : 812,
+      "mime_type" : "application/pdf",
+      "original_filename" : "map.pdf",
+      "relative_path" : "content/00000000-0000-4000-8000-000400000003.pdf",
+      "representation_source" : "item_provider_file",
+      "sha256" : "c00647386a73663177304d041fc84c589bab7620181f4e0f08d9439907d71e8a",
+      "uti" : "com.adobe.pdf"
+    }
+  ],
+  "capture_id" : "00000000-0000-4000-8000-000000000004",
+  "capture_method" : "share_extension",
+  "captured_at" : "2026-11-07T17:04:00.000Z",
+  "content_types" : [
+    "image",
+    "pdf",
+    "url"
+  ],
+  "extensions" : {
+
+  },
+  "local_datetime" : "2026-11-07T09:04:00-08:00",
+  "metadata_observations" : [
+
+  ],
+  "producer" : {
+    "app_version" : "0.1.0",
+    "build" : "1",
+    "os_version" : "fixture"
+  },
+  "schema_version" : 1,
+  "timezone_identifier" : "America/Los_Angeles",
+  "urls" : [
+    {
+      "source" : "shared_payload",
+      "url" : "https://example.com/trail"
+    }
+  ],
+  "user_note" : "Trail for next weekend",
+  "utc_offset_seconds" : -28800
+}

@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hippo.invalid/schema/capture-metadata-v1.schema.json",
+  "title": "Hippo capture metadata (metadata.json), schema version 1",
+  "description": "Unknown additional properties must be ignored by readers. Unavailable optional fields are omitted, never null.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version", "capture_id", "captured_at", "local_datetime", "timezone_identifier",
+    "utc_offset_seconds", "capture_method", "content_types", "urls", "producer", "attachments",
+    "metadata_observations", "extensions"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "capture_id": { "$ref": "#/$defs/uuid" },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 UTC instant, millisecond precision, e.g. 2026-11-07T17:00:00.000Z."
+    },
+    "local_datetime": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{2}:[0-9]{2}$",
+      "description": "Wall-clock time where the capture was made, whole seconds, numeric offset. Its date part names the package directory."
+    },
+    "timezone_identifier": { "type": "string", "minLength": 1, "description": "IANA zone, e.g. America/Los_Angeles." },
+    "utc_offset_seconds": { "type": "integer", "description": "Seconds east of UTC at captured_at." },
+    "capture_method": {
+      "type": "string",
+      "minLength": 1,
+      "examples": ["share_extension", "typed_note", "file_import", "voice_recording"],
+      "description": "Open set: readers accept values they do not know."
+    },
+    "content_types": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "examples": ["text", "url", "image", "video", "audio", "pdf", "file"] },
+      "description": "Open set. May be empty (a comment-only capture)."
+    },
+    "user_note": { "type": "string" },
+    "shared_title": { "type": "string" },
+    "shared_text": { "type": "string" },
+    "urls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["url", "source"],
+        "properties": {
+          "url": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "minLength": 1, "examples": ["shared_payload", "detected_in_text"] }
+        }
+      }
+    },
+    "source_application": { "type": "string" },
+    "capture_location": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["latitude", "longitude", "horizontal_accuracy_meters", "observed_at", "provenance"],
+      "properties": {
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90, "description": "Degrees." },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180, "description": "Degrees." },
+        "horizontal_accuracy_meters": { "type": "number", "minimum": 0 },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "provenance": { "type": "string", "minLength": 1 }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["app_version", "build", "os_version"],
+      "properties": {
+        "app_version": { "type": "string" },
+        "build": { "type": "string" },
+        "os_version": { "type": "string" }
+      }
+    },
+    "attachments": { "type": "array", "items": { "$ref": "#/$defs/attachment" } },
+    "metadata_observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["key", "value", "provenance"],
+        "properties": {
+          "key": { "type": "string", "minLength": 1 },
+          "value": {},
+          "provenance": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "extensions": { "type": "object", "additionalProperties": true }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "attachment": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["attachment_id", "relative_path", "uti", "byte_count", "sha256", "representation_source"],
+      "properties": {
+        "attachment_id": { "$ref": "#/$defs/uuid" },
+        "relative_path": { "type": "string", "pattern": "^content/[0-9a-f-]{36}\\.[a-z0-9]{1,10}$" },
+        "original_filename": { "type": "string" },
+        "uti": { "type": "string", "minLength": 1 },
+        "mime_type": { "type": "string" },
+        "byte_count": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "representation_source": {
+          "type": "string",
+          "minLength": 1,
+          "examples": ["item_provider_file", "item_provider_data", "typed_note", "recording"]
+        },
+        "media": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "width_pixels": { "type": "integer", "minimum": 0 },
+            "height_pixels": { "type": "integer", "minimum": 0 },
+            "duration_seconds": { "type": "number", "minimum": 0 },
+            "embedded_created_at": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["value", "has_utc_offset"],
+              "properties": {
+                "value": { "type": "string", "description": "Local time as embedded in the file; carries an offset only if has_utc_offset." },
+                "has_utc_offset": { "type": "boolean" }
+              }
+            },
+            "embedded_location": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["latitude", "longitude"],
+              "properties": {
+                "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+                "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+                "altitude_meters": { "type": "number", "description": "Negative is below sea level." }
+              }
+            },
+            "camera_make": { "type": "string" },
+            "camera_model": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

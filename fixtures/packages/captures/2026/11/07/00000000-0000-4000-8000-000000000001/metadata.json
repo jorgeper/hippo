@@ -1,0 +1,37 @@
+{
+  "attachments" : [
+    {
+      "attachment_id" : "00000000-0000-4000-8000-000100000001",
+      "byte_count" : 41,
+      "mime_type" : "text/plain",
+      "relative_path" : "content/00000000-0000-4000-8000-000100000001.txt",
+      "representation_source" : "typed_note",
+      "sha256" : "06ea788aa14d0b4549a6679ecd209317b75d20bde4047432c1cdc05e0e4806ae",
+      "uti" : "public.utf8-plain-text"
+    }
+  ],
+  "capture_id" : "00000000-0000-4000-8000-000000000001",
+  "capture_method" : "typed_note",
+  "captured_at" : "2026-11-07T17:01:00.000Z",
+  "content_types" : [
+    "text"
+  ],
+  "extensions" : {
+
+  },
+  "local_datetime" : "2026-11-07T09:01:00-08:00",
+  "metadata_observations" : [
+
+  ],
+  "producer" : {
+    "app_version" : "0.1.0",
+    "build" : "1",
+    "os_version" : "fixture"
+  },
+  "schema_version" : 1,
+  "timezone_identifier" : "America/Los_Angeles",
+  "urls" : [
+
+  ],
+  "utc_offset_seconds" : -28800
+}

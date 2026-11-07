@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import UniformTypeIdentifiers
 @testable import CaptureCore
+import HippoTestSupport
 
 @Suite struct MediaInspectorTests {
     private func tempURL(_ ext: String) -> URL {
