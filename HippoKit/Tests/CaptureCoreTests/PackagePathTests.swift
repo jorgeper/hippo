@@ -24,7 +24,7 @@ import Foundation
 
     @Test(arguments: [("photo.JPEG", "public.jpeg", "jpeg"), ("no-extension", "public.png", "png"),
                       ("😀.heic", "public.heic", "heic"), ("../evil.png", "public.png", "png"),
-                      (".hidden", "public.data", "bin"),
+                      (".hidden", "public.data", "bin"), ("note", "public.utf8-plain-text", "txt"),
                       (String(repeating: "a", count: 300) + ".toolongext1", "public.data", "bin")])
     func sanitizesExtensions(name: String, uti: String, ext: String) {
         #expect(PackagePath.sanitizedExtension(originalFilename: name, uti: uti) == ext)

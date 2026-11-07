@@ -10,9 +10,26 @@ public enum HippoJSON {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .custom { date, enc in
             var c = enc.singleValueContainer()
-            try c.encode(date.formatted(fractional))
+            try c.encode(timestamp(date))
         }
         return try encoder.encode(value)
+    }
+
+    /// RFC 3339 UTC with exactly three fractional digits, rounded to the nearest millisecond.
+    /// (`ISO8601FormatStyle` truncates the binary fraction, so e.g. a parsed `.123` can re-encode as `.122`.)
+    static func timestamp(_ date: Date) -> String {
+        let ms = (date.timeIntervalSince1970 * 1000).rounded()
+        let seconds = (ms / 1000).rounded(.down)
+        let millis = Int(ms - seconds * 1000)
+        let whole = Date(timeIntervalSince1970: seconds).formatted(plain)   // "…T17:00:00Z"
+        return "\(whole.dropLast()).\(millis < 100 ? "0" : "")\(millis < 10 ? "0" : "")\(millis)Z"
+    }
+
+    /// `date` truncated to whole milliseconds, exactly as it decodes back from package JSON, so
+    /// encode → decode returns an equal `Date`.
+    public static func wholeMilliseconds(_ date: Date) -> Date {
+        let truncated = Date(timeIntervalSince1970: (date.timeIntervalSince1970 * 1000).rounded(.down) / 1000)
+        return (try? fractional.parse(timestamp(truncated))) ?? truncated
     }
 
     public static func decodeMetadata(_ data: Data) throws -> CaptureMetadata {

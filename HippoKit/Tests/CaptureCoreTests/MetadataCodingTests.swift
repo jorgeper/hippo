@@ -18,6 +18,21 @@ import Foundation
         #expect(try HippoJSON.decodeMetadata(HippoJSON.encode(m)) == m)
     }
 
+    /// ISO8601FormatStyle truncates the binary fraction; dates must still round-trip exactly (ruling R9).
+    @Test func millisecondDatesRoundTripExactly() throws {
+        var m = CaptureMetadata.sample()
+        for i in 0..<2000 {
+            let raw = 1_794_070_800.0 + Double(i) * 0.000731 + 0.0000456
+            m.capturedAt = HippoJSON.wholeMilliseconds(Date(timeIntervalSince1970: raw))
+            let expectedMillis = Int((raw * 1000).rounded(.down)) % 1000
+            let millis = "\(expectedMillis < 100 ? "0" : "")\(expectedMillis < 10 ? "0" : "")\(expectedMillis)"
+            let json = String(decoding: try HippoJSON.encode(m), as: UTF8.self)
+            #expect(json.contains(".\(millis)Z\""))
+            #expect(try HippoJSON.decodeMetadata(HippoJSON.encode(m)) == m)
+        }
+        #expect(HippoJSON.timestamp(Date(timeIntervalSince1970: -0.5)) == "1969-12-31T23:59:59.500Z")
+    }
+
     @Test func ignoresUnknownFieldsAndAcceptsUnknownEnumValues() throws {
         var obj = try JSONSerialization.jsonObject(with: HippoJSON.encode(CaptureMetadata.sample())) as! [String: Any]
         obj["future_field"] = ["x": 1]

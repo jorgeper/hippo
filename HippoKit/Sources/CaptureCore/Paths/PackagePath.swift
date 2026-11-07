@@ -40,8 +40,12 @@ public enum PackagePath {
                 if isSafeExtension(ext) { return ext }
             }
         }
-        if let preferred = UTType(uti)?.preferredFilenameExtension, isSafeExtension(preferred) {
-            return preferred
+        if let type = UTType(uti) {
+            if let preferred = type.preferredFilenameExtension, isSafeExtension(preferred) {
+                return preferred
+            }
+            // public.utf8-plain-text and friends declare no extension of their own.
+            if type.conforms(to: .plainText) { return "txt" }
         }
         return "bin"
     }
