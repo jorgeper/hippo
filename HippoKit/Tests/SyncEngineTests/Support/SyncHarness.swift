@@ -96,11 +96,21 @@ extension CommittedPackage {
     var metadataPath: String { relativeDirectory + "/metadata.json" }
 }
 
-/// Wraps the filesystem adapter with test hooks: hide paths from `inspectFile`, or act before an upload.
+/// A thread-safe counter for hooks.
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    /// Increments and returns the new value.
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
+}
+
+/// Wraps the filesystem adapter with test hooks: hide paths from `inspectFile`, act before an upload,
+/// or act before each checkpoint is handed to the worker.
 struct HookedAdapter: StorageAdapter {
     let inner: FilesystemAdapter
     var hideFromInspect: @Sendable (String) -> Bool = { _ in false }
     var beforeUpload: @Sendable (String) throws -> Void = { _ in }
+    var onCheckpoint: @Sendable (String) throws -> Void = { _ in }
 
     var capabilities: StorageCapabilities { inner.capabilities }
     func validateDestination() async throws { try await inner.validateDestination() }
@@ -115,7 +125,11 @@ struct HookedAdapter: StorageAdapter {
     func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
                     saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt {
         try beforeUpload(relativePath)
+        let hook = onCheckpoint
         return try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
-                                          checkpoint: checkpoint, saveCheckpoint: saveCheckpoint)
+                                          checkpoint: checkpoint, saveCheckpoint: { cp in
+            try hook(relativePath)
+            try await saveCheckpoint(cp)
+        })
     }
 }

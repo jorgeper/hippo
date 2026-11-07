@@ -6,6 +6,9 @@ import SyncEngine
 public struct FilesystemAdapter: StorageAdapter {
     public static let chunkSize = 1 << 20
 
+    /// Carries an error thrown by `saveCheckpoint` past the I/O error translation, unchanged.
+    private struct CallerError: Error { let error: any Error }
+
     private struct TempState: Codable {
         var temp: String
         var offset: Int64
@@ -100,9 +103,11 @@ public struct FilesystemAdapter: StorageAdapter {
                 try dst.write(contentsOf: chunk)
                 state.offset += Int64(chunk.count)
                 let data = try JSONEncoder().encode(state)
-                try await saveCheckpoint(UploadCheckpoint(opaque: data))
+                do { try await saveCheckpoint(UploadCheckpoint(opaque: data)) } catch { throw CallerError(error: error) }
                 if let e = faults.takeAfterBytes(relativePath, copied: state.offset) { throw e }
             }
+        } catch let e as CallerError {
+            throw e.error
         } catch let e as StorageError {
             throw e
         } catch is CancellationError {
@@ -110,7 +115,6 @@ public struct FilesystemAdapter: StorageAdapter {
         } catch let e as CocoaError where e.code == .fileNoSuchFile || e.code == .fileReadNoSuchFile {
             throw StorageError.permanent(code: "local_file_missing")
         } catch {
-            // Errors thrown by saveCheckpoint (or I/O) propagate unchanged unless they are filesystem errors.
             if error is CocoaError || error is POSIXError { throw StorageError.transient(code: "io_error") }
             throw error
         }

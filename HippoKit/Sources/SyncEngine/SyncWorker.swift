@@ -48,14 +48,24 @@ public final class SyncWorker: Sendable {
         self.random = random
     }
 
-    /// Claims and processes jobs one at a time until none is eligible or `maxJobs` were claimed.
+    /// Claims and processes jobs one at a time until none is eligible or `maxJobs` were claimed. A
+    /// claim that throws ends the pass and counts as one failure.
     /// Task cancellation ends the pass without recording anything for the current job: its lease
     /// expires and it is reclaimed later.
     public func runOnce(maxJobs: Int = 20) async -> SyncPassResult {
         var result = SyncPassResult(synced: 0, failed: 0, idle: true)
         var claimed = 0
         while claimed < maxJobs, !Task.isCancelled {
-            guard let job = try? jobs.claimNext(owner: owner, now: now(), lease: Self.lease) else { break }
+            let next: UploadJob?
+            do {
+                next = try jobs.claimNext(owner: owner, now: now(), lease: Self.lease)
+            } catch {
+                // A claim that fails is not "nothing to do".
+                result.idle = false
+                result.failed += 1
+                break
+            }
+            guard let job = next else { break }
             claimed += 1
             result.idle = false
             switch await process(job) {
@@ -156,13 +166,20 @@ public final class SyncWorker: Sendable {
             return
         }
 
-        let (jobs, jobID) = (self.jobs, job.jobID)
+        let (jobs, jobID, owner, now) = (self.jobs, job.jobID, self.owner, self.now)
         var checkpoint = try jobs.checkpoint(jobID: jobID, relativePath: path).map(UploadCheckpoint.init(opaque:))
         var restarted = false
         while true {
             do {
                 _ = try await adapter.uploadFile(localURL: local, relativePath: remotePath, expected: expected,
                                                  checkpoint: checkpoint, saveCheckpoint: { cp in
+                    // Keep ownership through long uploads, and never write a checkpoint for a job
+                    // another worker now owns. Adapters rethrow these errors unchanged.
+                    guard try jobs.renewLease(jobID: jobID, owner: owner, now: now(), lease: Self.lease) else {
+                        throw JobError.leaseLost
+                    }
+                    guard let current = try jobs.job(jobID: jobID) else { throw JobError.notFound }
+                    if current.cancelRequested { throw Failure(state: .paused, code: "cancelled") }
                     try jobs.saveCheckpoint(jobID: jobID, relativePath: path, data: cp.opaque)
                 })
                 break

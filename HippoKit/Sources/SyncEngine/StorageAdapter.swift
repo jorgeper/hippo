@@ -98,6 +98,9 @@ public protocol StorageAdapter: Sendable {
     func inspectFile(relativePath: String) async throws -> RemoteFileInfo?
     /// Returns evidence if `remote` provably matches the local file, nil if it differs.
     func verify(remote: RemoteFileInfo, localURL: URL, expected: FileIntegrity) async throws -> VerificationEvidence?
+    /// Calls `saveCheckpoint` as resumable progress is made. Any error `saveCheckpoint` throws must
+    /// end the upload and propagate unchanged: adapters must not wrap or translate it (the sync engine
+    /// uses it to stop an upload whose lease was lost or whose job was cancelled).
     func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
                     saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt
 }

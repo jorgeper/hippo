@@ -4,6 +4,7 @@ import CryptoKit
 import SyncEngine
 
 private struct StopAfterCheckpoint: Error {}
+private struct CallerSignal: Error, Equatable { let tag: Int }
 
 private final class CheckpointBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -97,4 +98,31 @@ func runAdapterContract(makeAdapter: () async throws -> any StorageAdapter, scra
     let bigInfo = try #require(try await adapter.inspectFile(relativePath: pathBig))
     #expect(bigInfo.byteCount == bigInt.byteCount)
     #expect(try await adapter.verify(remote: bigInfo, localURL: big, expected: bigInt) != nil)
+
+    // Errors thrown by saveCheckpoint end the upload and propagate unchanged, never wrapped or
+    // translated, including ones that look like I/O errors.
+    if adapter.capabilities.supportsResumableUpload {
+        let (c, cInt) = try makeFile(scratch, "c.bin", bytes: Int(adapter.capabilities.maxSingleRequestBytes) * 2 + 1,
+                                     seed: 3)
+        let pathC = "\(dir)/content/c.bin"
+        do {
+            _ = try await adapter.uploadFile(localURL: c, relativePath: pathC, expected: cInt, checkpoint: nil,
+                                             saveCheckpoint: { _ in throw CallerSignal(tag: 42) })
+            Issue.record("expected the saveCheckpoint error")
+        } catch let e as CallerSignal {
+            #expect(e == CallerSignal(tag: 42))
+        } catch {
+            Issue.record("saveCheckpoint error was replaced by \(error)")
+        }
+        do {
+            _ = try await adapter.uploadFile(localURL: c, relativePath: pathC, expected: cInt, checkpoint: nil,
+                                             saveCheckpoint: { _ in throw CocoaError(.fileWriteUnknown) })
+            Issue.record("expected the saveCheckpoint error")
+        } catch let e as CocoaError {
+            #expect(e.code == .fileWriteUnknown)
+        } catch {
+            Issue.record("saveCheckpoint error was replaced by \(error)")
+        }
+        #expect(try await adapter.inspectFile(relativePath: pathC) == nil)
+    }
 }

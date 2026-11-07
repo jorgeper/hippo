@@ -295,6 +295,64 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(!FileManager.default.fileExists(atPath: h.remoteURL(pkg).appendingPathComponent("complete.json").path))
     }
 
+    @Test func cancelDuringLongUploadStopsAtNextChunk() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture(attachmentBytes: 3 << 20)
+        let (jobs, path, captureID) = (h.jobs, pkg.attachmentPath, pkg.metadata.captureID)
+        let adapter = HookedAdapter(inner: h.adapter, onCheckpoint: { p in
+            if p == path { try jobs.requestCancel(captureID: captureID) }
+        })
+
+        #expect(await h.worker(adapter).runOnce() == SyncPassResult(synced: 0, failed: 1, idle: false))
+        let job = try h.job(pkg)
+        #expect(job.state == .paused)
+        #expect(job.lastErrorCode == "cancelled")
+        #expect(try h.jobs.receipts(jobID: job.jobID).map(\.relativePath) == ["metadata.json"])
+        #expect(try h.jobs.checkpoint(jobID: job.jobID, relativePath: pkg.metadata.attachments[0].relativePath) == nil)
+        #expect(h.uploads.filter { $0 == "upload \(path)" }.count == 1)
+        #expect(!FileManager.default.fileExists(atPath: h.remote.appendingPathComponent(path).path))
+        #expect(!h.uploads.contains("upload \(pkg.markerPath)"))
+    }
+
+    @Test func leaseStolenMidUploadAbortsWithoutTouchingTheJob() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture(attachmentBytes: 3 << 20)
+        let (jobs, clock, path) = (h.jobs, h.clock, pkg.attachmentPath)
+        let saves = Counter()
+        // After the first chunk is checkpointed, the upload stalls past the lease and another worker claims the job.
+        let adapter = HookedAdapter(inner: h.adapter, onCheckpoint: { p in
+            guard p == path, saves.next() == 2 else { return }
+            clock.set(t0.addingTimeInterval(500))
+            guard try jobs.claimNext(owner: "thief", now: clock.now, lease: 120) != nil else {
+                throw StorageError.permanent(code: "test_claim_failed")
+            }
+        })
+
+        #expect(await h.worker(adapter).runOnce() == SyncPassResult(synced: 0, failed: 0, idle: false))
+        let job = try h.job(pkg)
+        #expect(job.state == .uploading)
+        #expect(job.attemptCount == 0)
+        #expect(job.lastErrorCode == nil)
+        #expect(try h.db.query("SELECT lease_owner FROM jobs WHERE job_id = ?", [.text(job.jobID)])[0]
+                    .string("lease_owner") == "thief")
+        #expect(try h.jobs.receipts(jobID: job.jobID).map(\.relativePath) == ["metadata.json"])
+        // The old owner's second checkpoint was never written over the first.
+        let saved = try #require(try h.jobs.checkpoint(jobID: job.jobID,
+                                                       relativePath: pkg.metadata.attachments[0].relativePath))
+        let offset = (try JSONSerialization.jsonObject(with: saved) as? [String: Any])?["offset"] as? Int
+        #expect(offset == 1 << 20)
+        #expect(!FileManager.default.fileExists(atPath: h.remote.appendingPathComponent(path).path))
+        #expect(!h.uploads.contains("upload \(pkg.markerPath)"))
+    }
+
+    @Test func claimErrorIsNotIdle() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        _ = try await h.capture()
+        try h.db.execute("ALTER TABLE jobs RENAME TO jobs_unavailable")
+        #expect(await h.worker().runOnce() == SyncPassResult(synced: 0, failed: 1, idle: false))
+        #expect(h.faults.operations.isEmpty)
+    }
+
     @Test func taskCancellationLeavesTheJobToItsLease() async throws {
         let h = try SyncHarness(); defer { h.cleanup() }
         let pkg = try await h.capture()
@@ -356,7 +414,7 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
             .deletingLastPathComponent()
         let allowed: Set<String> = ["Foundation", "CryptoKit", "SQLite3", "CaptureCore", "LocalRepository", "os",
                                     "Darwin", "Dispatch"]
-        let forbidden = try Regex("Dropbox|OneDrive|MSGraph|SwiftyDropbox")
+        let forbidden = try Regex("Dropbox|OneDrive|Graph|SwiftyDropbox")
         var scanned = 0
         for dir in ["Sources/SyncEngine", "Sources/LocalRepository"] {
             let base = kit.appendingPathComponent(dir)
@@ -370,7 +428,7 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
                 for line in text.split(separator: "\n") {
                     let words = line.split(whereSeparator: \.isWhitespace).map(String.init)
                     guard let i = words.firstIndex(of: "import"),
-                          words[..<i].allSatisfy({ $0.hasPrefix("@") || ["public", "internal", "package"].contains($0) }),
+                          words[..<i].allSatisfy({ $0.hasPrefix("@") || ["public", "internal", "package", "private", "fileprivate"].contains($0) }),
                           i + 1 < words.count else { continue }
                     let kinds: Set<String> = ["struct", "class", "enum", "protocol", "typealias", "func", "var", "let"]
                     let j = kinds.contains(words[i + 1]) && i + 2 < words.count ? i + 2 : i + 1
