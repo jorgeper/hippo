@@ -1,0 +1,25 @@
+# macOS / Xcode
+.DS_Store
+build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+.swiftpm/
+.build/
+
+# Secrets — never commit (see .env.example / Config/Secrets.example.xcconfig)
+.env
+.env.*
+!.env.example
+Config/Secrets.xcconfig
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+
+# Local brainstorming mockups and throwaway spikes
+.superpowers/
+spikes/
+Config/Local.xcconfig
