@@ -9,14 +9,20 @@ public enum MediaInspector {
     private static let avTimeout: Duration = .seconds(2)
 
     public static func facts(for url: URL, uti: String) async -> MediaFacts? {
+        await facts(for: url, uti: uti, timeout: avTimeout, load: avFacts)
+    }
+
+    /// Test seam: the AV loader and the deadline are injectable.
+    static func facts(for url: URL, uti: String, timeout: Duration,
+                      load: @escaping @Sendable (URL, Bool, FactsBox) async -> Void) async -> MediaFacts? {
         guard let type = UTType(uti) else { return nil }
         let facts: MediaFacts?
         if type.conforms(to: .image) {
             facts = imageFacts(url)
         } else if type.conforms(to: .audio) {
-            facts = await timeBounded { await avFacts(url, wantsVideo: false) }
+            facts = await timeBounded(timeout) { box in await load(url, false, box) }
         } else if type.conforms(to: .movie) || type.conforms(to: .video) {
-            facts = await timeBounded { await avFacts(url, wantsVideo: true) }
+            facts = await timeBounded(timeout) { box in await load(url, true, box) }
         } else {
             return nil
         }
@@ -67,7 +73,11 @@ public enum MediaInspector {
         guard date.count == 3, time.count == 3,
               (date + time).allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isASCIIDigit) }),
               date[0].count == 4, date[1].count == 2, date[2].count == 2,
-              time.allSatisfy({ $0.count == 2 }) else { return nil }
+              time.allSatisfy({ $0.count == 2 }),
+              let year = Int(date[0]), let month = Int(date[1]), let day = Int(date[2]),
+              let hour = Int(time[0]), let minute = Int(time[1]), let second = Int(time[2]),
+              year >= 1, (1...12).contains(month), (1...31).contains(day),
+              hour <= 23, minute <= 59, second <= 60 else { return nil }
         let value = "\(date[0])-\(date[1])-\(date[2])T\(time[0]):\(time[1]):\(time[2])"
         if let offset = offset?.trimmingCharacters(in: .whitespaces), isValidOffset(offset) {
             return EmbeddedTimestamp(value: value + offset, hasUTCOffset: true)
@@ -88,6 +98,7 @@ public enum MediaInspector {
               var lon = (gps[kCGImagePropertyGPSLongitude] as? NSNumber)?.doubleValue else { return nil }
         if (gps[kCGImagePropertyGPSLatitudeRef] as? String)?.uppercased() == "S" { lat = -abs(lat) }
         if (gps[kCGImagePropertyGPSLongitudeRef] as? String)?.uppercased() == "W" { lon = -abs(lon) }
+        guard (-90.0...90.0).contains(lat), (-180.0...180.0).contains(lon) else { return nil }
         var altitude = (gps[kCGImagePropertyGPSAltitude] as? NSNumber)?.doubleValue
         if let a = altitude, (gps[kCGImagePropertyGPSAltitudeRef] as? NSNumber)?.intValue == 1 { altitude = -abs(a) }
         return EmbeddedLocation(latitude: lat, longitude: lon, altitudeMeters: altitude)
@@ -95,35 +106,54 @@ public enum MediaInspector {
 
     // MARK: Audio / video
 
-    /// Runs `work` against a 2 s deadline; returns nil if the deadline wins.
-    private static func timeBounded(_ work: @escaping @Sendable () async -> MediaFacts?) async -> MediaFacts? {
-        await withTaskGroup(of: MediaFacts?.self) { group in
-            group.addTask { await work() }
-            group.addTask {
-                try? await Task.sleep(for: avTimeout)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
+    /// Thread-safe accumulator so a deadline can return whatever has been gathered.
+    final class FactsBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var facts = MediaFacts()
+        func update(_ body: (inout MediaFacts) -> Void) { lock.lock(); body(&facts); lock.unlock() }
+        var snapshot: MediaFacts { lock.lock(); defer { lock.unlock() }; return facts }
+    }
+
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var fired = false
+        func fire(_ body: () -> Void) {
+            lock.lock(); let first = !fired; fired = true; lock.unlock()
+            if first { body() }
         }
     }
 
-    private static func avFacts(_ url: URL, wantsVideo: Bool) async -> MediaFacts? {
+    /// Returns at the deadline even if `work` ignores cancellation: the caller resumes from whichever
+    /// unstructured task finishes first, and the load is left to finish (or hang) on its own.
+    private static func timeBounded(_ timeout: Duration, _ work: @escaping @Sendable (FactsBox) async -> Void) async -> MediaFacts {
+        let box = FactsBox()
+        let once = Once()
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let loader = Task { await work(box); once.fire { cont.resume() } }
+            Task {
+                try? await Task.sleep(for: timeout)
+                loader.cancel()
+                once.fire { cont.resume() }
+            }
+        }
+        return box.snapshot
+    }
+
+    @Sendable private static func avFacts(_ url: URL, wantsVideo: Bool, into box: FactsBox) async {
         let asset = AVURLAsset(url: url)
-        var facts = MediaFacts()
         if let duration = try? await asset.load(.duration), duration.isNumeric, duration.seconds.isFinite, duration.seconds >= 0 {
-            facts.durationSeconds = duration.seconds
+            box.update { $0.durationSeconds = duration.seconds }
         }
         if wantsVideo,
            let tracks = try? await asset.loadTracks(withMediaType: .video),
            let track = tracks.first,
            let (size, transform) = try? await track.load(.naturalSize, .preferredTransform) {
             let rect = CGRect(origin: .zero, size: size).applying(transform)
-            facts.widthPixels = Int(abs(rect.width).rounded())
-            facts.heightPixels = Int(abs(rect.height).rounded())
+            box.update {
+                $0.widthPixels = Int(abs(rect.width).rounded())
+                $0.heightPixels = Int(abs(rect.height).rounded())
+            }
         }
-        return facts
     }
 }
 

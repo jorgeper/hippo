@@ -99,8 +99,43 @@ import UniformTypeIdentifiers
         }
     }
 
-    @Test func otherTypesReturnNilWithoutReading() async {
-        let missing = tempURL("txt")
-        #expect(await MediaInspector.facts(for: missing, uti: "public.plain-text") == nil)
+    @Test func otherTypesReturnNilWithoutReading() async throws {
+        // A perfectly readable image, declared with a text UTI: must not be inspected.
+        let url = try write(MediaMaker.imageData(width: 10, height: 10, type: .png), ext: "png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(await MediaInspector.facts(for: url, uti: "public.plain-text") == nil)
+    }
+
+    @Test func zeroedExifDateIsRejected() async throws {
+        var o = MediaMaker.ImageOptions()
+        o.exifDateTimeOriginal = "0000:00:00 00:00:00"
+        let url = try write(MediaMaker.imageData(width: 10, height: 10, options: o), ext: "jpg")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let facts = await MediaInspector.facts(for: url, uti: "public.jpeg")
+        #expect(facts?.embeddedCreatedAt == nil)
+        #expect(facts?.widthPixels == 10)
+    }
+
+    @Test func outOfRangeGPSIsRejected() async throws {
+        var o = MediaMaker.ImageOptions()
+        o.gpsLatitude = 95
+        o.gpsLongitude = 10
+        let url = try write(MediaMaker.imageData(width: 10, height: 10, options: o), ext: "jpg")
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(await MediaInspector.facts(for: url, uti: "public.jpeg")?.embeddedLocation == nil)
+    }
+
+    @Test func hungLoadReturnsPartialResultAtDeadline() async {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let facts = await MediaInspector.facts(for: URL(fileURLWithPath: "/nonexistent.mov"),
+                                               uti: "com.apple.quicktime-movie",
+                                               timeout: .milliseconds(300)) { _, _, box in
+            box.update { $0.durationSeconds = 1.0 }
+            // Ignores cancellation and never finishes.
+            await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
+        }
+        #expect(clock.now - start < .seconds(2))
+        #expect(facts?.durationSeconds == 1.0)
     }
 }
