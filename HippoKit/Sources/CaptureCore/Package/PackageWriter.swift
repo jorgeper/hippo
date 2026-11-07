@@ -133,7 +133,7 @@ public final class PackageWriter: Sendable {
             // 5. Make each copy durable, hash it and gather media facts.
             var attachments: [Attachment] = []
             for c in copied {
-                try Self.io("sync attachment") { try Self.syncFile(c.url) }
+                try Self.io("sync attachment") { try Self.fullSync(c.url) }
                 let digest = try Self.io("hash attachment") { try StreamingHasher.digest(of: c.url) }
                 let media = await MediaInspector.facts(for: c.url, uti: c.source.uti)
                 attachments.append(Attachment(
@@ -174,8 +174,8 @@ public final class PackageWriter: Sendable {
                     + attachments.map { ManifestEntry(relativePath: $0.relativePath, byteCount: $0.byteCount, sha256: $0.sha256) })
             try Self.writeDurably(Self.io("encode marker") { try HippoJSON.encode(marker) },
                                   to: staging.appendingPathComponent("complete.json"), step: "marker")
-            if !copied.isEmpty { try Self.io("sync content") { try Self.syncDirectory(contentDir) } }
-            try Self.io("sync staging") { try Self.syncDirectory(staging) }
+            if !copied.isEmpty { try Self.io("sync content") { try Self.fullSync(contentDir) } }
+            try Self.io("sync staging") { try Self.fullSync(staging) }
 
             // 8. Atomic move into place. RENAME_EXCL refuses to replace an existing package.
             try Self.io("create partition") {
@@ -193,13 +193,13 @@ public final class PackageWriter: Sendable {
             throw error as? CaptureError ?? CaptureError.io("commit failed")
         }
 
-        // The package is committed. Persisting the directory entries is best effort: failing here must
-        // not report a committed capture as failed.
+        // Deliberately non-fatal: the package is already in place, so throwing would report a failed save
+        // for a capture that recovery will later register.
         let day = finalURL.deletingLastPathComponent()
         let month = day.deletingLastPathComponent()
         let year = month.deletingLastPathComponent()
         for dir in [day, month, year, layout.capturesDir, layout.root, layout.stagingDir] {
-            try? Self.syncDirectory(dir)
+            try? Self.fullSync(dir)
         }
         lock.release()
         return package
@@ -265,19 +265,16 @@ public final class PackageWriter: Sendable {
 
     private static func writeDurably(_ data: Data, to url: URL, step: String) throws {
         try io("write \(step)") { try data.write(to: url, options: .withoutOverwriting) }
-        try io("sync \(step)") { try syncFile(url) }
+        try io("sync \(step)") { try fullSync(url) }
     }
 
-    private static func syncFile(_ url: URL) throws {
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        try handle.synchronize()
-    }
-
-    private static func syncDirectory(_ url: URL) throws {
+    /// Flushes a file or directory to stable storage (R14). `F_FULLFSYNC` also flushes the drive cache;
+    /// filesystems that don't support it fall back to `fsync`. Read-only open, so 0444 copies sync too.
+    private static func fullSync(_ url: URL) throws {
         let fd = open(url.path, O_RDONLY | O_CLOEXEC)
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { close(fd) }
+        if fcntl(fd, F_FULLFSYNC) == 0 { return }
         guard fsync(fd) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
 }

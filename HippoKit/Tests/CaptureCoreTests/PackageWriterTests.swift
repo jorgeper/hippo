@@ -208,6 +208,19 @@ private final class IDSequence: @unchecked Sendable {
                                                      "2026/11/07/\(pkg.metadata.captureID)/\(a.relativePath)"])
     }
 
+    @Test func readOnlySourceFileCommits() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let png = try pngFile()
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: png.path)
+        let d = draft(attachments: [AttachmentSource(body: .file(png), uti: "public.png",
+                                                     representationSource: "item_provider_file")])
+        let pkg = try await writer().commit(d)
+        let a = try #require(pkg.metadata.attachments.first)
+        #expect(a.sha256 == (try StreamingHasher.digest(of: png)).sha256)
+        #expect(files(under: pkg.directoryURL) == ["metadata.json", "complete.json", a.relativePath])
+        #expect(entries(in: layout.stagingDir).isEmpty)
+    }
+
     @Test func insufficientSpaceWritesNothing() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let png = try pngFile()
@@ -345,10 +358,10 @@ private final class IDSequence: @unchecked Sendable {
     }
 
     @Test func volumeSpaceCheckerReportsSpaceEvenForMissingPaths() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
         let checker = VolumeSpaceChecker()
         #expect(try checker.availableBytes(at: FileManager.default.temporaryDirectory) > 0)
         #expect(try checker.availableBytes(at: root.appendingPathComponent("not/yet/created")) > 0)
-        try? FileManager.default.removeItem(at: root)
     }
 }
 
