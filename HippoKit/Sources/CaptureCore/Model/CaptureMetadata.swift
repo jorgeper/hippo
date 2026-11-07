@@ -3,6 +3,7 @@ import Foundation
 public enum FormatError: Error, Equatable {
     case unsupportedSchemaVersion(Int)
     case malformed(String)
+    case unsafePath(String)
 }
 
 public indirect enum JSONValue: Codable, Sendable, Equatable {
