@@ -35,6 +35,7 @@ import Foundation
     }
 
     @Test(arguments: ["", "/abs", "content/../x", "content/./x", "a\\b", "other/x.png", "content/\u{0}x",
+                      "content/", "content//x", "content/x/",
                       "content/" + String(repeating: "a", count: 260)])
     func rejectsUnsafeRelativePaths(p: String) {
         #expect(throws: FormatError.self) { try PackagePath.validateRelative(p) }

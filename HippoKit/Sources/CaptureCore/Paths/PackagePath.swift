@@ -57,6 +57,7 @@ public enum PackagePath {
         if path.contains("\\") { throw .unsafePath("backslash") }
         if path.unicodeScalars.contains(where: { $0.value == 0 }) { throw .unsafePath("NUL character") }
         let segments = path.split(separator: "/", omittingEmptySubsequences: false)
+        if segments.contains(where: { $0.isEmpty }) { throw .unsafePath("empty segment") }
         if segments.contains(where: { $0 == "." || $0 == ".." }) { throw .unsafePath("dot segment") }
         if path != "metadata.json" && !path.hasPrefix("content/") { throw .unsafePath("outside content") }
     }
