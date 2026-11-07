@@ -1,5 +1,6 @@
 import Foundation
 import CaptureCore
+import os
 
 public struct RecoveryReport: Sendable, Equatable {
     /// Abandoned `staging/<id>` directories deleted.
@@ -12,11 +13,15 @@ public struct RecoveryReport: Sendable, Equatable {
     public var invalidPackages = 0
     /// Unassigned captures bound to the active destination.
     public var boundToActive = 0
+    /// Items (staging entries, rows, packages, the bind step) that failed and were skipped.
+    public var failed = 0
 }
 
 /// Startup recovery (spec §4): the filesystem is the truth. Holds no state between runs, and is safe to
 /// run repeatedly.
 public final class Reconciler: Sendable {
+    private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "recovery")
+
     private let layout: StoreLayout
     private let index: CaptureIndex
     private let jobs: JobStore
@@ -28,58 +33,79 @@ public final class Reconciler: Sendable {
 
     public func run() throws -> RecoveryReport {
         var report = RecoveryReport()
-        report.removedStaging = try removeAbandonedStaging()
+        // One bad item must not stop the rest of the run: each is isolated, counted and logged with a
+        // fixed string (never IDs, paths or error text).
+        removeAbandonedStaging(into: &report)
 
         // Drop rows whose package is gone, so the walk below can re-register a package that came back.
-        for row in try index.indexedDirectories()
+        for row in (try? index.indexedDirectories()) ?? []
         where !FileManager.default.fileExists(atPath: layout.packageURL(relativeDirectory: row.relativeDirectory).path) {
-            try index.remove(captureID: row.captureID)
-            report.orphanedIndexRows += 1
+            do {
+                try index.remove(captureID: row.captureID)
+                report.orphanedIndexRows += 1
+            } catch { itemFailed(&report) }
         }
 
-        let indexed = Set(try index.indexedDirectories().map(\.captureID))
+        let indexed: Set<String>
+        do { indexed = Set(try index.indexedDirectories().map(\.captureID)) } catch { itemFailed(&report); indexed = [] }
         for directory in packageDirectories() where !indexed.contains(directory.lastPathComponent) {
             guard case .complete = PackageValidator.validate(directory: directory),
                   let package = CommittedPackage.load(directory: directory, layout: layout) else {
                 report.invalidPackages += 1
                 continue
             }
-            if try index.register(package, noteBody: package.noteBody()) {
-                report.registered += 1
-                try jobs.enqueueIfActive(captureID: package.metadata.captureID)
-            }
+            do {
+                if try index.register(package, noteBody: package.noteBody()) {
+                    report.registered += 1
+                    try jobs.enqueueIfActive(captureID: package.metadata.captureID)
+                }
+            } catch { itemFailed(&report) }
         }
 
-        if try destinations.active() != nil {
-            report.boundToActive = try destinations.bindUnassignedToActive()
-        }
+        // The bind step always runs.
+        do {
+            if try destinations.active() != nil {
+                report.boundToActive = try destinations.bindUnassignedToActive()
+            }
+        } catch { itemFailed(&report) }
         return report
+    }
+
+    private func itemFailed(_ report: inout RecoveryReport) {
+        report.failed += 1
+        Self.log.error("\("recover_item_failed", privacy: .public)")
     }
 
     // MARK: Staging
 
     /// Deletes every `staging/<id>` whose lock is free, and lock files with no directory. A lock held
     /// by a live writer means "skip".
-    private func removeAbandonedStaging() throws -> Int {
+    private func removeAbandonedStaging(into report: inout RecoveryReport) {
         let fm = FileManager.default
-        guard let names = try? fm.contentsOfDirectory(atPath: layout.stagingDir.path) else { return 0 }
-        var removed = 0
+        guard let names = try? fm.contentsOfDirectory(atPath: layout.stagingDir.path) else { return }
         for name in names.sorted() {
-            if name.hasSuffix(".lock") {
-                let dir = layout.stagingDir.appendingPathComponent(String(name.dropLast(5)))
-                if fm.fileExists(atPath: dir.path) { continue }  // handled with its directory
-                try StagingLock.tryAcquire(at: layout.stagingDir.appendingPathComponent(name))?.release()
-                continue
-            }
-            let dir = layout.stagingDir.appendingPathComponent(name, isDirectory: true)
-            guard Self.isDirectory(dir),
-                  let lock = try StagingLock.tryAcquire(at: layout.stagingDir.appendingPathComponent("\(name).lock"))
-            else { continue }
-            do { try fm.removeItem(at: dir) } catch { lock.release(); throw error }
-            lock.release()
-            removed += 1
+            do {
+                if name.hasSuffix(".lock") {
+                    let dir = layout.stagingDir.appendingPathComponent(String(name.dropLast(5)))
+                    if fm.fileExists(atPath: dir.path) { continue }  // handled with its directory
+                    try StagingLock.tryAcquire(at: layout.stagingDir.appendingPathComponent(name))?.release()
+                    continue
+                }
+                let dir = layout.stagingDir.appendingPathComponent(name, isDirectory: true)
+                guard Self.isDirectory(dir),
+                      let lock = try StagingLock.tryAcquire(at: layout.stagingDir.appendingPathComponent("\(name).lock"))
+                else { continue }
+                defer { lock.release() }
+                // A writer may have renamed its directory away between the check and the lock.
+                guard Self.isDirectory(dir) else { continue }
+                do {
+                    try fm.removeItem(at: dir)
+                    report.removedStaging += 1
+                } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                    // Already gone.
+                }
+            } catch { itemFailed(&report) }
         }
-        return removed
     }
 
     // MARK: Walk

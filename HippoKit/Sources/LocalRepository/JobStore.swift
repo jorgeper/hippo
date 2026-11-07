@@ -112,6 +112,34 @@ public final class JobStore: Sendable {
                        [.int(Self.ms(Date())), .text(captureID)])
     }
 
+    /// Undoes `requestCancel` for a capture whose deletion did not complete.
+    public func clearCancel(captureID: String) throws {
+        try db.execute("UPDATE jobs SET cancel_requested = 0, updated_at_ms = ? WHERE capture_id = ?",
+                       [.int(Self.ms(Date())), .text(captureID)])
+    }
+
+    /// Manual "retry now": makes the capture's `blocked` and `retryable_failure` jobs claimable
+    /// immediately. Jobs with a cancel requested are left alone; `attempt_count` and `last_error_code`
+    /// are kept for display. Returns how many jobs were reset.
+    @discardableResult
+    public func retryNow(captureID: String) throws -> Int {
+        try retry(where: "capture_id = ?", [.text(captureID)])
+    }
+
+    /// Like `retryNow` for every capture bound to the destination.
+    @discardableResult
+    public func retryAll(destinationID: String) throws -> Int {
+        try retry(where: "destination_id = ?", [.text(destinationID)])
+    }
+
+    private func retry(where clause: String, _ args: [SQLValue]) throws -> Int {
+        try db.query("""
+            UPDATE jobs SET state = 'pending', next_attempt_at_ms = NULL, updated_at_ms = ?
+            WHERE \(clause) AND state IN ('blocked', 'retryable_failure') AND cancel_requested = 0
+            RETURNING job_id
+            """, [.int(Self.ms(Date()))] + args).count
+    }
+
     /// True if some job for the capture is `uploading` under a lease that has not expired at `now`.
     public func activeLeaseExists(captureID: String, now: Date) throws -> Bool {
         try !db.query("""

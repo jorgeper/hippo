@@ -61,7 +61,12 @@ public final class Database: @unchecked Sendable {
         do {
             // Busy timeout first so the WAL switch and migration wait for other connections.
             sqlite3_busy_timeout(db, 5000)
-            try execute("PRAGMA journal_mode=WAL")
+            // The result row names the mode actually in effect; a silent fallback would change the
+            // cross-process behaviour the store relies on.
+            let mode = try query("PRAGMA journal_mode=WAL").first?.string("journal_mode")
+            guard mode?.lowercased() == "wal" else {
+                throw DatabaseError.sqlite(code: SQLITE_ERROR, message: "WAL journal mode unavailable")
+            }
             try execute("PRAGMA foreign_keys=ON")
             try Migrations.run(on: self)
         } catch {

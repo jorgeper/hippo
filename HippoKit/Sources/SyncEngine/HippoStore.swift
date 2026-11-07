@@ -109,6 +109,9 @@ public final class HippoStore: Sendable {
 
         // After this no worker can claim the capture's jobs, so only a lease already held can be active.
         try jobs.requestCancel(captureID: captureID)
+        var removed = false
+        // If deletion fails before the row is gone, the capture stays and its uploads must resume.
+        defer { if !removed { try? jobs.clearCancel(captureID: captureID) } }
         let hadActiveUpload = try jobs.activeLeaseExists(captureID: captureID, now: Date())
         if hadActiveUpload {
             let deadline = ContinuousClock.now + leaseWaitLimit
@@ -129,8 +132,10 @@ public final class HippoStore: Sendable {
             // Already moved or gone.
         }
         try index.remove(captureID: captureID)
-        // Another process's recover() may be sweeping it at the same time.
-        try Self.removeIfPresent(staged)
+        removed = true
+        // The capture is already deleted from the user's point of view. Another process's recover()
+        // may be sweeping the directory at the same time, and the next recover() finishes it anyway.
+        do { try Self.removeIfPresent(staged) } catch { Self.log.error("\("delete_cleanup_failed", privacy: .public)") }
         return DeletionResult(wasSynced: wasSynced, hadActiveUpload: hadActiveUpload)
     }
 
@@ -140,6 +145,17 @@ public final class HippoStore: Sendable {
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             // Nothing to remove.
         }
+    }
+
+    /// Manual retry (spec §10): makes this capture's blocked and retry-waiting uploads claimable now.
+    @discardableResult
+    public func retry(captureID: String) throws -> Int { try jobs.retryNow(captureID: captureID) }
+
+    /// Manual retry for every capture bound to the active destination. Zero if there is none.
+    @discardableResult
+    public func retryAll() throws -> Int {
+        guard let active = try destinations.active() else { return 0 }
+        return try jobs.retryAll(destinationID: active.id)
     }
 
     /// Writes the redacted `diagnostics.json` at `layout.diagnosticsURL`.

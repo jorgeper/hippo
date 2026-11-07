@@ -59,4 +59,4 @@ On the phone the store lives in the App Group container, under `Library/` so tha
   diagnostics.json                    redacted counts, safe error codes and versions; no content, IDs or locations
 ```
 
-`captures/` uses the same relative layout as the remote destination. The packages are the source of truth: `HippoStore.recover()`, run at launch, rebuilds missing index rows from them.
+`captures/` uses the same relative layout as the remote destination. The packages are the source of truth: `HippoStore.recover()`, run at launch, rebuilds missing index rows from them. Recovery isolates failures: one bad item is counted in `RecoveryReport.failed` and skipped, never aborting the rest. Blocked or waiting uploads (for example after a full Dropbox) are retried on demand with `HippoStore.retry(captureID:)` or `retryAll()`.

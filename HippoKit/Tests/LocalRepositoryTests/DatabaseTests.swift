@@ -112,4 +112,9 @@ private func prepared() throws -> URL {
         }
         #expect(versions == [1, 1])
     }
+
+    @Test func fileDatabaseUsesWAL() throws {
+        let db = try Database(url: try prepared())
+        #expect(try db.query("PRAGMA journal_mode")[0].string("journal_mode") == "wal")
+    }
 }

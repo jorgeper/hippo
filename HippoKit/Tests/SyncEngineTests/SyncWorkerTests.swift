@@ -439,4 +439,53 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         }
         #expect(scanned >= 8)
     }
+
+    @Test func unreadablePackageIsRetryableNotBlocked() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        let attachment = pkg.directoryURL.appendingPathComponent(pkg.metadata.attachments[0].relativePath)
+        let hidden = attachment.appendingPathExtension("away")
+        try FileManager.default.moveItem(at: attachment, to: hidden)
+
+        #expect(await h.worker().runOnce().failed == 1)
+        var job = try h.job(pkg)
+        #expect(job.state == .retryableFailure)
+        #expect(job.lastErrorCode == "local_package_unreadable")
+        #expect(h.faults.operations.isEmpty)
+
+        // Once readable again, a manual retry syncs it.
+        try FileManager.default.moveItem(at: hidden, to: attachment)
+        #expect(try h.jobs.retryNow(captureID: pkg.metadata.captureID) == 1)
+        #expect(await h.worker().runOnce().synced == 1)
+        job = try h.job(pkg)
+        #expect(job.state == .synced)
+    }
+
+    @Test func quotaBlockedThenRetrySyncs() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        h.faults.failBeforeWrite(pkg.attachmentPath, .quotaExceeded)
+        #expect(await h.worker().runOnce().failed == 1)
+        #expect(try h.job(pkg).state == .blocked)
+        #expect(await h.worker().runOnce().idle)
+
+        #expect(try h.jobs.retryAll(destinationID: "dest-fs") == 1)
+        #expect(await h.worker().runOnce().synced == 1)
+        let job = try h.job(pkg)
+        #expect(job.state == .synced)
+        #expect(isComplete(PackageValidator.validate(directory: h.remoteURL(pkg))))
+    }
+
+    @Test func retryDoesNotReviveCancelledJobs() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        h.faults.failBeforeWrite(pkg.attachmentPath, .quotaExceeded)
+        #expect(await h.worker().runOnce().failed == 1)
+        try h.jobs.requestCancel(captureID: pkg.metadata.captureID)
+
+        #expect(try h.jobs.retryNow(captureID: pkg.metadata.captureID) == 0)
+        #expect(try h.jobs.retryAll(destinationID: "dest-fs") == 0)
+        #expect(try h.job(pkg).state == .blocked)
+        #expect(await h.worker().runOnce().idle)
+    }
 }

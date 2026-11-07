@@ -118,4 +118,41 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
         #expect(try r.jobs.jobs(captureID: early.metadata.captureID).count == 1)
         #expect(try r.reconciler.run().boundToActive == 0)
     }
+
+    @Test func oneFailingPackageDoesNotStopTheRest() async throws {
+        let r = try Rig(); defer { r.h.cleanup() }
+        let dest = Destination(id: "d", providerKind: "filesystem", accountIdentifier: "a", remoteRoot: "/H",
+                               displayName: "A", status: .active)
+        // Captures from before any destination existed, so the bind step has work to do.
+        let early = try await r.h.add(note: "early")
+        _ = try r.destinations.connect(dest)
+        try r.h.db.execute("DELETE FROM jobs")
+        let bad = try await r.commitOnly(note: "bad")
+        let good = try await r.commitOnly(note: "good")
+        // Registering the first one fails inside the index.
+        try r.h.db.execute("""
+            CREATE TRIGGER boom BEFORE INSERT ON captures WHEN NEW.capture_id = '\(bad.metadata.captureID)'
+            BEGIN SELECT RAISE(ABORT, 'boom'); END
+            """)
+        let staging = try r.staging(UUID().uuidString.lowercased())
+
+        let report = try r.reconciler.run()
+
+        #expect(report.failed == 1)
+        #expect(report.registered == 1)
+        #expect(report.removedStaging == 1 && !exists(staging))
+        #expect(report.boundToActive == 1)
+        #expect(try r.jobs.jobs(captureID: good.metadata.captureID).count == 1)
+        #expect(try r.jobs.jobs(captureID: early.metadata.captureID).count == 1)
+        #expect(try r.jobs.jobs(captureID: bad.metadata.captureID).isEmpty)
+    }
+
+    @Test func leftoverLockWithoutDirectoryIsNotAFailure() throws {
+        let r = try Rig(); defer { r.h.cleanup() }
+        try FileManager.default.createDirectory(at: r.h.layout.stagingDir, withIntermediateDirectories: true)
+        // A lock file with no directory is the state a finished writer leaves behind.
+        try Data().write(to: r.h.layout.stagingDir.appendingPathComponent("gone.lock"))
+        let report = try r.reconciler.run()
+        #expect(report.failed == 0 && report.removedStaging == 0)
+    }
 }

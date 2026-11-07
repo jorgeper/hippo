@@ -399,4 +399,41 @@ private struct Stores {
         try s.jobs.saveReceipt(jobID: job.jobID, meta)
         #expect(try s.jobs.receipts(jobID: job.jobID) == [replaced, meta])
     }
+
+    @Test func retryNowResetsBlockedAndRetryableButNotCancelled() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("d1", account: "a"))
+        let blocked = try await s.capture("b"), waiting = try await s.capture("w")
+        let cancelled = try await s.capture("c"), synced = try await s.capture("s")
+        for (id, state) in [(blocked, "blocked"), (waiting, "retryable_failure"), (cancelled, "blocked"), (synced, "synced")] {
+            try s.h.db.execute("""
+                UPDATE jobs SET state = ?, attempt_count = 2, last_error_code = 'quota_exceeded',
+                  next_attempt_at_ms = 9999999999999 WHERE capture_id = ?
+                """, [.text(state), .text(id)])
+        }
+        try s.jobs.requestCancel(captureID: cancelled)
+
+        #expect(try s.jobs.retryNow(captureID: blocked) == 1)
+        let job = try #require(try s.jobs.jobs(captureID: blocked).first)
+        #expect(job.state == .pending && job.nextAttemptAt == nil)
+        #expect(job.attemptCount == 2 && job.lastErrorCode == "quota_exceeded")
+
+        #expect(try s.jobs.retryNow(captureID: cancelled) == 0)
+        #expect(try s.jobs.jobs(captureID: cancelled).first?.state == .blocked)
+
+        #expect(try s.jobs.retryAll(destinationID: "d1") == 1)  // only `waiting`
+        #expect(try s.jobs.jobs(captureID: waiting).first?.state == .pending)
+        #expect(try s.jobs.jobs(captureID: synced).first?.state == .synced)
+        #expect(try s.jobs.retryAll(destinationID: "other") == 0)
+    }
+
+    @Test func clearCancelMakesJobsClaimableAgain() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("d1", account: "a"))
+        let id = try await s.capture()
+        try s.jobs.requestCancel(captureID: id)
+        #expect(try s.jobs.claimNext(owner: "w", now: t0, lease: 60) == nil)
+        try s.jobs.clearCancel(captureID: id)
+        #expect(try s.jobs.claimNext(owner: "w", now: t0, lease: 60)?.captureID == id)
+    }
 }

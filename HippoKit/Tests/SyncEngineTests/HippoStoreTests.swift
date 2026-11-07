@@ -449,4 +449,53 @@ private struct PausingAdapter: StorageAdapter {
         #expect(!text.contains("someone"))
         #expect(!text.contains("private.example"))
     }
+
+    @Test func deleteSucceedsWhenCleanupAfterRowRemovalFails() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        // Removing the parked package fails after the row is gone: content/ cannot be modified.
+        let content = pkg.directoryURL.appendingPathComponent("content")
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: content.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath:
+                    t.stagedDeletion(pkg).appendingPathComponent("content").path) }
+
+        _ = try await t.store.delete(captureID: pkg.metadata.captureID)
+
+        #expect(try t.store.index.count() == 0)
+        #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.path))
+    }
+
+    @Test func deleteFailingBeforeRemovalLeavesJobsClaimable() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        // A stuck leftover from an earlier attempt makes the delete throw before the row is removed.
+        let leftover = t.stagedDeletion(pkg).appendingPathComponent("sub", isDirectory: true)
+        try FileManager.default.createDirectory(at: leftover, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: leftover.appendingPathComponent("f"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: leftover.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: leftover.path) }
+
+        await #expect(throws: (any Error).self) { _ = try await t.store.delete(captureID: pkg.metadata.captureID) }
+
+        #expect(try t.store.index.count() == 1)
+        #expect(try t.store.jobs.jobs(captureID: pkg.metadata.captureID).map(\.cancelRequested) == [false])
+        let adapter = t.adapter
+        #expect(await t.store.makeWorker(adapterFor: { _ in adapter }, owner: "app").runOnce().synced == 1)
+    }
+
+    @Test func facadeRetryRevivesBlockedJob() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        #expect(try t.store.retryAll() == 0)  // no destination
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        t.faults.failBeforeWrite("\(pkg.relativeDirectory)/\(pkg.metadata.attachments[0].relativePath)", .quotaExceeded)
+        let adapter = t.adapter
+        let worker = t.store.makeWorker(adapterFor: { _ in adapter }, owner: "app")
+        #expect(await worker.runOnce().failed == 1)
+
+        #expect(try t.store.retry(captureID: pkg.metadata.captureID) == 1)
+        #expect(await worker.runOnce().synced == 1)
+        #expect(try t.store.retryAll() == 0)
+    }
 }
