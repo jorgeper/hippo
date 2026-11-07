@@ -247,6 +247,21 @@ private struct Stores {
         try s.jobs.markSynced(jobID: job.jobID, owner: "w2")
     }
 
+    @Test func activeLeaseExistsOnlyWhileUploadingUnderAnUnexpiredLease() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        let id = try await s.capture()
+        #expect(try s.jobs.activeLeaseExists(captureID: id, now: t0) == false)
+
+        let job = try #require(try s.jobs.claimNext(owner: "w1", now: t0, lease: 30))
+        #expect(try s.jobs.activeLeaseExists(captureID: id, now: t0.addingTimeInterval(29)))
+        #expect(try s.jobs.activeLeaseExists(captureID: id, now: t0.addingTimeInterval(30)) == false)
+        #expect(try s.jobs.activeLeaseExists(captureID: "other", now: t0) == false)
+
+        try s.jobs.markSynced(jobID: job.jobID, owner: "w1")
+        #expect(try s.jobs.activeLeaseExists(captureID: id, now: t0) == false)
+    }
+
     @Test func leaseLostRejectsStaleOwner() async throws {
         let s = try Stores(); defer { s.h.cleanup() }
         _ = try s.destinations.connect(destination("dest-a", account: "a"))

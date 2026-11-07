@@ -1,7 +1,7 @@
 import Foundation
 
 /// Upload state of one capture-destination pair (spec §10).
-public enum JobState: String, Sendable {
+public enum JobState: String, Sendable, CaseIterable {
     case pending, uploading, synced
     case retryableFailure = "retryable_failure"
     case needsAuthentication = "needs_authentication"
@@ -110,6 +110,14 @@ public final class JobStore: Sendable {
     public func requestCancel(captureID: String) throws {
         try db.execute("UPDATE jobs SET cancel_requested = 1, updated_at_ms = ? WHERE capture_id = ?",
                        [.int(Self.ms(Date())), .text(captureID)])
+    }
+
+    /// True if some job for the capture is `uploading` under a lease that has not expired at `now`.
+    public func activeLeaseExists(captureID: String, now: Date) throws -> Bool {
+        try !db.query("""
+            SELECT 1 FROM jobs WHERE capture_id = ? AND state = 'uploading' AND lease_owner IS NOT NULL
+              AND lease_expires_at_ms > ? LIMIT 1
+            """, [.text(captureID), .int(Self.ms(now))]).isEmpty
     }
 
     /// Every job for the capture, ordered by destination ID.
