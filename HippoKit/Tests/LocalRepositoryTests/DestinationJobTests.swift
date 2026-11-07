@@ -126,6 +126,32 @@ private struct Stores {
         #expect(try s.jobs.claimNext(owner: "w", now: t0, lease: 60) == nil)
     }
 
+    @Test func reusedDestinationIDForAnotherAccountIsRejected() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("x", account: "a"))
+        let id = try await s.capture()
+        try s.destinations.signOut(destinationID: "x")
+
+        #expect(throws: DestinationError.accountMismatch) {
+            try s.destinations.connect(destination("x", account: "b"))
+        }
+        let otherProvider = Destination(id: "x", providerKind: "other", accountIdentifier: "a", remoteRoot: "/Hippo",
+                                        displayName: "Account a", status: .active)
+        #expect(throws: DestinationError.accountMismatch) { try s.destinations.connect(otherProvider) }
+        #expect(try s.jobs.jobs(captureID: id).map(\.state) == [.paused])
+        #expect(try s.status("x") == "signed_out")
+        let row = try s.h.db.query("SELECT account_identifier, provider_kind FROM destinations WHERE destination_id = 'x'")[0]
+        #expect(row.string("account_identifier") == "a")
+        #expect(row.string("provider_kind") == "filesystem")
+
+        // The same account may update its root and display name.
+        let renamed = Destination(id: "x", providerKind: "filesystem", accountIdentifier: "a", remoteRoot: "/Hippo2",
+                                  displayName: "Renamed", status: .active)
+        #expect(try s.destinations.connect(renamed) == 0)
+        #expect(try s.destinations.active() == renamed)
+        #expect(try s.jobs.jobs(captureID: id).map(\.state) == [.pending])
+    }
+
     @Test func connectResumesNeedsAuthenticationJobs() async throws {
         let s = try Stores(); defer { s.h.cleanup() }
         let a = destination("dest-a", account: "a")
@@ -176,19 +202,22 @@ private struct Stores {
 
         let one = JobStore(db: try Database(url: s.h.layout.databaseURL))
         let two = JobStore(db: try Database(url: s.h.layout.databaseURL))
-        @Sendable func drain(_ store: JobStore, _ owner: String) throws -> [String] {
-            var claimed: [String] = []
+        @Sendable func drain(_ store: JobStore, _ owner: String) throws -> [UploadJob] {
+            var claimed: [UploadJob] = []
             while let job = try store.claimNext(owner: owner, now: t0, lease: 300) {
-                #expect(job.state == .uploading)
-                claimed.append(job.jobID)
+                claimed.append(job)
                 Thread.sleep(forTimeInterval: 0.002)  // the worker uploads; lets the other connection in
             }
             return claimed
         }
         async let a = Task.detached { try drain(one, "app") }.value
         async let b = Task.detached { try drain(two, "extension") }.value
-        let (fromApp, fromExtension) = try await (a, b)
+        let (appJobs, extensionJobs) = try await (a, b)
 
+        // Assert only after the join, so failures are attributed to this test.
+        #expect((appJobs + extensionJobs).allSatisfy { $0.state == .uploading })
+        let fromApp = appJobs.map(\.jobID)
+        let fromExtension = extensionJobs.map(\.jobID)
         #expect(Set(fromApp).isDisjoint(with: fromExtension))
         #expect(Set(fromApp + fromExtension).count == 50)
         #expect(fromApp.count + fromExtension.count == 50)
@@ -254,6 +283,54 @@ private struct Stores {
         #expect(synced.nextAttemptAt == nil)
         #expect(try s.lease(job.jobID) == (nil, nil))
         #expect(try s.jobs.claimNext(owner: "w2", now: retryAt.addingTimeInterval(3600), lease: 60) == nil)
+    }
+
+    @Test func markFailedRejectsNonFailureStates() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        let id = try await s.capture()
+        let job = try #require(try s.jobs.claimNext(owner: "w", now: t0, lease: 60))
+        for state in [JobState.pending, .uploading, .synced] {
+            #expect(throws: JobError.invalidState) {
+                try s.jobs.markFailed(jobID: job.jobID, owner: "w", state: state, errorCode: "x", nextAttemptAt: nil)
+            }
+        }
+        let unchanged = try s.jobs.jobs(captureID: id)[0]
+        #expect(unchanged.state == .uploading)
+        #expect(unchanged.attemptCount == 0)
+        #expect(try s.lease(job.jobID).owner == "w")
+        for state in [JobState.retryableFailure, .needsAuthentication, .blocked, .paused] {
+            try s.h.db.execute("UPDATE jobs SET state = 'uploading', lease_owner = 'w' WHERE job_id = ?", [.text(job.jobID)])
+            try s.jobs.markFailed(jobID: job.jobID, owner: "w", state: state, errorCode: "x", nextAttemptAt: nil)
+            #expect(try s.jobs.jobs(captureID: id)[0].state == state)
+        }
+    }
+
+    @Test func claimOrderFollowsDocumentedSelection() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        var jobIDs: [String] = []
+        for n in 0..<5 { jobIDs.append(try s.jobs.jobs(captureID: try await s.capture("n\(n)"))[0].jobID) }
+        let (expiredUploading, pending, dueLater, dueEarlier, notDue) = (jobIDs[0], jobIDs[1], jobIDs[2], jobIDs[3], jobIDs[4])
+        let nowMS: Int64 = 1_800_000_000_000
+        func set(_ jobID: String, _ state: String, next: Int64?, updated: Int64, leaseExpires: Int64? = nil) throws {
+            try s.h.db.execute("""
+                UPDATE jobs SET state = ?, next_attempt_at_ms = ?, updated_at_ms = ?, lease_owner = ?,
+                  lease_expires_at_ms = ? WHERE job_id = ?
+                """, [.text(state), next.map { .int($0) } ?? .null, .int(updated),
+                      leaseExpires == nil ? .null : .text("dead-worker"), leaseExpires.map { .int($0) } ?? .null,
+                      .text(jobID)])
+        }
+        // Null next attempt first (by updated_at), then by next attempt time; not-yet-due jobs never.
+        try set(pending, "pending", next: nil, updated: 200)
+        try set(expiredUploading, "uploading", next: nil, updated: 100, leaseExpires: nowMS - 1)
+        try set(dueLater, "retryable_failure", next: nowMS - 60_000, updated: 50)
+        try set(dueEarlier, "retryable_failure", next: nowMS - 120_000, updated: 300)
+        try set(notDue, "retryable_failure", next: nowMS + 60_000, updated: 10)
+
+        var order: [String] = []
+        while let job = try s.jobs.claimNext(owner: "w", now: t0, lease: 60) { order.append(job.jobID) }
+        #expect(order == [expiredUploading, pending, dueEarlier, dueLater])
     }
 
     @Test func cancelRequestedJobsAreNotClaimed() async throws {

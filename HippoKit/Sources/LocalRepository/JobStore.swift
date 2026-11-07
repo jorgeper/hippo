@@ -38,6 +38,8 @@ public enum JobError: Error, Equatable {
     /// The caller no longer owns the job's lease (it expired and was reclaimed, or was revoked).
     case leaseLost
     case notFound
+    /// `markFailed` was given a state that is not a failure state.
+    case invalidState
 }
 
 /// Upload jobs with leases, so only one worker (app or Share Extension) owns a job at a time.
@@ -94,9 +96,12 @@ public final class JobStore: Sendable {
             """, [])
     }
 
-    /// Records a failed attempt: increments `attempt_count` and releases the lease.
+    /// Records a failed attempt: increments `attempt_count` and releases the lease. `state` must be a
+    /// failure state (`retryableFailure`, `needsAuthentication`, `blocked` or `paused`), otherwise
+    /// it throws `JobError.invalidState` and changes nothing.
     public func markFailed(jobID: String, owner: String, state: JobState, errorCode: String,
                            nextAttemptAt: Date?) throws {
+        guard Self.failureStates.contains(state) else { throw JobError.invalidState }
         try ownerWrite(jobID: jobID, owner: owner, set: """
             state = ?, attempt_count = attempt_count + 1, last_error_code = ?, next_attempt_at_ms = ?
             """, [.text(state.rawValue), .text(errorCode), nextAttemptAt.map { .int(Self.ms($0)) } ?? .null])
@@ -169,6 +174,8 @@ public final class JobStore: Sendable {
     private static func ms(_ seconds: TimeInterval) -> Int64 { Int64((seconds * 1000).rounded()) }
 
     // MARK: Helpers
+
+    private static let failureStates: Set<JobState> = [.retryableFailure, .needsAuthentication, .blocked, .paused]
 
     private static func newJobID() -> String { UUID().uuidString.lowercased() }
 

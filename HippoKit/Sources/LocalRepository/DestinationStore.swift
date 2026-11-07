@@ -1,5 +1,10 @@
 import Foundation
 
+public enum DestinationError: Error, Equatable {
+    /// The destination ID is already bound to a different provider or account.
+    case accountMismatch
+}
+
 public enum DestinationStatus: String, Sendable {
     case active
     case signedOut = "signed_out"
@@ -35,15 +40,23 @@ public final class DestinationStore: Sendable {
 
     /// Makes `d` the active destination, disabling any other active one, resumes its `paused` and
     /// `needs_authentication` jobs, and binds every unassigned capture (one with no job) to it.
-    /// Returns the number of jobs created.
+    /// Returns the number of jobs created. Throws `DestinationError.accountMismatch`, changing
+    /// nothing, if the ID is already stored with a different provider kind or account.
     public func connect(_ d: Destination) throws -> Int {
         let now = JobStore.ms(Date())
         return try db.transaction { tx in
+            // Provider and account are fixed for an ID: reusing it for another account would resume
+            // that account's paused jobs into a different account.
+            let stored = try tx.query("SELECT provider_kind, account_identifier FROM destinations WHERE destination_id = ?",
+                                      [.text(d.id)])
+            if let row = stored.first,
+               row.string("provider_kind") != d.providerKind || row.string("account_identifier") != d.accountIdentifier {
+                throw DestinationError.accountMismatch
+            }
             try tx.execute("""
                 INSERT INTO destinations(destination_id, provider_kind, account_identifier, remote_root, display_name,
                   status, created_at_ms) VALUES (?, ?, ?, ?, ?, 'active', ?)
-                ON CONFLICT(destination_id) DO UPDATE SET provider_kind = excluded.provider_kind,
-                  account_identifier = excluded.account_identifier, remote_root = excluded.remote_root,
+                ON CONFLICT(destination_id) DO UPDATE SET remote_root = excluded.remote_root,
                   display_name = excluded.display_name, status = 'active'
                 """, [.text(d.id), .text(d.providerKind), .text(d.accountIdentifier), .text(d.remoteRoot),
                       .text(d.displayName), .int(now)])
