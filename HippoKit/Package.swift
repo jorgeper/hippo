@@ -18,7 +18,7 @@ let package = Package(
         .target(name: "HippoTestSupport"),
         .executableTarget(name: "hippo-fixtures", dependencies: ["CaptureCore", "HippoTestSupport"]),
         .testTarget(name: "CaptureCoreTests", dependencies: ["CaptureCore", "HippoTestSupport"]),
-        .testTarget(name: "LocalRepositoryTests", dependencies: ["LocalRepository", "CaptureCore"]),
+        .testTarget(name: "LocalRepositoryTests", dependencies: ["LocalRepository", "CaptureCore", "HippoTestSupport"]),
         .testTarget(name: "SyncEngineTests", dependencies: ["SyncEngine", "LocalRepository", "CaptureCore"]),
         .testTarget(name: "AdapterContractTests", dependencies: ["FilesystemAdapter", "SyncEngine", "CaptureCore"]),
     ],
