@@ -440,7 +440,7 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(scanned >= 8)
     }
 
-    @Test func unreadablePackageIsRetryableNotBlocked() async throws {
+    @Test func missingAttachmentBlocksUntilManualRetry() async throws {
         let h = try SyncHarness(); defer { h.cleanup() }
         let pkg = try await h.capture()
         let attachment = pkg.directoryURL.appendingPathComponent(pkg.metadata.attachments[0].relativePath)
@@ -449,11 +449,11 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
 
         #expect(await h.worker().runOnce().failed == 1)
         var job = try h.job(pkg)
-        #expect(job.state == .retryableFailure)
-        #expect(job.lastErrorCode == "local_package_unreadable")
+        #expect(job.state == .blocked)
+        #expect(job.lastErrorCode == "local_package_invalid")
         #expect(h.faults.operations.isEmpty)
 
-        // Once readable again, a manual retry syncs it.
+        // Once the file is back, the user's Retry syncs it.
         try FileManager.default.moveItem(at: hidden, to: attachment)
         #expect(try h.jobs.retryNow(captureID: pkg.metadata.captureID) == 1)
         #expect(await h.worker().runOnce().synced == 1)

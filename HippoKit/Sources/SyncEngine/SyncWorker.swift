@@ -111,15 +111,11 @@ public final class SyncWorker: Sendable {
         guard let destination = try destinations.active(), destination.id == job.destinationID else {
             throw Failure(state: .paused, code: "destination_inactive")
         }
-        guard let directory = try index.relativeDirectory(captureID: job.captureID) else {
-            throw Failure(state: .blocked, code: "local_package_invalid")
-        }
-        let packageURL = layout.packageURL(relativeDirectory: directory)
-        guard let package = CommittedPackage.load(directory: packageURL, layout: layout) else {
-            // Unreadable right now (protected file, package mid-move) may pass; corrupt never will.
-            if PackageValidator.isUnreadable(PackageValidator.validate(directory: packageURL)) {
-                throw Failure(state: .retryableFailure, code: "local_package_unreadable")
-            }
+        // Any package that fails to load is surfaced as blocked (visible "Needs attention");
+        // the user's Retry (JobStore.retryNow) re-queues it once the cause is gone.
+        guard let directory = try index.relativeDirectory(captureID: job.captureID),
+              let package = CommittedPackage.load(directory: layout.packageURL(relativeDirectory: directory),
+                                                  layout: layout) else {
             throw Failure(state: .blocked, code: "local_package_invalid")
         }
         let adapter = try adapterFor(destination)

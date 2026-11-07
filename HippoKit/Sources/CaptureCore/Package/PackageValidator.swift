@@ -15,13 +15,6 @@ public enum PackageValidator {
         validateReturningMarker(directory: directory).result
     }
 
-    /// True when `result` says the package could not be read right now (marker or a listed file
-    /// missing or unreadable), as opposed to proven corrupt or mismatching. Retrying may succeed.
-    public static func isUnreadable(_ result: ValidationResult) -> Bool {
-        if case .incomplete(let reason) = result { return !reason.hasPrefix("mismatch") }
-        return false
-    }
-
     /// Like `validate`, also returning the marker decoded from the very bytes that were validated.
     static func validateReturningMarker(directory: URL) -> (result: ValidationResult, marker: CompletionMarker?) {
         var marker: CompletionMarker?
