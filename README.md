@@ -54,7 +54,7 @@ On the phone the store lives in the App Group container, under `Library/` so tha
 ```
 <App Group>/Library/Application Support/Hippo/
   captures/YYYY/MM/DD/<capture-id>/   committed packages (metadata.json, content/, complete.json), immutable
-  staging/                            in-progress commits; abandoned ones are removed at launch
+  staging/                            in-progress commits and packages being deleted; leftovers removed at launch
   hippo.sqlite                        index, upload jobs and destinations (WAL; shared by app and extension)
   diagnostics.json                    redacted counts, safe error codes and versions; no content, IDs or locations
 ```

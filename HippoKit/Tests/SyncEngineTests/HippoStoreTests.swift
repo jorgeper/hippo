@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import CaptureCore
 import LocalRepository
-import SyncEngine
+@testable import SyncEngine
 import FilesystemAdapter
 import HippoTestSupport
 
@@ -15,12 +15,13 @@ private struct StoreHarness {
     let store: HippoStore
     let faults = FaultPlan()
 
-    init() throws {
+    init(leaseWaitLimit: Duration = HippoStore.defaultLeaseWaitLimit) throws {
         base = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-store-\(UUID().uuidString)")
         root = base.appendingPathComponent("Library/Application Support/Hippo")
         remote = base.appendingPathComponent("remote")
         try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
-        store = try HippoStore.open(root: root, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"))
+        store = try HippoStore.open(root: root, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"),
+                                    leaseWaitLimit: leaseWaitLimit)
     }
 
     func cleanup() { try? FileManager.default.removeItem(at: base) }
@@ -38,6 +39,15 @@ private struct StoreHarness {
     func rawDatabase() throws -> Database { try Database(url: store.layout.databaseURL) }
 
     func remoteURL(_ pkg: CommittedPackage) -> URL { remote.appendingPathComponent(pkg.relativeDirectory) }
+
+    /// Where deletion parks a package before removing it (ruling R31).
+    func stagedDeletion(_ pkg: CommittedPackage) -> URL {
+        store.layout.stagingDir.appendingPathComponent("\(pkg.metadata.captureID).deleted", isDirectory: true)
+    }
+
+    func stagingContents() throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: store.layout.stagingDir.path)
+    }
 
     /// A share-extension draft with one attachment of `bytes` deterministic bytes.
     func blobDraft(bytes: Int) -> CaptureDraft {
@@ -237,6 +247,89 @@ private struct PausingAdapter: StorageAdapter {
         #expect(try t.store.index.count() == 0)
     }
 
+    // The worker holds a live lease and never answers the cancel: deletion gives up waiting at the
+    // limit (10 s in production) and the worker then aborts on its vanished job row.
+    @Test func deleteProceedsAfterLeaseWaitLimit() async throws {
+        let t = try StoreHarness(leaseWaitLimit: .milliseconds(200)); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 3 * FilesystemAdapter.chunkSize))
+        let id = pkg.metadata.captureID
+        let adapter = PausingAdapter(inner: t.adapter, path: pkg.attachmentPath)
+        let worker = t.store.makeWorker(adapterFor: { _ in adapter }, owner: "app")
+        let run = Task { let r = await worker.runOnce(); adapter.paused.open(); return r }
+        await adapter.paused.wait()
+
+        let started = ContinuousClock.now
+        let result = try await t.store.delete(captureID: id)
+        let waited = ContinuousClock.now - started
+        // Gone while the worker is still suspended mid-file with its 120 s lease.
+        #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.path))
+        #expect(try t.store.index.count() == 0)
+        adapter.release.open()
+        let pass = await run.value
+
+        #expect(result == HippoStore.DeletionResult(wasSynced: false, hadActiveUpload: true))
+        #expect(waited >= .milliseconds(200))
+        #expect(waited < .seconds(3))
+        #expect(pass == SyncPassResult(synced: 0, failed: 0, idle: false))
+        #expect(!t.uploads.contains("upload \(pkg.markerPath)"))
+        #expect(FileManager.default.fileExists(atPath: t.remote.appendingPathComponent(pkg.metadataPath).path))
+        #expect(try t.stagingContents().isEmpty)
+    }
+
+    // Crash after the package was parked in staging but before the index row was removed.
+    @Test func recoveryFinishesDeletionInterruptedAfterRename() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.urlDraft())
+        try FileManager.default.moveItem(at: pkg.directoryURL, to: t.stagedDeletion(pkg))
+
+        let report = try t.store.recover()
+
+        #expect(report.orphanedIndexRows == 1)
+        #expect(report.removedStaging == 1)
+        #expect(report.registered == 0)
+        #expect(try t.store.index.count() == 0)
+        #expect(try t.store.jobs.jobs(captureID: pkg.metadata.captureID).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.path))
+        #expect(try t.stagingContents().isEmpty)
+    }
+
+    // Crash after the index row was removed but before the parked package was removed.
+    @Test func recoveryFinishesDeletionInterruptedAfterRowRemoval() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.urlDraft())
+        try FileManager.default.moveItem(at: pkg.directoryURL, to: t.stagedDeletion(pkg))
+        try t.store.index.remove(captureID: pkg.metadata.captureID)
+
+        let report = try t.store.recover()
+
+        #expect(report.removedStaging == 1)
+        #expect(report.registered == 0)
+        #expect(try t.store.index.count() == 0)
+        #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.path))
+        #expect(try t.stagingContents().isEmpty)
+    }
+
+    @Test func deleteToleratesLeftoversAndMissingPackage() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let fm = FileManager.default
+        // A parked copy from an earlier attempt that crashed after its rename.
+        let leftover = try await t.store.capture(t.urlDraft())
+        try fm.createDirectory(at: t.stagedDeletion(leftover), withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: t.stagedDeletion(leftover).appendingPathComponent("metadata.json"))
+        // A package that vanished from disk while its row stayed.
+        let missing = try await t.store.capture(t.urlDraft("https://example.com/b"))
+        try fm.removeItem(at: missing.directoryURL)
+
+        _ = try await t.store.delete(captureID: leftover.metadata.captureID)
+        _ = try await t.store.delete(captureID: missing.metadata.captureID)
+
+        #expect(try t.store.index.count() == 0)
+        #expect(!fm.fileExists(atPath: leftover.directoryURL.path))
+        #expect(try t.stagingContents().isEmpty)
+    }
+
     @Test func deleteReportsSyncedAndIsIdempotent() async throws {
         let t = try StoreHarness(); defer { t.cleanup() }
         _ = try t.store.destinations.connect(t.destination)
@@ -257,6 +350,7 @@ private struct PausingAdapter: StorageAdapter {
         #expect(try t.store.index.count() == 0)
         #expect(!FileManager.default.fileExists(atPath: synced.directoryURL.path))
         #expect(!FileManager.default.fileExists(atPath: pending.directoryURL.path))
+        #expect(try t.stagingContents().isEmpty)
         // The uploaded remote copy is untouched.
         #expect(isComplete(PackageValidator.validate(directory: t.remoteURL(synced))))
     }
@@ -330,5 +424,29 @@ private struct PausingAdapter: StorageAdapter {
         let offsets = keys.compactMap { text.range(of: "\"\($0)\"")?.lowerBound }
         #expect(offsets.count == keys.count)
         #expect(offsets == offsets.sorted())
+    }
+
+    @Test func diagnosticsReplaceUnrecognizedErrorCodes() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let codes = ["transient:server_500", "transient:/Users/someone/photo.png", "permanent:https://private.example/x",
+                     "Offline", String(repeating: "a", count: 65), "rate_limited", "permanent:v2.bad-request"]
+        let raw = try t.rawDatabase()
+        for (i, code) in codes.enumerated() {
+            let id = try await t.store.capture(t.urlDraft("https://example.com/\(i)")).metadata.captureID
+            try raw.execute("UPDATE jobs SET last_error_code = ?, updated_at_ms = ? WHERE capture_id = ?",
+                            [.text(code), .int(Int64(1_000 - i)), .text(id)])
+        }
+
+        let data = try Diagnostics.make(db: raw, appVersion: "1.0", now: t0)
+
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["recent_error_codes"] as? [String] == [
+            "transient:server_500", "unrecognized", "unrecognized", "unrecognized", "unrecognized", "rate_limited",
+            "permanent:v2.bad-request",
+        ])
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(!text.contains("someone"))
+        #expect(!text.contains("private.example"))
     }
 }

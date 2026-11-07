@@ -1,6 +1,7 @@
 import Foundation
 import CaptureCore
 import LocalRepository
+import os
 
 /// The one entry point the app and the Share Extension use: commit, index and enqueue captures,
 /// recover at launch, delete locally, and write diagnostics. Both processes may open the same root.
@@ -17,9 +18,13 @@ public final class HippoStore: Sendable {
         }
     }
 
-    /// How long deletion waits for a worker to let go of an active upload before proceeding anyway.
-    static let leaseWaitLimit: Duration = .seconds(10)
+    /// How long deletion waits, by default, for a worker to let go of an active upload before
+    /// proceeding anyway.
+    static let defaultLeaseWaitLimit: Duration = .seconds(10)
     static let leasePollInterval: Duration = .milliseconds(100)
+
+    /// Messages are fixed category strings only: never IDs, paths or error descriptions.
+    private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "store")
 
     public let layout: StoreLayout
     public let index: CaptureIndex
@@ -27,10 +32,12 @@ public final class HippoStore: Sendable {
     public let destinations: DestinationStore
     private let db: Database
     private let writer: PackageWriter
+    private let leaseWaitLimit: Duration
 
-    private init(layout: StoreLayout, db: Database, producer: Producer) {
+    private init(layout: StoreLayout, db: Database, producer: Producer, leaseWaitLimit: Duration) {
         self.layout = layout
         self.db = db
+        self.leaseWaitLimit = leaseWaitLimit
         index = CaptureIndex(db: db)
         jobs = JobStore(db: db)
         destinations = DestinationStore(db: db)
@@ -39,11 +46,17 @@ public final class HippoStore: Sendable {
 
     /// Opens (creating if needed) the store at `root`. Does not run recovery: call `recover()` at launch.
     public static func open(root: URL, producer: Producer) throws -> HippoStore {
+        try open(root: root, producer: producer, leaseWaitLimit: defaultLeaseWaitLimit)
+    }
+
+    /// `leaseWaitLimit` is shortened only by tests.
+    static func open(root: URL, producer: Producer, leaseWaitLimit: Duration) throws -> HippoStore {
         let layout = StoreLayout(root: root)
         for dir in [root, layout.stagingDir, layout.capturesDir] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        return HippoStore(layout: layout, db: try Database(url: layout.databaseURL), producer: producer)
+        return HippoStore(layout: layout, db: try Database(url: layout.databaseURL), producer: producer,
+                          leaseWaitLimit: leaseWaitLimit)
     }
 
     /// Startup recovery (spec §4).
@@ -53,14 +66,20 @@ public final class HippoStore: Sendable {
 
     /// Commits the draft, then indexes it and enqueues it for the active destination. Once the commit
     /// succeeds the capture is saved: the package is the truth, so an indexing or enqueueing failure is
-    /// not reported, and the next `recover()` registers and binds the package.
+    /// not reported (only logged, as a fixed category), and the next `recover()` registers and binds
+    /// the package.
     public func capture(_ d: CaptureDraft, partialPolicy: PartialPolicy = .rejectPartial) async throws -> CommittedPackage {
         let package = try await writer.commit(d, partialPolicy: partialPolicy)
         do {
             _ = try index.register(package, noteBody: package.noteBody())
+        } catch {
+            Self.log.error("\("register_failed", privacy: .public)")
+            return package
+        }
+        do {
             try jobs.enqueueIfActive(captureID: package.metadata.captureID)
         } catch {
-            // Repaired by the reconciler at next launch.
+            Self.log.error("\("enqueue_failed", privacy: .public)")
         }
         return package
     }
@@ -73,10 +92,14 @@ public final class HippoStore: Sendable {
     }
 
     /// Deletes the capture from this phone (spec §11): cancels its uploads, waits up to 10 s for a
-    /// worker holding an active upload lease to let go, then removes the index row (its jobs, receipts
-    /// and checkpoints cascade) and the package directory. Remote copies, complete or partial, are never
+    /// worker holding an active upload lease to let go, then removes the package and the index row
+    /// (its jobs, receipts and checkpoints cascade). Remote copies, complete or partial, are never
     /// touched. A worker still mid-file after the wait loses its lease with the job row and stops.
     /// Deleting an unknown capture does nothing.
+    ///
+    /// Crash-safe (ruling R31): the package is first renamed out of `captures/` to
+    /// `staging/<id>.deleted`, so it can never be re-registered. An interruption leaves at worst an
+    /// orphan index row and a staged directory, and `recover()` removes both.
     public func delete(captureID: String) async throws -> DeletionResult {
         guard let directory = try index.relativeDirectory(captureID: captureID) else {
             return DeletionResult(wasSynced: false, hadActiveUpload: false)
@@ -88,20 +111,35 @@ public final class HippoStore: Sendable {
         try jobs.requestCancel(captureID: captureID)
         let hadActiveUpload = try jobs.activeLeaseExists(captureID: captureID, now: Date())
         if hadActiveUpload {
-            let deadline = ContinuousClock.now + Self.leaseWaitLimit
+            let deadline = ContinuousClock.now + leaseWaitLimit
             while ContinuousClock.now < deadline, try jobs.activeLeaseExists(captureID: captureID, now: Date()) {
                 // Deletion was confirmed by the user: if this task is cancelled, stop waiting and finish it.
                 do { try await Task.sleep(for: Self.leasePollInterval) } catch { break }
             }
         }
 
-        try index.remove(captureID: captureID)
+        let fm = FileManager.default
+        let staged = layout.stagingDir.appendingPathComponent("\(captureID).deleted", isDirectory: true)
+        try fm.createDirectory(at: layout.stagingDir, withIntermediateDirectories: true)
+        // Left by an earlier attempt that crashed after its rename.
+        try Self.removeIfPresent(staged)
         do {
-            try FileManager.default.removeItem(at: layout.packageURL(relativeDirectory: directory))
+            try fm.moveItem(at: layout.packageURL(relativeDirectory: directory), to: staged)
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
-            // Already gone.
+            // Already moved or gone.
         }
+        try index.remove(captureID: captureID)
+        // Another process's recover() may be sweeping it at the same time.
+        try Self.removeIfPresent(staged)
         return DeletionResult(wasSynced: wasSynced, hadActiveUpload: hadActiveUpload)
+    }
+
+    private static func removeIfPresent(_ url: URL) throws {
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            // Nothing to remove.
+        }
     }
 
     /// Writes the redacted `diagnostics.json` at `layout.diagnosticsURL`.

@@ -8,6 +8,7 @@ public enum Diagnostics {
     private struct Report: Encodable {
         var generatedAt: Date
         var appVersion: String
+        /// The local database schema version (`PRAGMA user_version`), not the package format version.
         var schemaVersion: Int64
         var captureCount: Int64
         var jobsByState: [String: Int64]
@@ -36,6 +37,7 @@ public enum Diagnostics {
     }
 
     static let recentErrorLimit = 20
+    static let unrecognizedCode = "unrecognized"
 
     /// The report as HippoJSON (sorted keys, RFC 3339 millisecond timestamps). `schema_version` is the
     /// local database schema version.
@@ -44,11 +46,12 @@ public enum Diagnostics {
         for row in try db.query("SELECT state, count(*) AS n FROM jobs GROUP BY state") {
             byState[row.string("state") ?? "", default: 0] += row.int("n") ?? 0
         }
-        // Error codes are the sync engine's fixed vocabulary (`offline`, `transient:<code>`, ...): safe as-is.
+        // Error codes are the sync engine's vocabulary (`offline`, `transient:<code>`, ...); anything outside
+        // its character set, which could carry a path, URL or message, is replaced.
         let errors = try db.query("""
             SELECT last_error_code FROM jobs WHERE last_error_code IS NOT NULL
             ORDER BY updated_at_ms DESC, job_id LIMIT ?
-            """, [.int(Int64(recentErrorLimit))]).compactMap { $0.string("last_error_code") }
+            """, [.int(Int64(recentErrorLimit))]).compactMap { $0.string("last_error_code") }.map(safeCode)
         let destinations = try db.query("""
             SELECT provider_kind, status FROM destinations ORDER BY created_at_ms, destination_id
             """).map { DestinationSummary(providerKind: $0.string("provider_kind") ?? "", status: $0.string("status") ?? "") }
@@ -61,6 +64,13 @@ public enum Diagnostics {
             jobsByState: byState,
             recentErrorCodes: errors,
             destinations: destinations))
+    }
+
+    /// `code` if it matches `^[a-z0-9_:.-]{1,64}$`, otherwise "unrecognized".
+    static func safeCode(_ code: String) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789_:.-".utf8)
+        let bytes = code.utf8
+        return (1...64).contains(bytes.count) && bytes.allSatisfy(allowed.contains) ? code : unrecognizedCode
     }
 
     /// Writes the report atomically to `url` (normally `StoreLayout.diagnosticsURL`).
