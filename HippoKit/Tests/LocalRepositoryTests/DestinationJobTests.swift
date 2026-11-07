@@ -347,6 +347,17 @@ private struct Stores {
         #expect(try s.jobs.claimNext(owner: "w", now: t0, lease: 60) == nil)
     }
 
+    @Test func jobLookupByIDSeesCancelRequests() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        let capture = try await s.capture()
+        let job = try #require(try s.jobs.jobs(captureID: capture).first)
+        #expect(try s.jobs.job(jobID: job.jobID) == job)
+        try s.jobs.requestCancel(captureID: capture)
+        #expect(try s.jobs.job(jobID: job.jobID)?.cancelRequested == true)
+        #expect(try s.jobs.job(jobID: "missing") == nil)
+    }
+
     @Test func checkpointsRoundTrip() async throws {
         let s = try Stores(); defer { s.h.cleanup() }
         _ = try s.destinations.connect(destination("dest-a", account: "a"))

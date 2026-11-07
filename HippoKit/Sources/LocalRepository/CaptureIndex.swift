@@ -58,6 +58,12 @@ public final class CaptureIndex: Sendable {
         }
     }
 
+    /// The capture's package directory relative to the store root, or nil if it isn't indexed.
+    public func relativeDirectory(captureID: String) throws -> String? {
+        try db.query("SELECT relative_directory FROM captures WHERE capture_id = ?", [.text(captureID)]).first?
+            .string("relative_directory")
+    }
+
     public func count() throws -> Int {
         Int(try db.query("SELECT count(*) AS n FROM captures")[0].int("n") ?? 0)
     }

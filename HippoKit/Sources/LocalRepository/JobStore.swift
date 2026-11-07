@@ -118,6 +118,11 @@ public final class JobStore: Sendable {
             .map(Self.job)
     }
 
+    /// The job's current row, or nil if it no longer exists.
+    public func job(jobID: String) throws -> UploadJob? {
+        try db.query("SELECT * FROM jobs WHERE job_id = ?", [.text(jobID)]).first.map(Self.job)
+    }
+
     // MARK: Receipts and checkpoints
 
     public func saveReceipt(jobID: String, _ r: StoredReceipt) throws {

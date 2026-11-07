@@ -19,7 +19,7 @@ let package = Package(
         .executableTarget(name: "hippo-fixtures", dependencies: ["CaptureCore", "HippoTestSupport"]),
         .testTarget(name: "CaptureCoreTests", dependencies: ["CaptureCore", "HippoTestSupport"]),
         .testTarget(name: "LocalRepositoryTests", dependencies: ["LocalRepository", "CaptureCore", "HippoTestSupport"]),
-        .testTarget(name: "SyncEngineTests", dependencies: ["SyncEngine", "LocalRepository", "CaptureCore"]),
+        .testTarget(name: "SyncEngineTests", dependencies: ["SyncEngine", "LocalRepository", "CaptureCore", "FilesystemAdapter"]),
         .testTarget(name: "AdapterContractTests", dependencies: ["FilesystemAdapter", "SyncEngine", "CaptureCore"]),
     ],
     swiftLanguageModes: [.v6]

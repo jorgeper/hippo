@@ -26,6 +26,13 @@ import HippoTestSupport
         #expect(try h.db.query("SELECT count(*) AS n FROM captures_fts")[0].int("n") == 0)
     }
 
+    @Test func relativeDirectoryLookup() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let pkg = try await h.add(note: "where am I")
+        #expect(try h.index.relativeDirectory(captureID: pkg.metadata.captureID) == pkg.relativeDirectory)
+        #expect(try h.index.relativeDirectory(captureID: "nope") == nil)
+    }
+
     @Test func newestFirstWithStableTieBreak() async throws {
         let h = try IndexHarness(); defer { h.cleanup() }
         for n in [2, 1, 3] { try await h.add(id: id(n), note: "x") }
