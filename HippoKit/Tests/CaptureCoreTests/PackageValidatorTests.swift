@@ -141,4 +141,28 @@ import CryptoKit
         try FileManager.default.removeItem(at: pkg.directoryURL.appendingPathComponent("complete.json"))
         #expect(CommittedPackage.load(directory: pkg.directoryURL, layout: layout) == nil)
     }
+
+    @Test func unresolvableTimezoneIdentifierStillLoads() async throws {
+        let pkg = try await makePackage()
+        var meta = pkg.metadata
+        meta.timezoneIdentifier = "Mars/Olympus_Mons"
+        let metaURL = pkg.directoryURL.appendingPathComponent("metadata.json")
+        try rewrite(metaURL, try HippoJSON.encode(meta))
+        let d = try StreamingHasher.digest(of: metaURL)
+        try editMarker(pkg) {
+            $0.files[0] = ManifestEntry(relativePath: "metadata.json", byteCount: d.byteCount, sha256: d.sha256)
+        }
+        let loaded = CommittedPackage.load(directory: pkg.directoryURL, layout: layout)
+        #expect(loaded?.metadata.timezoneIdentifier == "Mars/Olympus_Mons")
+        #expect(loaded?.relativeDirectory == pkg.relativeDirectory)
+    }
+
+    @Test func packageInWrongDateDirectoryDoesNotLoad() async throws {
+        let pkg = try await makePackage()
+        let wrong = layout.packageURL(relativeDirectory: "captures/2020/01/01/\(pkg.metadata.captureID)")
+        try FileManager.default.createDirectory(at: wrong.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: pkg.directoryURL, to: wrong)
+        guard case .complete = PackageValidator.validate(directory: wrong) else { Issue.record("expected complete"); return }
+        #expect(CommittedPackage.load(directory: wrong, layout: layout) == nil)
+    }
 }

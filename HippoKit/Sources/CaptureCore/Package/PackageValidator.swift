@@ -12,6 +12,17 @@ public enum ValidationResult: Equatable, Sendable {
 /// supported, safe, and every manifest file is available with the right size and hash.
 public enum PackageValidator {
     public static func validate(directory: URL) -> ValidationResult {
+        validateReturningMarker(directory: directory).result
+    }
+
+    /// Like `validate`, also returning the marker decoded from the very bytes that were validated.
+    static func validateReturningMarker(directory: URL) -> (result: ValidationResult, marker: CompletionMarker?) {
+        var marker: CompletionMarker?
+        let result = check(directory: directory, marker: &marker)
+        return (result, marker)
+    }
+
+    private static func check(directory: URL, marker decodedMarker: inout CompletionMarker?) -> ValidationResult {
         let markerURL = directory.appendingPathComponent("complete.json")
         guard let markerBytes = try? Data(contentsOf: markerURL) else { return .incomplete("no completion marker") }
 
@@ -19,6 +30,7 @@ public enum PackageValidator {
         do { marker = try HippoJSON.decodeMarker(markerBytes) }
         catch FormatError.unsupportedSchemaVersion(let v) { return .unsupportedSchema(v) }
         catch { return .corrupt("undecodable completion marker") }
+        decodedMarker = marker
 
         for entry in marker.files {
             do { try PackagePath.validateRelative(entry.relativePath) }
@@ -67,14 +79,13 @@ extension CommittedPackage {
         let dirPath = directory.resolvingSymlinksInPath().standardizedFileURL.path
         guard dirPath.hasPrefix(rootPath + "/") else { return nil }
         let relative = String(dirPath.dropFirst(rootPath.count + 1))
-        guard case .complete(let metadata, _) = PackageValidator.validate(directory: directory),
-              let marker = try? HippoJSON.decodeMarker(Data(contentsOf: directory.appendingPathComponent("complete.json")))
-        else { return nil }
-        let expected = PackagePath.captureDirectory(
-            captureID: metadata.captureID,
-            localDate: PackagePath.localDateComponents(of: metadata.capturedAt,
-                                                       in: TimeZone(identifier: metadata.timezoneIdentifier) ?? .gmt))
-        guard relative == expected else { return nil }
+        let (result, marker) = PackageValidator.validateReturningMarker(directory: directory)
+        guard case .complete(let metadata, _) = result, let marker else { return nil }
+        // Structural check from the recorded local date (spec §6), never from time-zone math.
+        let date = metadata.localDatetime.prefix(10)
+        let parts = date.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2 else { return nil }
+        guard relative == "captures/\(parts[0])/\(parts[1])/\(parts[2])/\(metadata.captureID)" else { return nil }
         return CommittedPackage(metadata: metadata, marker: marker, relativeDirectory: relative, directoryURL: directory)
     }
 }
