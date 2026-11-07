@@ -1,0 +1,16 @@
+{
+  "capture_id" : "00000000-0000-4000-8000-000000000005",
+  "files" : [
+    {
+      "byte_count" : 1100,
+      "relative_path" : "metadata.json",
+      "sha256" : "87d28b95bbe7a9b17b517aaf2c2aab7c70dd100e353ff06a288616f7b1b75908"
+    },
+    {
+      "byte_count" : 2346,
+      "relative_path" : "content/00000000-0000-4000-8000-000500000001.mov",
+      "sha256" : "6b08f8bae91df845512bb3f937f1a53de229818dfffedea24666bb6fe32d4d19"
+    }
+  ],
+  "schema_version" : 1
+}

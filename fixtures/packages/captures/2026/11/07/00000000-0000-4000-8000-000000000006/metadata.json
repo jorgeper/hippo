@@ -1,0 +1,41 @@
+{
+  "attachments" : [
+    {
+      "attachment_id" : "00000000-0000-4000-8000-000600000001",
+      "byte_count" : 57528,
+      "media" : {
+        "duration_seconds" : 1
+      },
+      "mime_type" : "audio/mp4",
+      "original_filename" : "memo.m4a",
+      "relative_path" : "content/00000000-0000-4000-8000-000600000001.m4a",
+      "representation_source" : "recording",
+      "sha256" : "2f824ffe7f7915dcb0d4013b6fde72c939a4c0e97519411a08d5570c03fd9192",
+      "uti" : "com.apple.m4a-audio"
+    }
+  ],
+  "capture_id" : "00000000-0000-4000-8000-000000000006",
+  "capture_method" : "voice_recording",
+  "captured_at" : "2026-11-07T17:06:00.000Z",
+  "content_types" : [
+    "audio"
+  ],
+  "extensions" : {
+
+  },
+  "local_datetime" : "2026-11-07T09:06:00-08:00",
+  "metadata_observations" : [
+
+  ],
+  "producer" : {
+    "app_version" : "0.1.0",
+    "build" : "1",
+    "os_version" : "fixture"
+  },
+  "schema_version" : 1,
+  "timezone_identifier" : "America/Los_Angeles",
+  "urls" : [
+
+  ],
+  "utc_offset_seconds" : -28800
+}

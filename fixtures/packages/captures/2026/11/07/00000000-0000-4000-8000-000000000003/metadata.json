@@ -1,0 +1,46 @@
+{
+  "attachments" : [
+    {
+      "attachment_id" : "00000000-0000-4000-8000-000300000001",
+      "byte_count" : 1119,
+      "media" : {
+        "embedded_created_at" : {
+          "has_utc_offset" : false,
+          "value" : "2026-11-07T09:03:00"
+        },
+        "height_pixels" : 120,
+        "width_pixels" : 160
+      },
+      "mime_type" : "image/png",
+      "original_filename" : "IMG_0003.PNG",
+      "relative_path" : "content/00000000-0000-4000-8000-000300000001.png",
+      "representation_source" : "item_provider_file",
+      "sha256" : "4ef8638d62fd978ccb501ccbfd3be03fa44a3e16578b780364e3055966ea1d01",
+      "uti" : "public.png"
+    }
+  ],
+  "capture_id" : "00000000-0000-4000-8000-000000000003",
+  "capture_method" : "share_extension",
+  "captured_at" : "2026-11-07T17:03:00.000Z",
+  "content_types" : [
+    "image"
+  ],
+  "extensions" : {
+
+  },
+  "local_datetime" : "2026-11-07T09:03:00-08:00",
+  "metadata_observations" : [
+
+  ],
+  "producer" : {
+    "app_version" : "0.1.0",
+    "build" : "1",
+    "os_version" : "fixture"
+  },
+  "schema_version" : 1,
+  "timezone_identifier" : "America/Los_Angeles",
+  "urls" : [
+
+  ],
+  "utc_offset_seconds" : -28800
+}
