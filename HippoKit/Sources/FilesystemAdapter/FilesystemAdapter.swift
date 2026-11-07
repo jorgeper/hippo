@@ -118,7 +118,8 @@ public struct FilesystemAdapter: StorageAdapter {
         let digest = try StreamingHasher.digest(of: tempURL)
         guard digest.byteCount == expected.byteCount, digest.sha256 == expected.sha256 else {
             try? fm.removeItem(at: tempURL)
-            throw StorageError.permanent(code: "integrity_mismatch")
+            // A resumed temp that no longer matches is a stale checkpoint: restart cleanly.
+            throw checkpoint != nil ? StorageError.checkpointExpired : StorageError.permanent(code: "integrity_mismatch")
         }
 
         do {

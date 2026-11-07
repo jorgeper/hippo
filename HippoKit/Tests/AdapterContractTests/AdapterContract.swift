@@ -12,6 +12,13 @@ private final class CheckpointBox: @unchecked Sendable {
     func get() -> UploadCheckpoint? { lock.lock(); defer { lock.unlock() }; return value }
 }
 
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func bump() { lock.lock(); n += 1; lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+}
+
 private func makeFile(_ dir: URL, _ name: String, bytes: Int, seed: UInt8) throws -> (URL, FileIntegrity) {
     var data = Data(count: bytes)
     for i in 0..<bytes { data[i] = UInt8(truncatingIfNeeded: i &* 31 &+ Int(seed)) }
@@ -75,9 +82,18 @@ func runAdapterContract(makeAdapter: () async throws -> any StorageAdapter, scra
         // Adapter checkpointed and was interrupted.
     }
     #expect(try await adapter.inspectFile(relativePath: pathBig) == nil)
+    let resumedSaves = Counter()
     let resumed = try await adapter.uploadFile(localURL: big, relativePath: pathBig, expected: bigInt,
-                                               checkpoint: box.get(), saveCheckpoint: ignore)
+                                               checkpoint: box.get(), saveCheckpoint: { _ in resumedSaves.bump() })
     #expect(resumed.byteCount == bigInt.byteCount)
+    // Progress proof: a resume must do less work than a fresh upload of the same size.
+    if box.get() != nil {
+        let freshSaves = Counter()
+        let (big2, big2Int) = try makeFile(scratch, "big2.bin", bytes: 3 * 1024 * 1024 + 123, seed: 6)
+        _ = try await adapter.uploadFile(localURL: big2, relativePath: "\(dir)/content/big2.bin", expected: big2Int,
+                                         checkpoint: nil, saveCheckpoint: { _ in freshSaves.bump() })
+        #expect(resumedSaves.count < freshSaves.count)
+    }
     let bigInfo = try #require(try await adapter.inspectFile(relativePath: pathBig))
     #expect(bigInfo.byteCount == bigInt.byteCount)
     #expect(try await adapter.verify(remote: bigInfo, localURL: big, expected: bigInt) != nil)

@@ -19,6 +19,16 @@ private func write(_ dir: URL, _ name: String, bytes: Int) throws -> (URL, FileI
     return (url, FileIntegrity(byteCount: Int64(bytes), sha256: sha), data)
 }
 
+private final class Offsets: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v: [Int64] = []
+    func add(_ cp: UploadCheckpoint) {
+        let o = (try? JSONSerialization.jsonObject(with: cp.opaque) as? [String: Any])?["offset"] as? Int ?? -1
+        lock.lock(); v.append(Int64(o)); lock.unlock()
+    }
+    var all: [Int64] { lock.lock(); defer { lock.unlock() }; return v }
+}
+
 private final class Box: @unchecked Sendable {
     private let lock = NSLock()
     private var v: UploadCheckpoint?
@@ -82,14 +92,43 @@ private final class Box: @unchecked Sendable {
         }
         #expect(try await adapter.inspectFile(relativePath: path) == nil)
         let cp = try #require(box.get())
+        let offsets = Offsets()
         let receipt = try await adapter.uploadFile(localURL: url, relativePath: path, expected: integrity,
-                                                   checkpoint: cp, saveCheckpoint: { box.set($0) })
+                                                   checkpoint: cp, saveCheckpoint: { box.set($0); offsets.add($0) })
         #expect(receipt.byteCount == Int64(size))
+        // Resume continued from the 2 MiB offset: first chunk saved is 3 MiB, not 1 MiB.
+        #expect(offsets.all.first == Int64(3 * 1024 * 1024))
         let stored = try Data(contentsOf: root.appendingPathComponent(path))
         #expect(stored == data)
         // Resume continued from 2 MiB: the last saved checkpoint is the full length.
         let state = try JSONSerialization.jsonObject(with: try #require(box.get()).opaque) as? [String: Any]
         #expect(state?["offset"] as? Int == size)
+    }
+
+    @Test func corruptedTempOnResumeExpiresCheckpoint() async throws {
+        let root = try tempDir(), scratch = try tempDir()
+        let faults = FaultPlan()
+        let adapter = FilesystemAdapter(root: root, faults: faults)
+        let (url, integrity, _) = try write(scratch, "big.bin", bytes: 3 * 1024 * 1024)
+        let box = Box()
+        faults.failAfterBytes("big.bin", 2 * 1024 * 1024, .offline)
+        await #expect(throws: StorageError.offline) {
+            _ = try await adapter.uploadFile(localURL: url, relativePath: "big.bin", expected: integrity,
+                                             checkpoint: nil, saveCheckpoint: { box.set($0) })
+        }
+        let cp = try #require(box.get())
+        let temp = try #require((try JSONSerialization.jsonObject(with: cp.opaque) as? [String: Any])?["temp"] as? String)
+        let tempURL = root.appendingPathComponent(temp)
+        let handle = try FileHandle(forUpdating: tempURL)
+        try handle.seek(toOffset: UInt64(2 * 1024 * 1024 - 1))
+        try handle.write(contentsOf: Data([0xFF, 0xFE]).prefix(1))
+        try handle.close()
+        await #expect(throws: StorageError.checkpointExpired) {
+            _ = try await adapter.uploadFile(localURL: url, relativePath: "big.bin", expected: integrity,
+                                             checkpoint: cp, saveCheckpoint: { _ in })
+        }
+        #expect(!FileManager.default.fileExists(atPath: tempURL.path))
+        #expect(try await adapter.inspectFile(relativePath: "big.bin") == nil)
     }
 
     @Test func missingTempFileExpiresCheckpoint() async throws {
