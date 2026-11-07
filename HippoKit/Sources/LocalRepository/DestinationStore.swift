@@ -66,12 +66,26 @@ public final class DestinationStore: Sendable {
                 UPDATE jobs SET state = 'pending', next_attempt_at_ms = NULL, updated_at_ms = ?
                 WHERE destination_id = ? AND state IN ('paused', 'needs_authentication')
                 """, [.int(now), .text(d.id)])
-            let unassigned = try tx.query("""
-                SELECT capture_id FROM captures c WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.capture_id = c.capture_id)
-                ORDER BY captured_at_ms, capture_id
-                """).compactMap { $0.string("capture_id") }
-            return try JobStore.insertPending(captureIDs: unassigned, destinationID: d.id, in: tx)
+            return try Self.bindUnassigned(to: d.id, in: tx)
         }
+    }
+
+    /// Creates `pending` jobs for every capture with no job, bound to the active destination, in one
+    /// transaction. Returns the number created (0 when there is no active destination).
+    public func bindUnassignedToActive() throws -> Int {
+        try db.transaction { tx in
+            guard let id = try tx.query("SELECT destination_id FROM destinations WHERE status = 'active' ORDER BY destination_id LIMIT 1")
+                .first?.string("destination_id") else { return 0 }
+            return try Self.bindUnassigned(to: id, in: tx)
+        }
+    }
+
+    private static func bindUnassigned(to destinationID: String, in tx: Database) throws -> Int {
+        let unassigned = try tx.query("""
+            SELECT capture_id FROM captures c WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.capture_id = c.capture_id)
+            ORDER BY captured_at_ms, capture_id
+            """).compactMap { $0.string("capture_id") }
+        return try JobStore.insertPending(captureIDs: unassigned, destinationID: destinationID, in: tx)
     }
 
     /// Marks the destination signed out and pauses its unfinished jobs. Paused jobs lose their

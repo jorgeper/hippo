@@ -51,6 +51,13 @@ public final class CaptureIndex: Sendable {
         }
     }
 
+    /// Every indexed capture's ID and package directory (relative to the store root).
+    public func indexedDirectories() throws -> [(captureID: String, relativeDirectory: String)] {
+        try db.query("SELECT capture_id, relative_directory FROM captures").map {
+            ($0.string("capture_id") ?? "", $0.string("relative_directory") ?? "")
+        }
+    }
+
     public func count() throws -> Int {
         Int(try db.query("SELECT count(*) AS n FROM captures")[0].int("n") ?? 0)
     }
