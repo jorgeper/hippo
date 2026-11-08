@@ -134,6 +134,16 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(url("415+555") == .call(URL(string: "tel:415555")!))
     }
 
+    // Captures saved before the share sheet merged Instagram's `?l=1` copy still show one link and one card.
+    @Test func trackingVariantsShowOneLinkAndOneCard() {
+        let a = "https://www.instagram.com/reel/X/", b = "https://www.instagram.com/reel/X/?l=1"
+        var e = ResolvedEnrichment.empty
+        e.links = [a: ResolvedLink(url: a, title: "Reel"), b: ResolvedLink(url: b, title: "Reel")]
+        let d = make(meta(urls: [a, b]), enrichment: e)
+        #expect(d.links.map(\.absoluteString) == [a])
+        #expect(d.linkCards.map(\.url) == [a])
+    }
+
     @Test func detailServerNote() {
         #expect(make(meta(), enrichment: resolved(server: true)).fromServerNote == "Some details come from your server.")
         #expect(make(meta()).fromServerNote == nil)

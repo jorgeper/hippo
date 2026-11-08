@@ -69,7 +69,7 @@ public struct LinkPreviewEnricher: Enricher {
             return AssetRef(relativePath: path, byteCount: Int64(jpeg.count), sha256: sha, mimeType: "image/jpeg")
         }
 
-        for captured in input.metadata.urls.prefix(Self.maxURLs) {
+        for captured in LinkIdentity.deduplicated(input.metadata.urls).prefix(Self.maxURLs) {
             try Task.checkCancellation()
             guard let url = URL(string: captured.url) else { continue }
             let decision = LinkFetchPolicy.decide(url)

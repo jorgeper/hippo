@@ -4,7 +4,8 @@ import CaptureCore
 /// Finds dates, phone numbers, addresses and links in the capture's text (design §5.4).
 public struct DataDetectionEnricher: Enricher {
     public var kind: FacetKind { .dataDetection }
-    public var version: Int { 1 }
+    /// 2: a bare time on a screenshot's first OCR line (the status-bar clock) is not a date.
+    public var version: Int { 2 }
     public var usesNetwork: Bool { false }
     public var inputs: Set<FacetKind> { [.textRecognition, .transcript] }
 
@@ -32,7 +33,7 @@ public struct DataDetectionEnricher: Enricher {
         var items: [Detection] = []
         var seen = Set<String>()
         for (source, text) in sources where !text.isEmpty {
-            for d in Self.detect(in: text, source: source) {
+            for d in Self.detect(in: text, source: source, ignoresClockLine: source.hasPrefix("text_recognition:")) {
                 if d.type == "link", let v = d.value, known.contains(v) || known.contains(d.text) { continue }
                 guard seen.insert("\(d.type)\u{1F}\(d.value ?? d.text)\u{1F}\(d.source)").inserted else { continue }
                 items.append(d)
@@ -43,10 +44,11 @@ public struct DataDetectionEnricher: Enricher {
                               provenance: "ns_data_detector")
     }
 
-    static func detect(in text: String, source: String) -> [Detection] {
+    static func detect(in text: String, source: String, ignoresClockLine: Bool = false) -> [Detection] {
         let types: NSTextCheckingResult.CheckingType = [.date, .phoneNumber, .address, .link]
         guard let detector = try? NSDataDetector(types: types.rawValue) else { return [] }
         let ns = text as NSString
+        let firstLine = ns.lineRange(for: NSRange(location: 0, length: 0))
         var out: [Detection] = []
         // NSDataDetector reads dates in the system time zone; the wall-clock it found is formatted in that
         // same zone so it is reported as written (§5.4: never assign a zone the text did not state).
@@ -55,6 +57,7 @@ public struct DataDetectionEnricher: Enricher {
             switch r.resultType {
             case .date:
                 guard let date = r.date else { continue }
+                if ignoresClockLine, NSMaxRange(r.range) <= NSMaxRange(firstLine), Self.isBareTime(matched) { continue }
                 out.append(Detection(type: "date", text: matched, value: dateValue(date, zone: r.timeZone), source: source))
             case .phoneNumber:
                 out.append(Detection(type: "phone", text: matched, value: r.phoneNumber ?? matched, source: source))
@@ -69,6 +72,11 @@ public struct DataDetectionEnricher: Enricher {
             }
         }
         return out
+    }
+
+    /// "8:14" or "18:05": a clock reading with no day, AM/PM or words.
+    static func isBareTime(_ s: String) -> Bool {
+        s.range(of: #"^\d{1,2}:\d{2}$"#, options: .regularExpression) != nil
     }
 
     private static func dateValue(_ date: Date, zone: TimeZone?) -> String {

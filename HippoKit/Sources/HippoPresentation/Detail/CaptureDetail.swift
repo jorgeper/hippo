@@ -49,7 +49,8 @@ public struct CaptureDetail: Equatable, Sendable {
             guard (try? PackagePath.validateRelative(a.relativePath)) != nil else { return nil }
             return (a, packageURL.appendingPathComponent(a.relativePath))
         }
-        let links = m.urls.compactMap { URL(string: $0.url) }
+        let urls = LinkIdentity.deduplicated(m.urls)
+        let links = urls.compactMap { URL(string: $0.url) }
         let sync = jobs.isEmpty ? [SyncRow.unassigned]
             : jobs.map { SyncRow.make(job: $0, destinationName: destination($0.destinationID)?.displayName) }
         return CaptureDetail(
@@ -62,7 +63,7 @@ public struct CaptureDetail: Equatable, Sendable {
             },
             sync: sync,
             exportURLs: files.map(\.1),
-            linkCards: m.urls.compactMap { enrichment.links[$0.url] },
+            linkCards: urls.compactMap { enrichment.links[$0.url] },
             transcripts: titled(m, enrichment.transcripts.mapValues(\.text)),
             recognizedText: titled(m, enrichment.recognizedText),
             found: enrichment.detections.map { foundItem($0, metadata: m, noteBody: noteBody) },

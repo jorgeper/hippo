@@ -54,6 +54,20 @@ import Enrichment
         #expect(kept.first?.value == "https://other.example.org/x")
     }
 
+    // A screenshot's first OCR line is the status bar; its clock is not a date the user captured.
+    @Test func screenshotStatusBarClockIsIgnored() async throws {
+        let doc = try ocrDoc("8:14 •\n100\n< 2\nLunch on 12 Dec 2026 at 1pm")
+        let items = try detections(try await DataDetectionEnricher().run(fixtureInput(fixtureMetadata(), current: doc)))
+        #expect(items.filter { $0.type == "date" }.map(\.value) == ["2026-12-12T13:00:00"])
+
+        // A bare time further down is kept, and so is one the user typed.
+        let later = try ocrDoc("Agenda\nStand-up 9:30")
+        let kept = try detections(try await DataDetectionEnricher().run(fixtureInput(fixtureMetadata(), current: later)))
+        #expect(kept.contains { $0.type == "date" && $0.text == "9:30" })
+        let typed = try detections(try await DataDetectionEnricher().run(fixtureInput(fixtureMetadata(userNote: "8:14"))))
+        #expect(typed.contains { $0.type == "date" && $0.source == "user_note" })
+    }
+
     @Test func noTextIsEmpty() async throws {
         let out = try await DataDetectionEnricher().run(fixtureInput(fixtureMetadata()))
         #expect(out.status == .empty)
@@ -76,7 +90,7 @@ import Enrichment
 
     @Test func declaredShape() {
         let e = DataDetectionEnricher()
-        #expect(e.kind == .dataDetection && e.version == 1 && !e.usesNetwork)
+        #expect(e.kind == .dataDetection && e.version == 2 && !e.usesNetwork)
         #expect(e.inputs == [.textRecognition, .transcript])
         #expect(e.applies(to: fixtureMetadata(method: .typedNote)))
     }

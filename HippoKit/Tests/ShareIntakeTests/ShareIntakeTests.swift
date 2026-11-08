@@ -144,6 +144,51 @@ import HippoTestSupport
         #expect(result.draft.sharedText == nil)
     }
 
+    // YouTube shares only text, and the text is the link.
+    @Test func textThatIsOnlyALinkBecomesALink() async throws {
+        let link = "https://youtube.com/watch?v=VIDEO000001&is=SHARETAG0000000"
+        let provider = FakeProvider(types: ["public.utf8-plain-text"], text: link)
+
+        let result = await prepare([provider])
+
+        #expect(result.draft.urls == [CapturedURL(url: link, source: "detected_in_text")])
+        #expect(result.draft.sharedText == nil)
+        #expect(result.failures.isEmpty)
+
+        let viaContent = await prepare([], contentText: " https://example.com/c\n", captureID: UUID())
+        #expect(viaContent.draft.urls == [CapturedURL(url: "https://example.com/c", source: "detected_in_text")])
+        #expect(viaContent.draft.sharedText == nil)
+    }
+
+    @Test func webLinksInSharedTextAreAddedAndTextKept() async throws {
+        let provider = FakeProvider(types: ["public.utf8-plain-text"],
+                                    text: "Check this out https://example.com/b or mail a@example.com")
+
+        let result = await prepare([provider])
+
+        #expect(result.draft.urls == [CapturedURL(url: "https://example.com/b", source: "detected_in_text")])
+        #expect(result.draft.sharedText == "Check this out https://example.com/b or mail a@example.com")
+    }
+
+    @Test func linkInTextAlreadySharedAsURLIsNotAddedAgain() async throws {
+        let url = FakeProvider(types: ["public.url"], url: URL(string: "https://example.com/a")!)
+        let text = FakeProvider(types: ["public.utf8-plain-text"], text: "Read https://example.com/a?utm_source=share")
+
+        let result = await prepare([url, text])
+
+        #expect(result.draft.urls == [CapturedURL(url: "https://example.com/a", source: "shared_payload")])
+    }
+
+    // Instagram offers the same reel twice, once with `?l=1`.
+    @Test func trackingVariantsOfASharedURLAreOneLink() async throws {
+        let first = FakeProvider(types: ["public.url"], url: URL(string: "https://www.instagram.com/reel/X/")!)
+        let again = FakeProvider(types: ["public.url"], url: URL(string: "https://www.instagram.com/reel/X/?l=1")!)
+
+        let result = await prepare([first, again])
+
+        #expect(result.draft.urls.map(\.url) == ["https://www.instagram.com/reel/X/"])
+    }
+
     @Test func plainTextWithRichEquivalentsSavesTextOnly() async throws {
         let provider = FakeProvider(types: ["public.rtf", "public.utf8-plain-text"],
                                     fileBytes: Data("{\\rtf1 Hello}".utf8), text: "Hello")
@@ -381,5 +426,27 @@ import HippoTestSupport
 
         let text = SystemItemProvider(NSItemProvider(object: "hello" as NSString))
         #expect(try await text.loadText() == "hello")
+    }
+
+    // YouTube registers its link as an NSString item under `public.plain-text`, which
+    // `loadObject(ofClass: String.self)` can't coerce; the share then reported "1 items couldn't be copied".
+    @Test func plainTextItemsRegisteredTheOldWayStillLoad() async throws {
+        let link = "https://youtube.com/watch?v=VIDEO000001"
+        let legacy = NSItemProvider()
+        legacy.registerItem(forTypeIdentifier: "public.plain-text") { completion, _, _ in completion?(link as NSString, nil) }
+        let shapes: [NSItemProvider] = [
+            NSItemProvider(item: link as NSString, typeIdentifier: "public.plain-text"),
+            NSItemProvider(item: NSAttributedString(string: link), typeIdentifier: "public.plain-text"),
+            NSItemProvider(item: NSURL(string: link)!, typeIdentifier: "public.plain-text"),
+            NSItemProvider(item: Data(link.utf8) as NSData, typeIdentifier: "public.plain-text"),
+            legacy,
+        ]
+        for shape in shapes {
+            #expect(try await SystemItemProvider(shape).loadText() == link)
+        }
+
+        let result = await prepare([SystemItemProvider(shapes[0])], contentText: link)
+        #expect(result.failures.isEmpty)
+        #expect(result.draft.urls == [CapturedURL(url: link, source: "detected_in_text")])
     }
 }

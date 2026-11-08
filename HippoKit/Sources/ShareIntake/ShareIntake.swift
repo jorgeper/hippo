@@ -61,7 +61,7 @@ public struct ShareIntake: Sendable {
                     totalBytes += bytes
                     if isImage, firstImageURL == nil { firstImageURL = url }
                 case .link(let url, let text):
-                    if !urls.contains(where: { $0.url == url }) {
+                    if !urls.contains(where: { LinkIdentity.key($0.url) == LinkIdentity.key(url) }) {
                         urls.append(CapturedURL(url: url, source: "shared_payload"))
                     }
                     if let text { keptTexts.append(text) }
@@ -80,6 +80,15 @@ public struct ShareIntake: Sendable {
         if let content = Self.nonBlank(input.contentText),
            !keptTexts.contains(content), !urls.contains(where: { $0.url == content }) {
             texts.insert(content, at: 0)
+        }
+        // Some apps (YouTube) share a link only as text: its web links become the capture's links, and
+        // a text that is nothing but one link isn't kept twice.
+        texts = texts.filter { text in
+            let links = Self.webLinks(in: text)
+            for link in links.map(\.url) where !urls.contains(where: { LinkIdentity.key($0.url) == LinkIdentity.key(link) }) {
+                urls.append(CapturedURL(url: link, source: "detected_in_text"))
+            }
+            return !(links.count == 1 && links[0].matched == text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         let joined = texts.joined(separator: "\n\n")
         var sharedText: String?
@@ -196,6 +205,21 @@ public struct ShareIntake: Sendable {
     }
 
     private static func fileExtension(_ type: UTType) -> String { type.preferredFilenameExtension ?? "bin" }
+
+    /// Links written out with `http://` or `https://` in `text` (not bare domains or email addresses).
+    /// Texts too large to keep inline are not scanned.
+    static func webLinks(in text: String) -> [(url: String, matched: String)] {
+        guard text.utf8.count <= largeTextLimit,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return [] }
+        let ns = text as NSString
+        return detector.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { r in
+            let matched = ns.substring(with: r.range)
+            let lower = matched.lowercased()
+            guard let url = r.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  lower.hasPrefix("http://") || lower.hasPrefix("https://") else { return nil }
+            return (url.absoluteString, matched)
+        }
+    }
 
     private static func nonBlank(_ s: String?) -> String? {
         guard let trimmed = s?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
