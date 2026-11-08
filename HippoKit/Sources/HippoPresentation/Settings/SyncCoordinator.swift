@@ -11,6 +11,8 @@ public actor SyncCoordinator {
     public static let passFinished = Notification.Name("HippoSyncPassFinished")
     /// A pass stops after this many `runOnce()` rounds even if work remains.
     static let maxRounds = 10
+    /// Consecutive follow-up passes after the first when work remains (25 x 200 jobs).
+    static let maxFollowUps = 25
     private static let nothingDone = SyncPassResult(synced: 0, failed: 0, idle: true)
 
     private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "sync")
@@ -97,16 +99,39 @@ public actor SyncCoordinator {
         return await run(generation)
     }
 
+    /// Runs a pass, then follow-up passes while the previous one ended with work left. The chain ends
+    /// on `stop()`, after `maxFollowUps` follow-ups, or when a pass uploaded nothing (every round
+    /// failed), so a persistent failure cannot hot-loop.
     private func run(_ generation: Int) async -> SyncPassResult {
         guard generation == self.generation else { return Self.nothingDone }
         isRunning = true
         var total = Self.nothingDone
+        var followUps = 0
+        while true {
+            let pass = await runPass()
+            total.synced += pass.result.synced
+            total.failed += pass.result.failed
+            total.idle = total.idle && pass.result.idle
+            let carryOn = pass.moreWork && pass.result.synced > 0 && followUps < Self.maxFollowUps
+                && !Task.isCancelled && generation == self.generation
+            if !carryOn { break }
+            followUps += 1
+        }
+        isRunning = false
+        if generation == self.generation { running = nil }
+        return total
+    }
+
+    /// `moreWork` is true when the pass used all its rounds without reaching an idle one.
+    private func runPass() async -> (result: SyncPassResult, moreWork: Bool) {
+        var total = Self.nothingDone
+        var moreWork = true
         for _ in 0..<Self.maxRounds {
-            if Task.isCancelled { break }
+            if Task.isCancelled { moreWork = false; break }
             let round = await worker.runOnce()
             total.synced += round.synced
             total.failed += round.failed
-            if round.idle { break }
+            if round.idle { moreWork = false; break }
             total.idle = false
         }
         do {
@@ -114,9 +139,7 @@ public actor SyncCoordinator {
         } catch {
             Self.log.error("\("diagnostics_failed", privacy: .public)")
         }
-        isRunning = false
-        if generation == self.generation { running = nil }
         NotificationCenter.default.post(name: Self.passFinished, object: self)
-        return total
+        return (total, moreWork)
     }
 }

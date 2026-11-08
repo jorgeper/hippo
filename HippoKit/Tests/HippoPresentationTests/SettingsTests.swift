@@ -157,6 +157,45 @@ struct SettingsTests {
         #expect(await h.coordinator.isBusy == false)
     }
 
+    @Test func singleSyncNowDrainsMoreThanOnePassOfJobs() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        var packages: [CommittedPackage] = []
+        for i in 0..<250 { packages.append(try await h.t.note("note \(i)", at: start.addingTimeInterval(Double(i)))) }
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+
+        let result = await h.coordinator.syncNow()
+
+        #expect(result.synced == 250)
+        #expect(result.failed == 0)
+        for p in packages { #expect(try h.states(p) == [.synced]) }
+        #expect(await h.coordinator.isBusy == false)
+    }
+
+    @Test func followUpPassEndsAfterStop() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        var packages: [CommittedPackage] = []
+        for i in 0..<250 { packages.append(try await h.t.note("note \(i)", at: start.addingTimeInterval(Double(i)))) }
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        let passes = Mutex(0)
+        let coordinator = h.coordinator
+        let observer = NotificationCenter.default.addObserver(forName: SyncCoordinator.passFinished,
+                                                              object: coordinator, queue: nil) { _ in
+            passes.withLock { $0 += 1 }
+            coordinator.requestStop()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let result = await coordinator.syncNow()
+
+        #expect(passes.withLock { $0 } == 1)
+        #expect(result.synced == 200)
+        var pending = 0
+        for p in packages where try h.states(p) != [.synced] { pending += 1 }
+        #expect(pending == 50)
+    }
+
     @Test func stopCancelsRunningPassAndNextCallStillSyncs() async throws {
         let remote = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-held-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: remote) }
