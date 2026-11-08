@@ -12,6 +12,8 @@ public final class CaptureDetailModel {
     public private(set) var loadFailed = false
     /// The confirmation to show before `delete()`; refreshed by `load()`.
     public private(set) var deletionPrompt: DeletionPrompt?
+    /// When the capture was taken; set by `load()`.
+    public private(set) var capturedAt: Date?
 
     @ObservationIgnored private let store: HippoStore
     @ObservationIgnored private let captureID: String
@@ -38,6 +40,7 @@ public final class CaptureDetailModel {
     private struct Loaded: Sendable {
         var detail: CaptureDetail
         var prompt: DeletionPrompt
+        var capturedAt: Date
     }
 
     /// Reads the capture's metadata, note body and upload jobs. Leaves `detail` nil if it can't be read.
@@ -64,7 +67,7 @@ public final class CaptureDetailModel {
                                                 isOnline: isOnline(), goldArrivedAt: goldArrivedAt, destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName)
-                return Loaded(detail: detail, prompt: prompt)
+                return Loaded(detail: detail, prompt: prompt, capturedAt: metadata.capturedAt)
             } catch {
                 Self.log.error("\("load_failed", privacy: .public)")
                 return nil
@@ -74,6 +77,7 @@ public final class CaptureDetailModel {
         loadFailed = false
         detail = loaded.detail
         deletionPrompt = loaded.prompt
+        capturedAt = loaded.capturedAt
     }
 
     /// Makes this capture's blocked and retry-waiting uploads claimable now, then reloads.

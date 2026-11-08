@@ -117,7 +117,7 @@ enum EnrichmentScheduling {
                 }
             }
             if ranAny && !Task.isCancelled {
-                await SyncScheduling.runPass(coordinator, name: "enrichment-sync")
+                await SyncScheduling.runPass(coordinator, name: "enrichment-sync", trigger: "enrichment")
             }
         }
     }

@@ -1,5 +1,6 @@
 import SwiftUI
 import os
+import LocalRepository
 
 @main
 struct HippoApp: App {
@@ -28,7 +29,10 @@ struct HippoApp: App {
     /// refreshes `diagnostics.json` so the store can be checked from the Mac with `make diagnostics`.
     /// Then syncs, then runs enrichment.
     private static func startLaunchRecovery(_ environment: AppEnvironment) {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let release = "\(info["CFBundleShortVersionString"] as? String ?? "0")-\(info["CFBundleVersion"] as? String ?? "0")"
         Task.detached {
+            environment.store.log.append(LogEvent(event: .appLaunch, code: Diagnostics.safeCode(release)))
             await BackgroundActivity.run(name: "launch-recovery") {
                 do {
                     _ = try environment.store.recover()
@@ -42,6 +46,7 @@ struct HippoApp: App {
                     log.error("\("diagnostics_failed", privacy: .public)")
                 }
             }
+            environment.store.log.prune()
             await SyncScheduling.syncAfterLaunchRecovery(environment)
             // Enrichment waits for recovery (which sweeps enrichment staging) and the first sync, then
             // backfills anything not yet enriched, newest first.

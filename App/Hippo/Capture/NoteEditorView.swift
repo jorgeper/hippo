@@ -76,7 +76,7 @@ struct NoteEditorView: View {
         }
         dismiss()
         if let coordinator = environment.coordinator {
-            Task { await SyncScheduling.runPass(coordinator, name: "note-sync") }
+            Task { await SyncScheduling.runPass(coordinator, name: "note-sync", trigger: "after_save") }
         }
         let environment = environment
         Task { await EnrichmentScheduling.run(environment, reason: "note") }

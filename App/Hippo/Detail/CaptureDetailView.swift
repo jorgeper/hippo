@@ -7,6 +7,7 @@ import Enrichment
 /// One capture's details: preview, comment, shared content, captured and attachment facts, sync state.
 struct CaptureDetailView: View {
     let environment: AppEnvironment
+    let captureID: String
     /// Called after the capture is deleted, before this screen pops, so the timeline reloads.
     let onDeleted: () -> Void
 
@@ -14,6 +15,7 @@ struct CaptureDetailView: View {
     @State private var confirmingDelete = false
     @State private var deleteFailed = false
     @State private var retrying = false
+    @State private var developerMode = LocationService.settings.developerMode
     @State private var showsStripes = LocationService.settings.showsLayerStripes
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -22,6 +24,7 @@ struct CaptureDetailView: View {
 
     init(environment: AppEnvironment, captureID: String, onDeleted: @escaping () -> Void) {
         self.environment = environment
+        self.captureID = captureID
         self.onDeleted = onDeleted
         _model = State(initialValue: CaptureDetailModel(
             store: environment.store, captureID: captureID,
@@ -50,7 +53,10 @@ struct CaptureDetailView: View {
                 Task { await model.load() }
             }
             // The stripes switch lives in Settings; pick up a change on return.
-            .onAppear { showsStripes = LocationService.settings.showsLayerStripes }
+            .onAppear {
+                showsStripes = LocationService.settings.showsLayerStripes
+                developerMode = LocationService.settings.developerMode
+            }
             .confirmationDialog(model.deletionPrompt?.title ?? "Delete from iPhone?", isPresented: $confirmingDelete,
                                 titleVisibility: .visible, presenting: model.deletionPrompt) { prompt in
                 Button(prompt.confirm, role: .destructive) { delete() }
@@ -117,6 +123,14 @@ struct CaptureDetailView: View {
                     }
                 }
                 StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry)
+                if developerMode, let capturedAt = model.capturedAt {
+                    Section {
+                        NavigationLink("Activity") {
+                            ActivityView(environment: environment, captureID: captureID, capturedAt: capturedAt)
+                        }
+                        .accessibilityIdentifier("detail-activity")
+                    }
+                }
             }
             .listStyle(.insetGrouped)
             .contentMargins(.top, detail.preview == .none ? 16 : 0, for: .scrollContent)
@@ -171,7 +185,7 @@ struct CaptureDetailView: View {
             defer { retrying = false }
             await BackgroundActivity.run(name: "detail-retry", onExpire: coordinator.map(SyncScheduling.stopper)) {
                 await model.retry()
-                _ = await coordinator?.syncNow()
+                _ = await coordinator?.syncNow(trigger: "manual")
             }
             await model.load()
         }

@@ -10,6 +10,7 @@ struct SettingsView: View {
     private let registry: ProviderRegistry
     private let coordinator: SyncCoordinator
     private let store: HippoStore
+    @State private var logModel: GlobalLogModel
 
     @State private var confirmingSignOut = false
     @State private var confirmingUpload = false
@@ -31,6 +32,7 @@ struct SettingsView: View {
         self.registry = registry
         self.store = store
         self.coordinator = coordinator
+        _logModel = State(initialValue: GlobalLogModel(store: store))
         _model = State(initialValue: SettingsModel(
             store: store, registry: registry, coordinator: coordinator, settings: LocationService.settings,
             requestLocationPermission: { await LocationService.shared.requestPermission() },
@@ -46,6 +48,7 @@ struct SettingsView: View {
             enrichmentSection
             onThisPhoneSection
             aboutSection
+            DeveloperSection(model: model, logModel: logModel)
         }
         .navigationTitle("Settings")
         .task {
@@ -223,7 +226,7 @@ struct SettingsView: View {
         Task {
             let wrote = await DevFolderProvider.writeSampleGold(store: store)
             sampleMessage = wrote ? nil : "Sync this capture first."
-            if wrote { await SyncScheduling.runPass(coordinator, name: "debug-gold-sample") }
+            if wrote { await SyncScheduling.runPass(coordinator, name: "debug-gold-sample", trigger: "manual") }
         }
     }
     #endif

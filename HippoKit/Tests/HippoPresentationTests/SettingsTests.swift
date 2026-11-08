@@ -89,6 +89,20 @@ struct SettingsTests {
         #expect(events.map(\.on) == [false, true])
     }
 
+    @Test func developerModeToggleIsLogged() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        #expect(!h.model.developerMode)
+        h.model.setDeveloperMode(true)
+        #expect(h.model.developerMode)
+        #expect(h.settings.developerMode)
+        h.model.setDeveloperMode(false)
+        #expect(!h.settings.developerMode)
+        let events = h.t.store.log.globalEvents(limit: 10, before: nil).filter { $0.event == .settingsChanged }.reversed()
+        #expect(events.map(\.kind) == ["developer_mode", "developer_mode"])
+        #expect(events.map(\.on) == [true, false])
+    }
+
     @Test func syncPassIsLoggedWithTrigger() async throws {
         let h = try Harness()
         defer { h.cleanup() }

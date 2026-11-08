@@ -156,7 +156,7 @@ struct TimelineView: View {
         .listStyle(.insetGrouped)
         .refreshable {
             if let coordinator = environment.coordinator {
-                await SyncScheduling.runPass(coordinator, name: "timeline-sync")
+                await SyncScheduling.runPass(coordinator, name: "timeline-sync", trigger: "manual")
             }
             await model.reload()
         }

@@ -22,6 +22,8 @@ public final class SettingsModel {
     public private(set) var locationEnabled: Bool
     /// Whether stripes show where details came from.
     public private(set) var showsLayerStripes: Bool
+    /// Whether Activity and the Log screen are shown.
+    public private(set) var developerMode: Bool
     /// True after a failed `refresh()`; cleared by the next successful one. A failed refresh keeps the
     /// previous values.
     public private(set) var loadFailed = false
@@ -59,6 +61,7 @@ public final class SettingsModel {
         self.requestLocationPermission = requestLocationPermission
         locationEnabled = settings.locationEnabled
         showsLayerStripes = settings.showsLayerStripes
+        developerMode = settings.developerMode
     }
 
     public static let enrichmentSwitches: [EnrichmentSwitch] = [
@@ -77,6 +80,12 @@ public final class SettingsModel {
         settings.showsLayerStripes = on
         showsLayerStripes = on
         store.log.append(LogEvent(event: .settingsChanged, kind: "layer_stripes", on: on))
+    }
+
+    public func setDeveloperMode(_ on: Bool) {
+        settings.developerMode = on
+        developerMode = on
+        store.log.append(LogEvent(event: .settingsChanged, kind: "developer_mode", on: on))
     }
 
     public func isEnrichmentEnabled(_ kind: FacetKind) -> Bool { settings.isEnrichmentEnabled(kind) }
