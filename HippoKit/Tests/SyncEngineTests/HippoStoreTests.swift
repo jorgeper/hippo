@@ -339,7 +339,7 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(Set(json.keys) == ["generated_at", "app_version", "schema_version", "capture_count", "jobs_by_state",
                                    "recent_error_codes", "destinations"])
         #expect(json["app_version"] as? String == "1.4.2")
-        #expect(json["schema_version"] as? Int == 2)
+        #expect(json["schema_version"] as? Int == 3)
         #expect(json["capture_count"] as? Int == 1)
         #expect(json["jobs_by_state"] as? [String: Int] == [
             "pending": 0, "uploading": 0, "synced": 0, "retryable_failure": 1, "needs_authentication": 0,
@@ -451,4 +451,60 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(await worker.runOnce().synced == 1)
         #expect(try t.store.retryAll() == 0)
     }
+
+    // Design §6.2: local delete also removes the capture's silver and gold, and their rows.
+    @Test func deleteRemovesLocalEnrichments() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let fm = FileManager.default
+        let pkg = try await t.store.capture(t.urlDraft())
+        let other = try await t.store.capture(t.urlDraft("https://example.com/b"))
+        let id = pkg.metadata.captureID
+        for capture in [pkg, other] {
+            for layer in [EnrichmentLayer.device, .server] {
+                try t.store.enrichments.write(try enrichmentDocument(capture, layer, t.store), newAssets: [:])
+            }
+            try t.store.enrichmentTasks.set(captureID: capture.metadata.captureID, kind: .place, version: 1,
+                                            status: "pending", now: Date())
+        }
+
+        _ = try await t.store.delete(captureID: id)
+
+        #expect(!fm.fileExists(atPath: t.store.layout.enrichmentDirectory(.device, captureID: id).path))
+        #expect(!fm.fileExists(atPath: t.store.layout.enrichmentDirectory(.server, captureID: id).path))
+        let rows = try t.rawDatabase().query("SELECT capture_id FROM enrichment_tasks").map { $0.string("capture_id") }
+        #expect(rows == [other.metadata.captureID])
+        #expect(try t.store.enrichments.document(.server, captureID: other.metadata.captureID) != nil)
+    }
+
+    @Test func recoverSweepsEnrichmentLeftovers() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let fm = FileManager.default
+        let pkg = try await t.store.capture(t.urlDraft())
+        try t.store.enrichments.write(try enrichmentDocument(pkg, .device, t.store), newAssets: [:])
+        let leftover = t.store.layout.enrichmentStagingDir.appendingPathComponent("x", isDirectory: true)
+        try fm.createDirectory(at: leftover, withIntermediateDirectories: true)
+        let orphan = t.store.layout.enrichmentDirectory(.server, captureID: UUID().uuidString.lowercased())
+        try fm.createDirectory(at: orphan, withIntermediateDirectories: true)
+
+        let report = try t.store.recover()
+
+        // Enrichment staging belongs to the enrichment sweep, not to package staging recovery.
+        #expect(report.removedStaging == 0)
+        #expect(report.failed == 0)
+        #expect(!fm.fileExists(atPath: leftover.path))
+        #expect(!fm.fileExists(atPath: orphan.path))
+        #expect(try t.store.enrichments.document(.device, captureID: pkg.metadata.captureID) != nil)
+        #expect(try t.stagingContents().filter { $0 != "enrichments" }.isEmpty)
+    }
+}
+
+private func enrichmentDocument(_ pkg: CommittedPackage, _ layer: EnrichmentLayer, _ store: HippoStore) throws
+    -> EnrichmentDocument {
+    let digest = try #require(try store.index.packageDigest(captureID: pkg.metadata.captureID))
+    let facet = Facet(version: 1, status: .ok, generatedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                      provenance: "test", data: .object(["text": .string("summary")]))
+    return EnrichmentDocument(schemaVersion: 1, captureID: pkg.metadata.captureID, layer: layer,
+                              packageDigest: digest, producer: EnrichmentProducer(name: "t", version: "1", build: "1"),
+                              generatedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                              facets: [FacetKind.summary.rawValue: facet])
 }

@@ -82,11 +82,11 @@ public final class Reconciler: Sendable {
     // MARK: Staging
 
     /// Deletes every `staging/<id>` whose lock is free, and lock files with no directory. A lock held
-    /// by a live writer means "skip".
+    /// by a live writer means "skip". `staging/enrichments/` is not a package: `EnrichmentStore.sweep()` owns it.
     private func removeAbandonedStaging(into report: inout RecoveryReport) {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: layout.stagingDir.path) else { return }
-        for name in names.sorted() {
+        for name in names.sorted() where name != layout.enrichmentStagingDir.lastPathComponent {
             do {
                 if name.hasSuffix(".lock") {
                     let dir = layout.stagingDir.appendingPathComponent(String(name.dropLast(5)))

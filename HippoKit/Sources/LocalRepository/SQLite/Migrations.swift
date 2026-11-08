@@ -1,7 +1,7 @@
 import SQLite3
 
 enum Migrations {
-    static let currentVersion: Int64 = 2
+    static let currentVersion: Int64 = 3
 
     /// Applies pending migrations up to `target` inside `BEGIN IMMEDIATE`. `user_version` is re-read
     /// after the write lock is held, so two connections opening a fresh file cannot
@@ -17,8 +17,34 @@ enum Migrations {
                 try tx.executeScript(v2)
                 try tx.executeScript("PRAGMA user_version = 2")
             }
+            if version < 3, target >= 3 {
+                try tx.executeScript(v3)
+                try tx.executeScript("PRAGMA user_version = 3")
+            }
         }
     }
+
+    /// Enrichment work, silver uploads and gold cursors. FTS5 tables can't gain columns, so `captures_fts`
+    /// is rebuilt with an `enrichment` column and its rows copied over.
+    static let v3 = """
+    ALTER TABLE captures ADD COLUMN device_revision TEXT;
+    CREATE TABLE enrichment_tasks(capture_id TEXT NOT NULL REFERENCES captures ON DELETE CASCADE, kind TEXT NOT NULL,
+      version INTEGER NOT NULL, status TEXT NOT NULL /* pending|ok|empty|failed|not_applicable */,
+      attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER, last_error_code TEXT,
+      updated_at_ms INTEGER NOT NULL, PRIMARY KEY(capture_id, kind));
+    CREATE TABLE enrichment_uploads(capture_id TEXT NOT NULL REFERENCES captures ON DELETE CASCADE,
+      destination_id TEXT NOT NULL REFERENCES destinations, uploaded_revision TEXT, attempted_revision TEXT,
+      blocked INTEGER NOT NULL DEFAULT 0, attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER,
+      last_error_code TEXT, updated_at_ms INTEGER NOT NULL, PRIMARY KEY(capture_id, destination_id));
+    CREATE TABLE gold_cursors(destination_id TEXT PRIMARY KEY REFERENCES destinations, cursor TEXT,
+      last_result_code TEXT, last_pull_at_ms INTEGER);
+    CREATE VIRTUAL TABLE captures_fts_v3 USING fts5(capture_id UNINDEXED, title, user_note, shared_text, urls, filenames,
+      enrichment, tokenize='unicode61 remove_diacritics 2');
+    INSERT INTO captures_fts_v3(capture_id, title, user_note, shared_text, urls, filenames, enrichment)
+      SELECT capture_id, title, user_note, shared_text, urls, filenames, '' FROM captures_fts;
+    DROP TABLE captures_fts;
+    ALTER TABLE captures_fts_v3 RENAME TO captures_fts;
+    """
 
     static let v2 = "ALTER TABLE captures ADD COLUMN utc_offset_seconds INTEGER;"
 

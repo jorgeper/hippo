@@ -178,10 +178,10 @@ import HippoTestSupport
                 let ms = Int64(1_794_070_800_000 + i * 60_000)
                 let title = "\(words[i % 8]) \(words[(i / 8) % 8]) item \(i)"
                 try tx.execute("""
-                    INSERT INTO captures VALUES(?,?,?,?,?,?,NULL,0,0,1,NULL,?,?,0,NULL)
+                    INSERT INTO captures VALUES(?,?,?,?,?,?,NULL,0,0,1,NULL,?,?,0,NULL,NULL)
                     """, [.text(cid), .int(ms), .text("2026-11-07"), .text("share_extension"),
                           .text(types[i % types.count]), .text(title), .text("captures/\(cid)"), .text("d")])
-                try tx.execute("INSERT INTO captures_fts VALUES(?,?,?,?,?,?)",
+                try tx.execute("INSERT INTO captures_fts VALUES(?,?,?,?,?,?,'')",
                                [.text(cid), .text(title), .text(""), .text("shared \(words[i % 5])"), .text(""), .text("file\(i).png")])
             }
         }
