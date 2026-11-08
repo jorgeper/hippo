@@ -226,18 +226,28 @@ public final class EnrichmentStore: Sendable {
     public func uploadCandidates(destinationID: String, now: Date, limit: Int) throws
         -> [(captureID: String, relativeDirectory: String, revision: String)] {
         try db.query("""
-            SELECT c.capture_id, c.relative_directory, c.device_revision FROM captures c
-            JOIN jobs j ON j.capture_id = c.capture_id AND j.destination_id = ? AND j.state = 'synced'
-            LEFT JOIN enrichment_uploads u ON u.capture_id = c.capture_id AND u.destination_id = ?
-            WHERE c.device_revision IS NOT NULL
-              AND (u.capture_id IS NULL OR u.uploaded_revision IS NOT c.device_revision)
-              AND NOT (COALESCE(u.blocked, 0) = 1 AND u.attempted_revision IS c.device_revision)
-              AND (u.next_attempt_at_ms IS NULL OR u.next_attempt_at_ms <= ?)
+            SELECT c.capture_id, c.relative_directory, c.device_revision \(Self.candidateClause)
             ORDER BY c.captured_at_ms DESC, c.capture_id DESC LIMIT ?
             """, [.text(destinationID), .text(destinationID), .int(Self.ms(now)), .int(Int64(max(limit, 0)))]).map {
             ($0.string("capture_id") ?? "", $0.string("relative_directory") ?? "", $0.string("device_revision") ?? "")
         }
     }
+
+    /// How many captures `uploadCandidates` would return without a limit.
+    public static func uploadCandidateCount(db: Database, destinationID: String, now: Date) throws -> Int {
+        Int(try db.query("SELECT count(*) AS n \(candidateClause)",
+                         [.text(destinationID), .text(destinationID), .int(ms(now))])[0].int("n") ?? 0)
+    }
+
+    private static let candidateClause = """
+        FROM captures c
+        JOIN jobs j ON j.capture_id = c.capture_id AND j.destination_id = ? AND j.state = 'synced'
+        LEFT JOIN enrichment_uploads u ON u.capture_id = c.capture_id AND u.destination_id = ?
+        WHERE c.device_revision IS NOT NULL
+          AND (u.capture_id IS NULL OR u.uploaded_revision IS NOT c.device_revision)
+          AND NOT (COALESCE(u.blocked, 0) = 1 AND u.attempted_revision IS c.device_revision)
+          AND (u.next_attempt_at_ms IS NULL OR u.next_attempt_at_ms <= ?)
+        """
 
     /// Records that `revision` reached the destination, clearing any failure state.
     public func markUploaded(captureID: String, destinationID: String, revision: String, now: Date) throws {

@@ -366,3 +366,38 @@ private struct EnrichmentHarness {
         #expect(EnrichmentSearchText.make(device: nil, server: nil) == "")
     }
 }
+
+@Suite struct EnrichmentDiagnosticsTests {
+    @Test func diagnosticsIncludeEnrichment() async throws {
+        let t = try EnrichmentHarness(); defer { t.cleanup() }
+        let pkg = try await t.h.add(note: "Plain")
+        let id = pkg.metadata.captureID
+        try t.addDestination("dest-private")
+        try t.addJob(id, "dest-private", state: "synced")
+        try t.store.write(try t.linkDoc(pkg, title: "Preview", thumbnail: nil), newAssets: [:])
+        let tasks = EnrichmentTaskStore(db: t.h.db)
+        try tasks.set(captureID: id, kind: .linkPreview, version: 1, status: "pending", now: t0)
+        try t.store.recordGoldResult(destinationID: "dest-private", code: "gold_invalid", now: t0)
+
+        let data = try Diagnostics.make(db: t.h.db, appVersion: "1.0", now: t0.addingTimeInterval(90))
+
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect((json["enrichment_tasks"] as? [String: [String: Int]])?["link_preview"]?["pending"] == 1)
+        #expect(json["enrichment_uploads_pending"] as? Int == 1)
+        let gold = try #require(json["gold"] as? [String: Any])
+        #expect(gold["last_result_code"] as? String == "gold_invalid")
+        #expect(gold["last_pull_age_seconds"] as? Int == 90)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(!text.contains(id))
+        #expect(!text.contains("dest-private"))
+        #expect(!text.contains("Preview"))
+    }
+
+    @Test func diagnosticsWithoutDestinationOmitsGoldValues() async throws {
+        let t = try EnrichmentHarness(); defer { t.cleanup() }
+        let data = try Diagnostics.make(db: t.h.db, appVersion: "1.0", now: t0)
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["enrichment_uploads_pending"] as? Int == 0)
+        #expect((json["gold"] as? [String: Any])?["last_result_code"] == nil)
+    }
+}

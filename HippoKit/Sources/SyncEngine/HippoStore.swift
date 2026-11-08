@@ -116,6 +116,13 @@ public final class HippoStore: Sendable {
                            adapterFor: adapterFor)
     }
 
+    /// Pulls gold enrichment from the active destination's `enrichments/server/` tree, with the default clock.
+    public func makeGoldPuller(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> GoldPuller {
+        GoldPuller(layout: layout, index: index, destinations: destinations, enrichments: enrichments,
+                   adapterFor: adapterFor)
+    }
+
     /// Deletes the capture from this phone (spec §11): cancels its uploads, waits up to 10 s for a
     /// worker holding an active upload lease to let go, then removes the package and the index row
     /// (its jobs, receipts and checkpoints cascade), then its local silver and gold (their rows cascade

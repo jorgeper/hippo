@@ -20,6 +20,7 @@ public actor SyncCoordinator {
     private let store: HippoStore
     private let worker: SyncWorker
     private let uploader: EnrichmentUploader
+    private let puller: GoldPuller
     private let appVersion: String
 
     /// The current pass: running, or about to run once the pass it follows has finished.
@@ -45,6 +46,7 @@ public actor SyncCoordinator {
         self.appVersion = appVersion
         worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix)
         uploader = store.makeEnrichmentUploader(adapterFor: { try registry.adapter(for: $0) })
+        puller = store.makeGoldPuller(adapterFor: { try registry.adapter(for: $0) })
     }
 
     /// Runs a pass, or joins the follow-up pass when one is already running, and returns that pass's
@@ -138,6 +140,8 @@ public actor SyncCoordinator {
         }
         // Silver uploads never change the pass result or the follow-up decision.
         if !Task.isCancelled { _ = await uploader.runOnce() }
+        // Gold pulls never change the pass result or the follow-up decision either.
+        if !Task.isCancelled { _ = await puller.pull() }
         do {
             try store.writeDiagnostics(appVersion: appVersion)
         } catch {

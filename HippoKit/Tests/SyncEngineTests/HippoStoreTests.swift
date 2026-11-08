@@ -338,7 +338,8 @@ private func isComplete(_ r: ValidationResult) -> Bool {
 
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(Set(json.keys) == ["generated_at", "app_version", "schema_version", "capture_count", "jobs_by_state",
-                                   "recent_error_codes", "destinations"])
+                                   "recent_error_codes", "destinations",
+                                   "enrichment_tasks", "enrichment_uploads_pending", "gold"])
         #expect(json["app_version"] as? String == "1.4.2")
         #expect(json["schema_version"] as? Int == 3)
         #expect(json["capture_count"] as? Int == 1)
