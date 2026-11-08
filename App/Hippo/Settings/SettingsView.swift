@@ -1,4 +1,5 @@
 import SwiftUI
+import CaptureCore
 import LocalRepository
 import SyncEngine
 import HippoPresentation
@@ -17,12 +18,15 @@ struct SettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
 
-    init(store: HippoStore, registry: ProviderRegistry, coordinator: SyncCoordinator) {
+    /// `onEnrichmentEnabled` runs when a kind is switched on, to backfill existing captures.
+    init(store: HippoStore, registry: ProviderRegistry, coordinator: SyncCoordinator,
+         onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) {
         self.registry = registry
         self.coordinator = coordinator
         _model = State(initialValue: SettingsModel(
             store: store, registry: registry, coordinator: coordinator, settings: LocationService.settings,
-            requestLocationPermission: { await LocationService.shared.requestPermission() }))
+            requestLocationPermission: { await LocationService.shared.requestPermission() },
+            onEnrichmentEnabled: onEnrichmentEnabled))
     }
 
     var body: some View {

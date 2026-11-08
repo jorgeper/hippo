@@ -68,6 +68,8 @@ struct RecorderView: View {
                 if let coordinator = environment.coordinator {
                     Task { await SyncScheduling.runPass(coordinator, name: "record-sync") }
                 }
+                let environment = environment
+                Task { await EnrichmentScheduling.run(environment, reason: "recording") }
             }
         }
     }

@@ -46,7 +46,10 @@ struct TimelineView: View {
                     CaptureDetailView(environment: environment, captureID: id) { Task { await model.reload() } }
                 case .settings:
                     if let registry = environment.registry, let coordinator = environment.coordinator {
-                        SettingsView(store: environment.store, registry: registry, coordinator: coordinator)
+                        SettingsView(store: environment.store, registry: registry, coordinator: coordinator,
+                                     onEnrichmentEnabled: { [environment] _ in
+                                         await EnrichmentScheduling.run(environment, reason: "setting")
+                                     })
                     }
                 }
             }

@@ -26,6 +26,7 @@ struct HippoApp: App {
 
     /// Registers packages the index doesn't know yet (spec §4), clears day-old intake leftovers, and
     /// refreshes `diagnostics.json` so the store can be checked from the Mac with `make diagnostics`.
+    /// Then syncs, then runs enrichment.
     private static func startLaunchRecovery(_ environment: AppEnvironment) {
         Task.detached {
             await BackgroundActivity.run(name: "launch-recovery") {
@@ -42,6 +43,10 @@ struct HippoApp: App {
                 }
             }
             await SyncScheduling.syncAfterLaunchRecovery(environment)
+            // Enrichment waits for recovery (which sweeps enrichment staging) and the first sync, then
+            // backfills anything not yet enriched, newest first.
+            await EnrichmentScheduling.markLaunchRecovered()
+            await EnrichmentScheduling.run(environment, reason: "launch")
         }
     }
 }
