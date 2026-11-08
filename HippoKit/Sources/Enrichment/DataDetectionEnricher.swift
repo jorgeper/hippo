@@ -112,15 +112,48 @@ public struct DataDetectionEnricher: Enricher {
             }
             return date
         }
-        if matches(matched, weekdayName) {
-            let wd = cal.component(.weekday, from: date)
-            var offset = (wd - cal.component(.weekday, from: anchorDay) + 7) % 7
-            // A plain weekday equal to the capture's weekday is the capture day; "next" means strictly after it.
-            if offset == 0, matches(matched, #"^\s*next\b"#) { offset += 7 }
-            return cal.date(byAdding: .day, value: offset, to: anchorDay).map(at) ?? date
+        let wd = cal.component(.weekday, from: date)
+        if matches(matched, weekdayName), let token = weekdayToken(in: matched, naming: wd) {
+            // The detector's week offset depends on how far ahead the named day is: run on a Sunday,
+            // "Sunday brunch" is +7, "lunch next Monday" +8, "next Friday" +5, "last Friday" -2. So ask
+            // it again, with the weekday as far ahead of the run day as the named one is of the capture
+            // day, and apply what it says from the capture day.
+            let distance = (wd - cal.component(.weekday, from: anchorDay) + 7) % 7
+            if let probeDay = cal.date(byAdding: .day, value: distance, to: runDay) {
+                let probeWeekday = cal.component(.weekday, from: probeDay)
+                let probe = (matched as NSString).replacingCharacters(in: token, with: weekdayNames[probeWeekday - 1])
+                if let offset = detectedDayOffset(probe, expectedWeekday: probeWeekday, runDay: runDay, calendar: cal) {
+                    return cal.date(byAdding: .day, value: offset, to: anchorDay).map(at) ?? date
+                }
+            }
+            // Fallback: keep the week offset the detector used from the run day.
+            let k = cal.dateComponents([.day], from: runDay, to: found).day ?? 0
+            let w = (k - (wd - cal.component(.weekday, from: runDay) + 7) % 7) / 7
+            return cal.date(byAdding: .day, value: distance + 7 * w, to: anchorDay).map(at) ?? date
         }
         let shift = cal.dateComponents([.day], from: runDay, to: anchorDay).day ?? 0
         return cal.date(byAdding: .day, value: shift, to: found).map(at) ?? date
+    }
+
+    private static let weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+    /// The range of the word in `text` that names `weekday` (1 = Sunday): the full English name or a
+    /// prefix of it of three letters or more ("Fri", "Thurs"). Nil if no word does ("sunny" names none).
+    private static func weekdayToken(in text: String, naming weekday: Int) -> NSRange? {
+        let full = weekdayNames[weekday - 1].lowercased()
+        guard let words = try? NSRegularExpression(pattern: #"\b[A-Za-z]{3,}\b"#) else { return nil }
+        let ns = text as NSString
+        return words.matches(in: text, range: NSRange(location: 0, length: ns.length)).map(\.range)
+            .first { full.hasPrefix(ns.substring(with: $0).lowercased()) }
+    }
+
+    /// Days from `runDay` to the date NSDataDetector finds in `text`, if it finds one on `expectedWeekday`.
+    private static func detectedDayOffset(_ text: String, expectedWeekday: Int, runDay: Date,
+                                          calendar cal: Calendar) -> Int? {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue),
+              let date = detector.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length))?.date,
+              cal.component(.weekday, from: date) == expectedWeekday else { return nil }
+        return cal.dateComponents([.day], from: runDay, to: cal.startOfDay(for: date)).day
     }
 
     /// "8:14" or "18:05": a clock reading with no day, AM/PM or words.

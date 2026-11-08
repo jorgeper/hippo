@@ -134,9 +134,7 @@ import CaptureCore
 
     @Test func weekdayResolvesAgainstCapture() async throws {
         let cap = noon(daysFromToday: -6)
-        var d = cap
-        while cal.component(.weekday, from: d) != 6 { d = cal.date(byAdding: .day, value: 1, to: d)! }
-        #expect(try await dateValue("Friday", capturedAt: cap) == stamp(d, 12))
+        #expect(try await dateValue("Friday", capturedAt: cap) == expectedWeekday("%@", 6, capturedOn: cap))
     }
 
     @Test func monthDayWithoutYearUsesCaptureYear() throws {
@@ -185,17 +183,90 @@ import CaptureCore
         return d
     }
 
-    @Test func nextWeekdayOnCaptureWeekdayIsAWeekLater() async throws {
-        let cap = recentNoon(weekday: 6)  // a Friday
-        let v = try await dateValue("next Friday", capturedAt: cap)
-        #expect(v == stamp(cal.date(byAdding: .day, value: 7, to: cap)!, 12))
-        #expect(try await dateValue("Friday", capturedAt: cap) == stamp(cap, 12))
+    private static let weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+    /// What NSDataDetector itself gives for `template` (with `%@` for the weekday name) when run on the
+    /// capture day: probed on today, with the weekday that is as far ahead of today as `weekday` (1 = Sunday)
+    /// is of the capture day. No run weekday is hard-coded, so this holds whatever day the suite runs.
+    private func expectedWeekday(_ template: String, _ weekday: Int, capturedOn cap: Date) -> String? {
+        let today = cal.startOfDay(for: Date())
+        let distance = (weekday - cal.component(.weekday, from: cap) + 7) % 7
+        let probeDay = cal.date(byAdding: .day, value: distance, to: today)!
+        let probe = template.replacingOccurrences(
+            of: "%@", with: Self.weekdayNames[cal.component(.weekday, from: probeDay) - 1])
+        guard let raw = DataDetectionEnricher.detect(in: probe, source: "s", anchor: nil)
+                .first(where: { $0.type == "date" })?.value,
+              let found = Self.floating.date(from: raw) else { return nil }
+        let days = cal.dateComponents([.day], from: today, to: cal.startOfDay(for: found)).day!
+        let time = cal.dateComponents([.hour, .minute, .second], from: found)
+        var c = ymd(cal.date(byAdding: .day, value: days, to: cal.startOfDay(for: cap))!)
+        c.hour = time.hour; c.minute = time.minute; c.second = time.second
+        return Self.floating.string(from: cal.date(from: c)!)
     }
 
-    @Test func nextWeekdayOtherwiseIsFirstAfterCapture() async throws {
+    private static let floating: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.timeZone = .current
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        return f
+    }()
+
+    private func actualWeekday(_ template: String, _ weekday: Int, capturedOn cap: Date) -> String? {
+        let text = template.replacingOccurrences(of: "%@", with: Self.weekdayNames[weekday - 1])
+        return DataDetectionEnricher.detect(in: text, source: "s", anchor: DateAnchor(day: ymd(cap)))
+            .first { $0.type == "date" }?.value
+    }
+
+    // M1: the detector reads a weekday equal to today's as a week later; a backfill must do the same.
+    @Test func sameWeekdayFollowsDetector() async throws {
+        let sunday = recentNoon(weekday: 1)
+        let expected = try #require(expectedWeekday("%@ brunch", 1, capturedOn: sunday))
+        #expect(try await dateValue("Sunday brunch", capturedAt: sunday) == expected)
+    }
+
+    // M1: the match includes the leading word ("lunch next Monday"), and "next" is the detector's own rule.
+    @Test func nextWeekdayWithLeadingWordFollowsDetector() async throws {
+        let sunday = recentNoon(weekday: 1)
+        let expected = try #require(expectedWeekday("lunch next %@", 2, capturedOn: sunday))
+        #expect(try await dateValue("lunch next Monday", capturedAt: sunday) == expected)
+    }
+
+    // M1: "last Friday" stays in the past of the capture day, as the detector would have read it then.
+    @Test func lastWeekdayFollowsDetector() async throws {
+        let sunday = recentNoon(weekday: 1)
+        let expected = try #require(expectedWeekday("I saw him last %@", 6, capturedOn: sunday))
+        let v = try await dateValue("I saw him last Friday", capturedAt: sunday)
+        #expect(v == expected)
+        #expect(v < Self.floating.string(from: cal.startOfDay(for: sunday)))
+    }
+
+    @Test func nextWeekdayOnCaptureWeekday() async throws {
+        let cap = recentNoon(weekday: 6)  // a Friday
+        #expect(try await dateValue("next Friday", capturedAt: cap) == expectedWeekday("next %@", 6, capturedOn: cap))
+        #expect(try await dateValue("Friday", capturedAt: cap) == expectedWeekday("%@", 6, capturedOn: cap))
+    }
+
+    @Test func nextWeekdayOtherwise() async throws {
         let cap = recentNoon(weekday: 2)  // a Monday
-        let v = try await dateValue("next Friday", capturedAt: cap)
-        #expect(v == stamp(cal.date(byAdding: .day, value: 4, to: cap)!, 12))
+        #expect(try await dateValue("next Friday", capturedAt: cap) == expectedWeekday("next %@", 6, capturedOn: cap))
+    }
+
+    // M1: every capture weekday against every named weekday, so distances other than today's are covered
+    // on any run day (the detector's week offset depends on the distance: "next" adds a week only when
+    // the named day is near).
+    @Test(arguments: ["%@ brunch", "lunch next %@", "I saw him last %@", "dinner on %@ at 7pm"])
+    func everyWeekdayFollowsDetector(template: String) {
+        for capWeekday in 1...7 {
+            let cap = recentNoon(weekday: capWeekday)
+            for named in 1...7 {
+                let expected = expectedWeekday(template, named, capturedOn: cap)
+                #expect(expected != nil)
+                #expect(actualWeekday(template, named, capturedOn: cap) == expected,
+                        "\(template) · \(Self.weekdayNames[named - 1]) captured on \(Self.weekdayNames[capWeekday - 1])")
+            }
+        }
     }
 
     @Test func versionIsThree() { #expect(DataDetectionEnricher().version == 3) }
