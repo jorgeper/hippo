@@ -66,7 +66,7 @@ public struct ShareIntake: Sendable {
                     }
                     if let text { keptTexts.append(text) }
                 case .text(let text):
-                    if let text { keptTexts.append(text) }
+                    keptTexts.append(text)
                 case nil:
                     failures.append(IntakeFailure(index: index, kind: .unsupported))
                 }
@@ -134,11 +134,11 @@ public struct ShareIntake: Sendable {
     enum Item {
         case file(AttachmentSource, url: URL, isImage: Bool, bytes: Int64)
         case link(String, text: String?)
-        /// Nil when the text was blank.
-        case text(String?)
+        case text(String)
     }
 
-    /// Nil for an unsupported provider. `base` is the destination path without its extension.
+    /// Nil for an unsupported provider: nothing it offers can be saved, such as a folder or blank text.
+    /// `base` is the destination path without its extension.
     private static func take(_ provider: any ItemProviding, plan: Plan, base: URL) async throws -> Item? {
         switch plan {
         case .file(let identifier, let type):
@@ -155,25 +155,28 @@ public struct ShareIntake: Sendable {
             let url = try await provider.loadURL()
             if url.isFileURL { return try copyLocalFile(url, base: base, suggestedName: provider.suggestedName) }
             var text: String?
-            if plan == .link(withText: true), let loaded = nonBlank(try await provider.loadText()),
+            // The text is secondary: if it can't be loaded, the URL is still kept.
+            if plan == .link(withText: true), let loaded = nonBlank(try? await provider.loadText()),
                loaded != url.absoluteString {
                 text = loaded
             }
             return .link(url.absoluteString, text: text)
 
         case .text:
-            return .text(nonBlank(try await provider.loadText()))
+            return nonBlank(try await provider.loadText()).map(Item.text)
 
         case .unsupported:
             return nil
         }
     }
 
-    private static func copyLocalFile(_ source: URL, base: URL, suggestedName: String?) throws -> Item {
+    /// Nil for a directory, which isn't copied.
+    private static func copyLocalFile(_ source: URL, base: URL, suggestedName: String?) throws -> Item? {
         let scoped = source.startAccessingSecurityScopedResource()
         defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-        let type = (try? source.resourceValues(forKeys: [.contentTypeKey]))?.contentType
-            ?? UTType(filenameExtension: source.pathExtension) ?? .data
+        let values = try? source.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey])
+        if values?.isDirectory == true { return nil }
+        let type = values?.contentType ?? UTType(filenameExtension: source.pathExtension) ?? .data
         let destination = base.appendingPathExtension(fileExtension(type))
         do {
             try FileManager.default.copyItem(at: source, to: destination)

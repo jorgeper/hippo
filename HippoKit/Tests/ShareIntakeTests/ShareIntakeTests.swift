@@ -6,7 +6,7 @@ import CaptureCore
 import ShareIntake
 import HippoTestSupport
 
-@Suite struct ShareIntakeTests {
+@Suite final class ShareIntakeTests {
     private let root: URL
     private let directory: IntakeDirectory
     private let intake: ShareIntake
@@ -19,6 +19,10 @@ import HippoTestSupport
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         directory = IntakeDirectory(storeRoot: root)
         intake = ShareIntake(directory: directory)
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: root)
     }
 
     private func prepare(_ providers: [any ItemProviding], title: String? = nil, contentText: String? = nil,
@@ -192,6 +196,43 @@ import HippoTestSupport
         #expect(result.totalBytes == 0)
         #expect(try intakeFiles().isEmpty)
         #expect(steps.withLock { $0 } == [[0, 3], [1, 3], [2, 3], [3, 3]])
+    }
+
+    @Test func urlKeptWhenSecondaryTextFails() async throws {
+        // No text configured, so loadText throws.
+        let provider = FakeProvider(types: ["public.url", "public.utf8-plain-text"], url: URL(string: "https://example.com/a")!)
+
+        let result = await prepare([provider])
+
+        #expect(provider.calls == [.loadURL, .loadText])
+        #expect(result.failures.isEmpty)
+        #expect(result.draft.urls.map(\.url) == ["https://example.com/a"])
+        #expect(result.draft.sharedText == nil)
+    }
+
+    @Test func directoryFileURLIsUnsupported() async throws {
+        let folder = root.appendingPathComponent("Shared Folder", isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data([1, 2, 3]).write(to: folder.appendingPathComponent("inside.txt"))
+        let provider = FakeProvider(types: ["public.file-url"], url: folder)
+
+        let result = await prepare([provider])
+
+        #expect(result.failures == [IntakeFailure(index: 0, kind: .unsupported)])
+        #expect(result.draft.attachments.isEmpty)
+        #expect(result.draft.urls.isEmpty)
+        #expect(result.totalBytes == 0)
+        #expect(try intakeFiles().isEmpty)
+    }
+
+    @Test func blankTextIsReported() async throws {
+        let blank = FakeProvider(types: ["public.utf8-plain-text"], text: "  \n\t ")
+        let good = FakeProvider(types: ["public.utf8-plain-text"], text: "Hello")
+
+        let result = await prepare([blank, good])
+
+        #expect(result.failures == [IntakeFailure(index: 0, kind: .unsupported)])
+        #expect(result.draft.sharedText == "Hello")
     }
 
     // MARK: - Observations
