@@ -13,3 +13,10 @@ fi
 
 uvx check-jsonschema --schemafile schema/capture-metadata-v1.schema.json "${metadata[@]}"
 uvx check-jsonschema --schemafile schema/complete-v1.schema.json "${markers[@]}"
+
+enrichments=(fixtures/packages/enrichments/*/*/*/*/*/enrichment.json)
+if [ "${#enrichments[@]}" -eq 0 ]; then
+    echo "no enrichment fixtures found under fixtures/packages/enrichments" >&2
+    exit 1
+fi
+uvx check-jsonschema --schemafile schema/enrichment-v1.schema.json "${enrichments[@]}"

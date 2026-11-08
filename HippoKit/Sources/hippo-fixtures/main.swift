@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Synchronization
 import UniformTypeIdentifiers
 import CaptureCore
@@ -6,6 +7,7 @@ import HippoTestSupport
 
 // Regenerates the committed fixture packages. Deterministic: IDs, clock, time zone and producer are fixed.
 // Usage: hippo-fixtures <output-directory>
+//        hippo-fixtures enrichments <root>   (adds enrichment files beside existing packages; never touches captures/)
 
 struct Fixture {
     let name: String
@@ -17,8 +19,11 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
-guard CommandLine.arguments.count == 2 else { fail("usage: hippo-fixtures <output-directory>") }
-let out = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).standardizedFileURL
+let isEnrichments = CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "enrichments"
+guard isEnrichments || CommandLine.arguments.count == 2 else {
+    fail("usage: hippo-fixtures <output-directory> | hippo-fixtures enrichments <root>")
+}
+let out = URL(fileURLWithPath: CommandLine.arguments[isEnrichments ? 2 : 1], isDirectory: true).standardizedFileURL
 let layout = StoreLayout(root: out)
 let fm = FileManager.default
 let scratch = fm.temporaryDirectory.appendingPathComponent("hippo-fixtures-\(UUID().uuidString)", isDirectory: true)
@@ -34,6 +39,15 @@ func draft(_ n: Int, _ method: CaptureMethod, userNote: String? = nil, sharedTit
            urls: [CapturedURL] = [], attachments: [AttachmentSource] = []) -> CaptureDraft {
     CaptureDraft(captureID: captureID(n), startedAt: started(n), timeZone: zone, method: method,
                  userNote: userNote, sharedTitle: sharedTitle, urls: urls, attachments: attachments)
+}
+
+if isEnrichments {
+    do {
+        try writeEnrichmentFixtures(root: out)
+        exit(0)
+    } catch {
+        fail("hippo-fixtures enrichments failed: \(error)")
+    }
 }
 
 do {
@@ -105,4 +119,50 @@ do {
     rmdir(layout.stagingDir.path) // removes only an empty directory
 } catch {
     fail("hippo-fixtures failed: \(error)")
+}
+
+/// Writes a device and a server enrichment document for the url-only fixture (capture 2).
+func writeEnrichmentFixtures(root: URL) throws {
+    let fm = FileManager.default
+    let directory = "captures/2026/11/07/\(captureID(2).uuidString.lowercased())"
+    let digest = try StreamingHasher.digest(of: root.appendingPathComponent(directory).appendingPathComponent("complete.json")).sha256
+    let generatedAt = Date(timeIntervalSince1970: 1_794_074_400) // 2026-11-07T18:00:00Z
+    let producer = EnrichmentProducer(name: "hippo-fixtures", version: "1", build: "1")
+    let id = captureID(2).uuidString.lowercased()
+
+    func facet<T: Encodable>(_ status: FacetStatus, _ provenance: String, _ payload: T) throws -> Facet {
+        let value = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(payload))
+        return Facet(version: 1, status: status, generatedAt: generatedAt, provenance: provenance, data: value)
+    }
+    func write(_ doc: EnrichmentDocument, assets: [(name: String, bytes: Data)]) throws {
+        let dir = root.appendingPathComponent(try EnrichmentPaths.remoteDirectory(doc.layer, packageDirectory: directory), isDirectory: true)
+        try? fm.removeItem(at: dir)
+        try fm.createDirectory(at: dir.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        for asset in assets { try asset.bytes.write(to: dir.appendingPathComponent("assets/\(asset.name)")) }
+        try EnrichmentJSON.encode(doc).write(to: dir.appendingPathComponent(EnrichmentPaths.documentName))
+        if assets.isEmpty { try? fm.removeItem(at: dir.appendingPathComponent("assets")) }
+        print("\(doc.layer.rawValue) -> \(dir.path)")
+    }
+
+    let jpeg = try MediaMaker.imageData(width: 64, height: 36, type: .jpeg)
+    let sha = SHA256.hash(data: jpeg).map { String(format: "%02x", $0) }.joined()
+    let thumbnail = AssetRef(relativePath: "assets/\(sha).jpg", byteCount: Int64(jpeg.count), sha256: sha, mimeType: "image/jpeg")
+    let device = EnrichmentDocument(
+        schemaVersion: 1, captureID: id, layer: .device, packageDigest: digest, producer: producer, generatedAt: generatedAt,
+        facets: [
+            FacetKind.linkPreview.rawValue: try facet(.ok, "link_fetch", LinkPreviewData(items: [
+                LinkPreviewItem(url: "https://example.com/item", title: "Example Domain", siteName: "example.com", thumbnail: thumbnail)])),
+            FacetKind.sourceAppGuess.rawValue: try facet(.ok, "heuristic", SourceAppGuessData(app: "Safari", reason: "uti:public.url")),
+        ])
+    try write(device, assets: [("\(sha).jpg", jpeg)])
+
+    let server = EnrichmentDocument(
+        schemaVersion: 1, captureID: id, layer: .server, packageDigest: digest, producer: producer, generatedAt: generatedAt,
+        facets: [
+            FacetKind.summary.rawValue: try facet(.ok, "server_model", SummaryData(text: "A placeholder page used in documentation examples.")),
+            FacetKind.tags.rawValue: try facet(.ok, "server_model", TagsData(values: ["example", "reference"])),
+            FacetKind.linkPreview.rawValue: try facet(.ok, "server_fetch", LinkPreviewData(items: [
+                LinkPreviewItem(url: "https://example.com/item", title: "Example Domain (server)")])),
+        ])
+    try write(server, assets: [])
 }

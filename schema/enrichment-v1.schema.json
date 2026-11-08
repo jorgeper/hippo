@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hippo.invalid/schema/enrichment-v1.schema.json",
+  "title": "Hippo enrichment (enrichment.json), schema version 1",
+  "description": "Derived data for one capture and one layer (device = silver, server = gold). Unknown additional properties must be ignored by readers. Unavailable optional fields are omitted, never null.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "capture_id", "layer", "package_digest", "producer", "generated_at", "facets"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "capture_id": { "$ref": "#/$defs/uuid" },
+    "layer": { "enum": ["device", "server"] },
+    "package_digest": { "$ref": "#/$defs/sha256", "description": "SHA-256 of the exact bytes of the capture's complete.json that this was derived from." },
+    "producer": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "version", "build"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "build": { "type": "string" }
+      }
+    },
+    "generated_at": { "$ref": "#/$defs/timestamp" },
+    "facets": {
+      "type": "object",
+      "description": "Keyed by facet kind (open set). Unknown kinds allow any data.",
+      "additionalProperties": { "$ref": "#/$defs/facet" },
+      "propertyNames": { "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time", "description": "RFC 3339 UTC, e.g. 2026-11-07T18:00:00.000Z." },
+    "assetRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["relative_path", "byte_count", "sha256"],
+      "properties": {
+        "relative_path": { "type": "string", "pattern": "^assets/[0-9a-f]{64}\\.[a-z0-9]{1,10}$" },
+        "byte_count": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "mime_type": { "type": "string" }
+      }
+    },
+    "facet": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["version", "status", "generated_at", "provenance"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "status": { "type": "string", "minLength": 1, "examples": ["ok", "empty", "failed"], "description": "Open set." },
+        "generated_at": { "$ref": "#/$defs/timestamp" },
+        "provenance": { "type": "string", "minLength": 1, "description": "Open set." },
+        "data": { "description": "Payload; shape depends on the facet kind. Omitted for empty/failed facets." }
+      }
+    },
+    "linkPreviewData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["url"], "additionalProperties": true,
+        "properties": {
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "site_name": { "type": "string" },
+          "channel": { "type": "string" },
+          "description": { "type": "string" },
+          "canonical_url": { "type": "string" },
+          "thumbnail": { "$ref": "#/$defs/assetRef" }
+        } } } }
+    },
+    "placeData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["target"], "additionalProperties": true,
+        "properties": {
+          "target": { "type": "string", "description": "\"capture\" or an attachment ID." },
+          "sub_locality": { "type": "string" },
+          "locality": { "type": "string" },
+          "region": { "type": "string" },
+          "country": { "type": "string" },
+          "nearby": {
+            "type": "object", "required": ["name", "distance_meters"], "additionalProperties": true,
+            "properties": { "name": { "type": "string" }, "distance_meters": { "type": "number", "minimum": 0 } }
+          }
+        } } } }
+    },
+    "textRecognitionData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["attachment_id", "text", "languages"], "additionalProperties": true,
+        "properties": {
+          "attachment_id": { "$ref": "#/$defs/uuid" },
+          "text": { "type": "string" },
+          "languages": { "type": "array", "items": { "type": "string" } }
+        } } } }
+    },
+    "transcriptData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["attachment_id", "text", "locale", "segments"], "additionalProperties": true,
+        "properties": {
+          "attachment_id": { "$ref": "#/$defs/uuid" },
+          "text": { "type": "string" },
+          "locale": { "type": "string" },
+          "segments": { "type": "array", "items": {
+            "type": "object", "required": ["start", "end", "text"], "additionalProperties": true,
+            "properties": { "start": { "type": "number" }, "end": { "type": "number" }, "text": { "type": "string" } }
+          } }
+        } } } }
+    },
+    "dataDetectionData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["type", "text", "source"], "additionalProperties": true,
+        "properties": {
+          "type": { "type": "string", "examples": ["date", "phone", "address", "link"] },
+          "text": { "type": "string" },
+          "value": { "type": "string" },
+          "components": { "type": "object", "additionalProperties": { "type": "string" } },
+          "source": { "type": "string" }
+        } } } }
+    },
+    "sourceAppGuessData": {
+      "type": "object", "required": ["app", "reason"], "additionalProperties": true,
+      "properties": { "app": { "type": "string" }, "reason": { "type": "string" } }
+    },
+    "summaryData": {
+      "type": "object", "required": ["text"], "additionalProperties": true,
+      "properties": { "text": { "type": "string" } }
+    },
+    "tagsData": {
+      "type": "object", "required": ["values"], "additionalProperties": true,
+      "properties": { "values": { "type": "array", "items": { "type": "string" } } }
+    }
+  },
+  "allOf": [
+    {
+      "properties": {
+        "facets": {
+          "properties": {
+            "link_preview": { "properties": { "data": { "$ref": "#/$defs/linkPreviewData" } } },
+            "place": { "properties": { "data": { "$ref": "#/$defs/placeData" } } },
+            "text_recognition": { "properties": { "data": { "$ref": "#/$defs/textRecognitionData" } } },
+            "transcript": { "properties": { "data": { "$ref": "#/$defs/transcriptData" } } },
+            "data_detection": { "properties": { "data": { "$ref": "#/$defs/dataDetectionData" } } },
+            "source_app_guess": { "properties": { "data": { "$ref": "#/$defs/sourceAppGuessData" } } },
+            "summary": { "properties": { "data": { "$ref": "#/$defs/summaryData" } } },
+            "tags": { "properties": { "data": { "$ref": "#/$defs/tagsData" } } }
+          }
+        }
+      }
+    }
+  ]
+}
