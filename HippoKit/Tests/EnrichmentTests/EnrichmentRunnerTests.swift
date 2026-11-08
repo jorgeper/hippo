@@ -167,7 +167,7 @@ private let t0 = RunnerHarness.t0
         #expect(await runner.runPending().idle)
     }
 
-    @Test func enrichmentRetryPolicySpansHours() {
+    @Test func enrichmentRetryPolicyBacksOffFromFiveMinutes() {
         let p = EnrichmentRunner.retryPolicy
         #expect(p.base == 300)
         #expect(p.cap == 21_600)

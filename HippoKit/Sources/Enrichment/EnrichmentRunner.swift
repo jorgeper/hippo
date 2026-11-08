@@ -24,9 +24,9 @@ public struct EnrichmentPassResult: Sendable, Equatable {
 /// failures back off up to `maxAttempts`; a facet that gets new data reruns the enrichers that read it.
 public actor EnrichmentRunner {
     public static let maxAttempts = 5
-    /// Enrichment's own backoff (package sync keeps `RetryPolicy()`): 5 min doubling to a 6 h cap, so
-    /// `maxAttempts` spans hours, and a site that is down for a while or a throttled geocoder isn't
-    /// given up on within minutes.
+    /// Enrichment's own backoff (package sync keeps `RetryPolicy()`): 5 min doubling to a 6 h cap, with
+    /// full jitter, so the four retries after a first failure wait up to 75 min in total (about 37 min on
+    /// average) instead of a few minutes. Throttling and offline errors defer and spend no attempt.
     public static let retryPolicy = RetryPolicy(base: 300, cap: 21_600)
     /// Posted on the main actor after each `runPending` pass, with the runner as the object.
     public static let passFinished = Notification.Name("HippoEnrichmentPassFinished")
