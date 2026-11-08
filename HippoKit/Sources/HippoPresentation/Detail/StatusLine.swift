@@ -21,9 +21,12 @@ public struct StatusLine: Equatable, Sendable {
         for kind in order {
             guard let step = steps[kind] else { continue }
             let name = EnrichmentProgress.kindName(kind)
+            let fromServer = goldKinds.contains(kind)
             let text: String, state: StatusState
             switch step {
             case .done: (text, state) = ("\(name): done", .done)
+            // The server's result is on screen: silver finding nothing or failing doesn't contradict it.
+            case .nothingFound where fromServer, .failed where fromServer: (text, state) = ("\(name): done", .done)
             case .nothingFound: (text, state) = ("\(name): nothing found", .done)
             case .off: (text, state) = ("\(name): off in Settings", .off)
             case .failed(let code):
@@ -34,7 +37,7 @@ public struct StatusLine: Equatable, Sendable {
             case .waiting, .waitingForInput:
                 (text, state) = (EnrichmentProgress.pendingLine(kind, step)?.text ?? "\(name): waiting", .waiting)
             }
-            out.append(StatusLine(layer: goldKinds.contains(kind) ? .gold : .silver, text: text, state: state))
+            out.append(StatusLine(layer: fromServer ? .gold : .silver, text: text, state: state))
         }
         if let arrived = goldArrivedAt {
             out.append(StatusLine(layer: .gold,

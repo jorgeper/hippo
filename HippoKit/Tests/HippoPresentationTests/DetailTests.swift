@@ -167,6 +167,46 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(d3.foundLayer == .gold && d3.summaryLayer == .gold && d3.tagsLayer == .gold)
     }
 
+    // M2: gold Source, "Taken in" and Text in image items carry the gold layer; silver ones stay silver.
+    @Test func goldLayersForSourceTakenInAndTextInImage() {
+        let a2 = CaptureCore.Attachment(attachmentID: "a2", relativePath: "content/a2.bin", originalFilename: "b.jpg",
+                                        uti: "public.jpeg", mimeType: "image/jpeg", byteCount: 1, sha256: "x",
+                                        representationSource: "r", media: nil)
+        var e = resolved(places: ["a1": PlaceItem(target: "a1", locality: "Seattle"),
+                                  "a2": PlaceItem(target: "a2", locality: "Tacoma")], guess: "Safari")
+        e.recognizedText = ["a1": "gold text", "a2": "silver text"]
+        e.fromServer = ServerOrigin(places: ["a1"], recognizedText: ["a1"], sourceApp: true)
+        let d = make(meta(attachments: [att(), a2]), enrichment: e)
+        #expect(d.captured.first { $0.label == "Source" }?.layer == .gold)
+        #expect(d.attachments.map { $0.first { $0.label == "Taken in" }?.layer } == [.gold, .silver])
+        #expect(d.recognizedText.map(\.layer) == [.gold, .silver])
+    }
+
+    // M2: a mixed place (silver locality, gold nearby) resolved from real documents: one gold Where row.
+    @Test func mixedPlaceWhereRowIsGold() throws {
+        let loc = CaptureLocation(latitude: 47.6, longitude: -122.3, horizontalAccuracyMeters: 10, observedAt: now, provenance: "t")
+        let e = ResolvedEnrichment.make(
+            device: try enrichmentDoc(.device, facets: [.place: (.ok, PlaceData(items: [
+                PlaceItem(target: "capture", locality: "Seattle")]))]),
+            server: try enrichmentDoc(.server, facets: [.place: (.ok, PlaceData(items: [
+                PlaceItem(target: "capture", nearby: NearbyPlace(name: "Pike Place Market", distanceMeters: 40))]))]),
+            assetURL: { _, a in URL(fileURLWithPath: "/assets/\(a.relativePath)") })
+        let rows = make(meta(location: loc), enrichment: e).captured
+        let place = try #require(rows.first { $0.label == "Where" })
+        #expect(place.value == "Seattle · near Pike Place Market")
+        #expect(place.layer == .gold)
+        #expect(rows.first { $0.label == "Coordinates" }?.layer == .bronze)
+    }
+
+    // M2: with a location but no place, Where shows the coordinates as captured (bronze), with no Coordinates row.
+    @Test func whereWithoutPlaceIsBronzeCoordinates() {
+        let loc = CaptureLocation(latitude: 47.6, longitude: -122.3, horizontalAccuracyMeters: 10, observedAt: now, provenance: "t")
+        let rows = make(meta(location: loc), enrichment: .empty).captured
+        #expect(rows.first { $0.label == "Where" }?.layer == .bronze)
+        #expect(rows.first { $0.label == "Where" }?.value.hasPrefix("47.6000, -122.3000") == true)
+        #expect(!rows.contains { $0.label == "Coordinates" })
+    }
+
     @Test func detailTranscriptsTitled() {
         let t = TranscriptItem(attachmentID: "a1", text: "hi there", locale: "en_US", segments: [])
         let d = make(meta(attachments: [att(uti: "public.mpeg-4-audio")]), enrichment: resolved(transcripts: ["a1": t]))

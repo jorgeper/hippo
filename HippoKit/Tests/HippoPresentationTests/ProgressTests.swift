@@ -115,6 +115,18 @@ private func steps(_ tasks: [EnrichmentTask], off: Set<FacetKind> = [], online: 
         #expect(lines.map(\.state) == [.done, .done, .done, .working, .off, .done, .done])
     }
 
+    // M3: when gold supplied the kind's shown result, its line says done, not the silver empty/failed wording.
+    @Test func goldResultOverridesSilverEmptyOrFailed() {
+        let lines = StatusLine.lines(
+            saved: now, steps: [.transcript: .nothingFound, .linkPreview: .failed(code: "http_4xx"),
+                                .dataDetection: .nothingFound],
+            goldKinds: [.transcript, .linkPreview], goldArrivedAt: nil, locale: locale, zone: la)
+        #expect(Array(lines.dropFirst()) == [
+            StatusLine(layer: .gold, text: "Link preview: done", state: .done),
+            StatusLine(layer: .gold, text: "Transcript: done", state: .done),
+            StatusLine(layer: .silver, text: "Dates, phone numbers and addresses: nothing found", state: .done)])
+    }
+
     @Test func statusFailedReason() {
         func text(_ code: String?) -> String? {
             StatusLine.lines(saved: now, steps: [.linkPreview: .failed(code: code)], goldKinds: [], goldArrivedAt: nil,
