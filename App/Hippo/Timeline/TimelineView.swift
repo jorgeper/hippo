@@ -3,6 +3,7 @@ import HippoPresentation
 
 struct TimelineView: View {
     let environment: AppEnvironment
+    @Binding var path: NavigationPath
 
     @State private var model: TimelineModel
     @State private var thumbnailer: Thumbnailer
@@ -20,8 +21,9 @@ struct TimelineView: View {
         case settings
     }
 
-    init(environment: AppEnvironment) {
+    init(environment: AppEnvironment, path: Binding<NavigationPath>) {
         self.environment = environment
+        _path = path
         _model = State(initialValue: TimelineModel(store: environment.store))
         let layout = environment.store.layout
         _thumbnailer = State(initialValue: Thumbnailer(layoutURL: { layout.packageURL(relativeDirectory: $0) }))
@@ -40,7 +42,8 @@ struct TimelineView: View {
             .safeAreaInset(edge: .bottom) { bottomBar }
             .navigationDestination(for: Destination.self) { destination in
                 switch destination {
-                case .detail(let id): Text("Capture \(id)").navigationTitle("Capture")
+                case .detail(let id):
+                    CaptureDetailView(environment: environment, captureID: id) { Task { await model.reload() } }
                 case .settings: Text("Settings").navigationTitle("Settings")
                 }
             }
@@ -56,7 +59,12 @@ struct TimelineView: View {
                         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } } }
                 }
             }
-            .task { await model.reload() }
+            .task {
+                await model.reload()
+                #if DEBUG
+                openCaptureFromLaunchArgument()
+                #endif
+            }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { Task { await model.reload() } }
             }
@@ -64,6 +72,17 @@ struct TimelineView: View {
                 Task { await model.reload() }
             }
     }
+
+    #if DEBUG
+    /// `-HippoOpenCapture <id>` pushes that capture's details once, for screenshots and UI checks.
+    private func openCaptureFromLaunchArgument() {
+        guard path.isEmpty, !Self.openedLaunchCapture,
+              let id = UserDefaults.standard.string(forKey: "HippoOpenCapture") else { return }
+        Self.openedLaunchCapture = true
+        path.append(Destination.detail(id))
+    }
+    private static var openedLaunchCapture = false
+    #endif
 
     private var bottomBar: some View {
         HStack {
