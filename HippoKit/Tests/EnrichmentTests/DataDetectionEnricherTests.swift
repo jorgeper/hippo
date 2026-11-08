@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import CaptureCore
-import Enrichment
+@testable import Enrichment
 
 @Suite struct DataDetectionEnricherTests {
     private func ocrDoc(_ text: String, attachment: String = "att1") throws -> EnrichmentDocument {
@@ -90,8 +90,94 @@ import Enrichment
 
     @Test func declaredShape() {
         let e = DataDetectionEnricher()
-        #expect(e.kind == .dataDetection && e.version == 2 && !e.usesNetwork)
+        #expect(e.kind == .dataDetection && e.version == 3 && !e.usesNetwork)
         #expect(e.inputs == [.textRecognition, .transcript])
         #expect(e.applies(to: fixtureMetadata(method: .typedNote)))
     }
+
+    // MARK: relative dates resolve against the capture (v3)
+
+    private var cal: Calendar { Calendar.current }
+    private func noon(daysFromToday n: Int) -> Date {
+        let today = cal.startOfDay(for: Date())
+        return cal.date(byAdding: .hour, value: 12, to: cal.date(byAdding: .day, value: n, to: today)!)!
+    }
+    private func ymd(_ d: Date) -> DateComponents { cal.dateComponents([.year, .month, .day], from: d) }
+    private func stamp(_ d: Date, _ h: Int, _ m: Int = 0) -> String {
+        let c = ymd(d)
+        return String(format: "%04d-%02d-%02dT%02d:%02d:00", c.year!, c.month!, c.day!, h, m)
+    }
+    private func metadataAt(_ d: Date, note: String) -> CaptureMetadata {
+        var m = fixtureMetadata(zone: cal.timeZone.identifier, userNote: note)
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        f.timeZone = cal.timeZone
+        m.localDatetime = f.string(from: d)
+        m.utcOffsetSeconds = cal.timeZone.secondsFromGMT(for: d)
+        return m
+    }
+    private func dateValue(_ note: String, capturedAt d: Date) async throws -> String {
+        let out = try await DataDetectionEnricher().run(fixtureInput(metadataAt(d, note: note)))
+        return try #require(try detections(out).first { $0.type == "date" }?.value)
+    }
+
+    @Test func tomorrowResolvesAgainstCapture() async throws {
+        let cap = noon(daysFromToday: -6)
+        let v = try await dateValue("tomorrow at 3pm", capturedAt: cap)
+        #expect(v == stamp(cal.date(byAdding: .day, value: 1, to: cap)!, 15))
+    }
+
+    @Test func tonightResolvesAgainstCapture() async throws {
+        let cap = noon(daysFromToday: -6)
+        #expect(try await dateValue("tonight at 7pm", capturedAt: cap) == stamp(cap, 19))
+    }
+
+    @Test func weekdayResolvesAgainstCapture() async throws {
+        let cap = noon(daysFromToday: -6)
+        var d = cap
+        while cal.component(.weekday, from: d) != 6 { d = cal.date(byAdding: .day, value: 1, to: d)! }
+        #expect(try await dateValue("Friday", capturedAt: cap) == stamp(d, 12))
+    }
+
+    @Test func monthDayWithoutYearUsesCaptureYear() throws {
+        let year = cal.component(.year, from: Date())
+        let anchor = DateAnchor(day: DateComponents(year: year - 1, month: 12, day: 30))
+        let items = DataDetectionEnricher.detect(in: "Jan 3", source: "s", anchor: anchor)
+        #expect(items.first?.value == "\(year)-01-03T12:00:00")
+    }
+
+    @Test func fullDateUnchanged() async throws {
+        let v = try await dateValue("12 Nov 2027", capturedAt: noon(daysFromToday: -6))
+        #expect(v == "2027-11-12T12:00:00")
+    }
+
+    @Test func sameDayUnchanged() async throws {
+        let cap = noon(daysFromToday: 0)
+        let plain = DataDetectionEnricher.detect(in: "tomorrow at 3pm", source: "s", anchor: nil)
+        #expect(try await dateValue("tomorrow at 3pm", capturedAt: cap) == plain.first?.value)
+    }
+
+    @Test func tomorrowNearMidnightUsesCaptureZone() async throws {
+        let la = TimeZone(identifier: "America/Los_Angeles")!
+        var lac = Calendar(identifier: .gregorian); lac.timeZone = la
+        let day = lac.date(byAdding: .day, value: -3, to: Date())!
+        let c = lac.dateComponents([.year, .month, .day], from: day)
+        var m = fixtureMetadata(zone: "America/Los_Angeles", userNote: "tomorrow at 9am")
+        let off = la.secondsFromGMT(for: day)
+        m.localDatetime = String(format: "%04d-%02d-%02dT23:30:00%@%02d:%02d", c.year!, c.month!, c.day!,
+                                 off < 0 ? "-" : "+", abs(off) / 3600, abs(off) % 3600 / 60)
+        m.utcOffsetSeconds = off
+        let out = try await DataDetectionEnricher().run(fixtureInput(m))
+        let v = try #require(try detections(out).first { $0.type == "date" }?.value)
+        let next = lac.date(byAdding: .day, value: 1, to: lac.date(from: c)!)!
+        let n = lac.dateComponents([.year, .month, .day], from: next)
+        #expect(v == String(format: "%04d-%02d-%02dT09:00:00", n.year!, n.month!, n.day!))
+    }
+
+    @Test func bareAtTwoStillNotDetected() {
+        let a = DateAnchor(day: ymd(noon(daysFromToday: -6)))
+        #expect(DataDetectionEnricher.detect(in: "at 2", source: "s", anchor: a).filter { $0.type == "date" }.isEmpty)
+    }
+
+    @Test func versionIsThree() { #expect(DataDetectionEnricher().version == 3) }
 }
