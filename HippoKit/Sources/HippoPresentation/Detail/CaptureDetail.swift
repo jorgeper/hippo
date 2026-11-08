@@ -49,8 +49,9 @@ public struct CaptureDetail: Equatable, Sendable {
                                 noteBody: String?) -> PreviewKind {
         if m.captureMethod == .typedNote, let noteBody, !noteBody.isEmpty { return .text(noteBody) }
         if let (a, url) = files.first {
+            if a.mimeType?.lowercased() == "text/html" { return .file(url, previewable: false) }
             guard let type = UTType(a.uti) else { return .file(url, previewable: true) }
-            if type.conforms(to: .html) { return .file(url, previewable: false) }
+            if type.conforms(to: .html) || a.mimeType?.lowercased() == "text/html" { return .file(url, previewable: false) }
             if type.conforms(to: .image) { return .image(url) }
             if type.conforms(to: .movie) || type.conforms(to: .video) { return .video(url) }
             if type.conforms(to: .audio) { return .audio(url) }
@@ -85,8 +86,8 @@ public struct CaptureDetail: Equatable, Sendable {
         if let how { rows.append(DetailRow(label: "How", value: how)) }
         if let l = m.captureLocation {
             var value = DetailFormat.coordinates(latitude: l.latitude, longitude: l.longitude)
-            if l.horizontalAccuracyMeters.isFinite, l.horizontalAccuracyMeters >= 0 {
-                value += " · ±\(Int(l.horizontalAccuracyMeters.rounded())) m"
+            if l.horizontalAccuracyMeters >= 0, let meters = Int(exactly: l.horizontalAccuracyMeters.rounded()) {
+                value += " · ±\(meters) m"
             }
             let age = m.capturedAt.timeIntervalSince(l.observedAt)
             if age >= 60 { value += " · \(DetailFormat.age(age)) before saving" }

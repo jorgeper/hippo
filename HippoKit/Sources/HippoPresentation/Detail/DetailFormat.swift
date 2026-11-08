@@ -9,14 +9,13 @@ enum DetailFormat {
 
     /// "m:ss", or nil for a negative or non-finite value.
     static func duration(_ seconds: Double) -> String? {
-        guard seconds.isFinite, seconds >= 0 else { return nil }
-        let total = Int(seconds)
+        guard seconds.isFinite, seconds >= 0, let total = Int(exactly: seconds.rounded(.down)) else { return nil }
         return "\(total / 60):" + (total % 60 < 10 ? "0" : "") + "\(total % 60)"
     }
 
     /// Whole minutes, then whole hours, rounded down: "3 min", "2 h".
     static func age(_ seconds: TimeInterval) -> String {
-        let minutes = Int(seconds / 60)
+        let minutes = Int(exactly: (seconds / 60).rounded(.down)) ?? Int.max
         return minutes < 60 ? "\(minutes) min" : "\(minutes / 60) h"
     }
 

@@ -8,6 +8,8 @@ import SyncEngine
 @MainActor @Observable
 public final class CaptureDetailModel {
     public private(set) var detail: CaptureDetail?
+    /// True after a failed load; cleared by the next successful one. A failed load keeps the previous `detail`.
+    public private(set) var loadFailed = false
     /// The confirmation to show before `delete()`; refreshed by `load()`.
     public private(set) var deletionPrompt: DeletionPrompt?
 
@@ -57,8 +59,10 @@ public final class CaptureDetailModel {
                 return nil
             }
         }.value
-        detail = loaded?.detail
-        deletionPrompt = loaded?.prompt
+        guard let loaded else { loadFailed = true; return }
+        loadFailed = false
+        detail = loaded.detail
+        deletionPrompt = loaded.prompt
     }
 
     /// Makes this capture's blocked and retry-waiting uploads claimable now, then reloads.

@@ -211,4 +211,53 @@ struct SyncCase: Sendable {
         #expect(try t.store.index.count() == 0)
         #expect(await model.detail == nil)
     }
+
+    @Test func hugeOrNonFiniteValuesOmitRows() {
+        for seconds in [1e300, Double.infinity, -.infinity, .nan] {
+            let rows = make(meta(attachments: [att(media: MediaFacts(durationSeconds: seconds))])).attachments[0]
+            #expect(!rows.contains { $0.label == "Duration" })
+        }
+        let l = CaptureLocation(latitude: 1, longitude: 2, horizontalAccuracyMeters: 1e300, observedAt: now, provenance: "d")
+        #expect(make(meta(location: l)).captured.first { $0.label == "Where" }?.value == "1.0000, 2.0000")
+    }
+
+    @Test func htmlMimeTypeIsNotPreviewable() {
+        let url = pkg.appendingPathComponent("content/a1.bin")
+        #expect(make(meta(attachments: [att(uti: "com.example.unknown", mime: "text/html")])).preview
+                == .file(url, previewable: false))
+    }
+
+    @Test func failedLoadKeepsDetailAndSetsFlag() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let p = try await t.link("https://example.com", at: now)
+        let model = await CaptureDetailModel(store: t.store, captureID: p.metadata.captureID)
+        await model.load()
+        #expect(await model.loadFailed == false)
+        let loaded = await model.detail
+        #expect(loaded != nil)
+        try FileManager.default.removeItem(at: t.store.layout.packageURL(
+            relativeDirectory: try #require(try t.store.index.relativeDirectory(captureID: p.metadata.captureID)))
+            .appendingPathComponent("metadata.json"))
+        await model.load()
+        #expect(await model.loadFailed == true)
+        #expect(await model.detail == loaded)
+    }
+
+    @Test func retryMakesBlockedJobClaimable() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(dropbox)
+        let p = try await t.link("https://example.com", at: now)
+        let id = p.metadata.captureID
+        let claimed = try #require(try t.store.jobs.claimNext(owner: "test", now: Date(), lease: 60))
+        try t.store.jobs.markFailed(jobID: claimed.jobID, owner: "test", state: .blocked, errorCode: "quota_exceeded",
+                                    nextAttemptAt: nil)
+        let model = await CaptureDetailModel(store: t.store, captureID: id)
+        await model.load()
+        #expect(await model.detail?.sync.first?.canRetry == true)
+        await model.retry()
+        #expect(try t.store.jobs.jobs(captureID: id).first?.state == .pending)
+        #expect(await model.detail?.sync.first?.message == "Waiting to upload")
+    }
 }
