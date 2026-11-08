@@ -30,8 +30,11 @@ public actor EnrichmentRunner {
     public static let retryPolicy = RetryPolicy(base: 300, cap: 21_600)
     /// Posted on the main actor after each `runPending` pass, with the runner as the object.
     public static let passFinished = Notification.Name("HippoEnrichmentPassFinished")
-    /// Posted on the main actor after every processed task, whatever its outcome, with the runner as the object.
+    /// Posted on the main actor after every processed task, whatever its outcome, with the runner as the object
+    /// and the task's capture ID in `userInfo[captureIDKey]`.
     public static let taskFinished = Notification.Name("HippoEnrichmentTaskFinished")
+    /// The `taskFinished` userInfo key whose value (a `String`) is the processed task's capture ID.
+    public static let captureIDKey = "captureID"
 
     /// Fixed category strings only: never IDs, paths, URLs or content.
     private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "enrichment")
@@ -177,7 +180,10 @@ public actor EnrichmentRunner {
             claimed += 1
             result.idle = false
             let outcome = await process(task, enricher)
-            await MainActor.run { NotificationCenter.default.post(name: Self.taskFinished, object: self) }
+            await MainActor.run {
+                NotificationCenter.default.post(name: Self.taskFinished, object: self,
+                                                userInfo: [Self.captureIDKey: task.captureID])
+            }
             switch outcome {
             case .ran(let failed):
                 result.ran += 1

@@ -23,6 +23,10 @@ public final class CaptureDetailModel {
     @ObservationIgnored private let isEnabled: @Sendable (FacetKind) -> Bool
     @ObservationIgnored private let isOnline: @Sendable () -> Bool
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "detail")
+    /// Runs after a load's read and before it applies. Set only by tests, to finish loads out of order.
+    @ObservationIgnored var beforeApply: (@Sendable () async -> Void)?
+    /// Counts `load()` calls, so a read that finishes after a newer one started is dropped.
+    @ObservationIgnored private var generation = 0
 
     public init(store: HippoStore, captureID: String, now: @escaping @Sendable () -> Date = Date.init,
                 calendar: Calendar = .current, locale: Locale = .current,
@@ -44,7 +48,10 @@ public final class CaptureDetailModel {
     }
 
     /// Reads the capture's metadata, note body and upload jobs. Leaves `detail` nil if it can't be read.
+    /// Overlapping calls may finish out of order: only the most recently started one applies its result.
     public func load() async {
+        generation += 1
+        let mine = generation
         let store = store, id = captureID, now = now(), calendar = calendar, locale = locale
         let isEnabled = isEnabled, isOnline = isOnline
         let loaded: Loaded? = await Task.detached {
@@ -73,6 +80,8 @@ public final class CaptureDetailModel {
                 return nil
             }
         }.value
+        if let beforeApply { await beforeApply() }
+        guard mine == generation else { return }
         guard let loaded else { loadFailed = true; return }
         loadFailed = false
         detail = loaded.detail
@@ -94,6 +103,7 @@ public final class CaptureDetailModel {
     /// Deletes the capture from this iPhone.
     public func delete() async throws -> HippoStore.DeletionResult {
         let result = try await store.delete(captureID: captureID)
+        generation += 1  // a load still in flight must not bring the deleted capture back
         detail = nil
         deletionPrompt = nil
         return result

@@ -17,6 +17,7 @@ struct CaptureDetailView: View {
     @State private var retrying = false
     @State private var developerMode = LocationService.settings.developerMode
     @State private var showsStripes = LocationService.settings.showsLayerStripes
+    @State private var taskReload: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -49,9 +50,19 @@ struct CaptureDetailView: View {
             .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.passFinished)) { _ in
                 Task { await model.load() }
             }
-            .onReceive(NotificationCenter.default.publisher(for: EnrichmentRunner.taskFinished)) { _ in
-                Task { await model.load() }
+            // A backfill finishes many tasks a second across all captures: reload only for this capture's
+            // tasks, at most once per 500 ms.
+            .onReceive(NotificationCenter.default.publisher(for: EnrichmentRunner.taskFinished)) { note in
+                guard note.userInfo?[EnrichmentRunner.captureIDKey] as? String == captureID,
+                      taskReload == nil else { return }
+                taskReload = Task {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    if Task.isCancelled { return }
+                    taskReload = nil
+                    await model.load()
+                }
             }
+            .onDisappear { taskReload?.cancel(); taskReload = nil }
             // The stripes switch lives in Settings; pick up a change on return.
             .onAppear {
                 showsStripes = LocationService.settings.showsLayerStripes

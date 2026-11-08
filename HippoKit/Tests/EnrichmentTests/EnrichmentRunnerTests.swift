@@ -523,16 +523,20 @@ private let t0 = RunnerHarness.t0
 
     @Test func postsTaskFinishedPerTask() async throws {
         let h = try RunnerHarness(); defer { h.cleanup() }
-        _ = try await h.note("one")
-        _ = try await h.note("two", minutes: 1)
+        let one = try await h.note("one")
+        let two = try await h.note("two", minutes: 1)
         let runner = h.runner([FakeEnricher(kind: .dataDetection)])
         try await runner.schedule()
-        let count = Box(0)
+        let ids = Box<[String?]>([])
         let token = NotificationCenter.default.addObserver(forName: EnrichmentRunner.taskFinished, object: runner,
-                                                           queue: nil) { _ in count.value += 1 }
+                                                           queue: nil) { note in
+            ids.value.append(note.userInfo?[EnrichmentRunner.captureIDKey] as? String)
+        }
         defer { NotificationCenter.default.removeObserver(token) }
         _ = await runner.runPending()
-        #expect(count.value == 2)
+        // Each post names its capture, so an open Detail or Activity can ignore other captures. Newest first.
+        #expect(ids.value == [two, one])
+        #expect(EnrichmentRunner.captureIDKey == "captureID")
     }
 
     @Test func notApplicableIsNotLogged() async throws {

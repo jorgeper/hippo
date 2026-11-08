@@ -379,4 +379,57 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(try t.store.jobs.jobs(captureID: id).first?.state == .pending)
         #expect(await model.detail?.sync.first?.message == "Waiting to upload")
     }
+
+    // I1: a load that finishes after a newer one must not overwrite it (e.g. "Looking for dates…" coming
+    // back after detection has finished).
+    @MainActor @Test func supersededLoadIsDropped() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let p = try await t.note("lunch tomorrow", at: now)
+        let id = p.metadata.captureID
+        try t.store.enrichmentTasks.set(captureID: id, kind: .dataDetection, version: 3, status: "pending", now: now)
+        let model = CaptureDetailModel(store: t.store, captureID: id, now: { now }, calendar: calendar, locale: locale)
+        let gate = FirstCallGate()
+        model.beforeApply = { await gate.arrive() }
+
+        // The first load reads the pending task, then is held before it applies.
+        let first = Task { await model.load() }
+        await gate.firstArrived()
+        try t.store.enrichmentTasks.recordAttempt(captureID: id, kind: .dataDetection, status: "empty",
+                                                  errorCode: nil, nextAttemptAt: nil, incrementAttempts: true, now: now)
+        await model.load()
+        let newer = try #require(model.detail)
+        #expect(newer.status.contains { $0.text == "Dates, phone numbers and addresses: nothing found" })
+
+        await gate.release()
+        await first.value
+        #expect(model.detail == newer)
+        #expect(model.loadFailed == false)
+    }
+
+    // I1: a superseded load that failed must not flag a failure over a newer successful one.
+    @MainActor @Test func supersededFailedLoadDoesNotSetFlag() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let p = try await t.note("hi", at: now)
+        let id = p.metadata.captureID
+        let model = CaptureDetailModel(store: t.store, captureID: id, now: { now }, calendar: calendar, locale: locale)
+        let gate = FirstCallGate()
+        model.beforeApply = { await gate.arrive() }
+        let metadataURL = t.store.layout.packageURL(
+            relativeDirectory: try #require(try t.store.index.relativeDirectory(captureID: id)))
+            .appendingPathComponent("metadata.json")
+        let saved = try Data(contentsOf: metadataURL)
+        try FileManager.default.removeItem(at: metadataURL)
+
+        let first = Task { await model.load() }
+        await gate.firstArrived()
+        try saved.write(to: metadataURL)
+        await model.load()
+        #expect(model.detail != nil)
+        await gate.release()
+        await first.value
+        #expect(model.loadFailed == false)
+        #expect(model.detail != nil)
+    }
 }

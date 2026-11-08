@@ -100,6 +100,27 @@ struct LogLineTests {
         #expect(!model.mayBePruned)
     }
 
+    // I1: a read that finishes after a newer one must not overwrite it.
+    @Test func activityModelDropsSupersededLoad() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let id = "cap-1"
+        t.store.log.append(LogEvent(event: .captureSaved, captureID: id, trigger: "note"))
+        let model = ActivityModel(store: t.store, captureID: id, capturedAt: Date())
+        let gate = FirstCallGate()
+        model.beforeApply = { await gate.arrive() }
+
+        let first = Task { await model.load() }
+        await gate.firstArrived()
+        t.store.log.append(LogEvent(event: .packageUploaded, captureID: id, dest: "dropbox"))
+        await model.load()
+        #expect(model.lines.count == 2)
+        await gate.release()
+        await first.value
+        #expect(model.lines.count == 2)
+        #expect(model.lines.last?.text == "Uploaded to Dropbox")
+    }
+
     @Test func mayBePrunedAfter30Days() throws {
         let t = try TestStore()
         defer { t.cleanup() }
