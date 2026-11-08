@@ -156,6 +156,22 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
         #expect(report.failed == 0 && report.removedStaging == 0)
     }
 
+    // M7: a log upload snapshot (`staging/log-<uuid>.jsonl`) left by an app killed mid-upload is removed.
+    // Other plain files in staging are left alone.
+    @Test func strayLogSnapshotIsRemoved() throws {
+        let r = try Rig(); defer { r.h.cleanup() }
+        let staging = r.h.layout.stagingDir
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let snapshot = staging.appendingPathComponent("log-\(UUID().uuidString.lowercased()).jsonl")
+        try Data(repeating: 0x41, count: 1_024).write(to: snapshot)
+        let other = staging.appendingPathComponent("notes.jsonl")
+        try Data().write(to: other)
+        let report = try r.reconciler.run()
+        #expect(!exists(snapshot))
+        #expect(exists(other))
+        #expect(report.removedStaging == 1 && report.failed == 0)
+    }
+
     @Test func failedIndexedListingIsCounted() async throws {
         let r = try Rig(); defer { r.h.cleanup() }
         _ = try await r.commitOnly()

@@ -161,7 +161,7 @@ public final class SettingsModel {
             formatter.dateTimeStyle = .named
             formatter.unitsStyle = .full
             head = "Last sync \(formatter.localizedString(for: last.at, relativeTo: current))"
-            if last.failed { head += " didn't finish" }
+            if last.failed { head += " · didn't finish" }
         }
         var parts = [head]
         if working > 0 { parts.append("\(working) being processed") }

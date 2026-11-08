@@ -158,7 +158,7 @@ struct SettingsTests {
         #expect(h.model.statusSummary == "Last sync 2 minutes ago · 2 being processed · 1 waiting for a connection · 1 waiting to retry · 1 couldn't be processed")
         h.settings.recordSync(at: at.addingTimeInterval(-120), failed: true)
         await h.model.refresh()
-        #expect(h.model.statusSummary?.hasPrefix("Last sync 2 minutes ago didn't finish · 2 being processed") == true)
+        #expect(h.model.statusSummary?.hasPrefix("Last sync 2 minutes ago · didn't finish · 2 being processed") == true)
     }
 
     @Test func statusSummaryNeverAndZeroCountsOmitted() async throws {
@@ -191,6 +191,15 @@ struct SettingsTests {
         #expect(FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) && isDir.boolValue)
         let last = try #require(h.settings.lastSync)
         #expect(!last.failed)
+    }
+
+    // M9: a pass with no active destination synced nothing, so it must not read as "Last sync just now".
+    @Test func syncWithoutDestinationDoesNotRecordLastSync() async throws {
+        let h = try Harness(); defer { h.cleanup() }
+        _ = await h.coordinator.syncNow()
+        #expect(h.settings.lastSync == nil)
+        await h.model.refresh()
+        #expect(h.model.statusSummary == "Last sync never")
     }
 
     @Test func connectBindsUnassignedAndSyncs() async throws {

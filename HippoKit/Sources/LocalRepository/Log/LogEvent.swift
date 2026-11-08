@@ -39,25 +39,26 @@ public enum LogEventName: String, Codable, Sendable, CaseIterable {
     case logCleared = "log.cleared"
 }
 
-/// One log line. Content-free by construction: every free-form field passes `Diagnostics.safeCode`.
+/// One log line. Content-free by construction: every free-form field passes `Diagnostics.safeCode` in
+/// `init`, and no field can be changed afterwards (only `ActivityLog` stamps `t`, `v` and `proc`).
 public struct LogEvent: Codable, Equatable, Sendable {
     public internal(set) var t: Date
     public internal(set) var v: Int
     public internal(set) var proc: LogProcess
-    public var event: LogEventName
-    public var captureID: String?
-    public var kind: String?
-    public var outcome: LogOutcome?
-    public var code: String?
-    public var attempt: Int?
-    public var count: Int?
-    public var ms: Int?
-    public var trigger: String?
-    public var dest: String?
-    public var on: Bool?
+    public private(set) var event: LogEventName
+    public private(set) var captureID: String?
+    public private(set) var kind: String?
+    public private(set) var outcome: LogOutcome?
+    public private(set) var code: String?
+    public private(set) var attempt: Int?
+    public private(set) var count: Int?
+    public private(set) var ms: Int?
+    public private(set) var trigger: String?
+    public private(set) var dest: String?
+    public private(set) var on: Bool?
     /// `start`, `end` or `expired`, for `sync.pass`, `enrich.pass` and `bg.task`.
-    public var phase: String?
-    public var retryAt: Date?
+    public private(set) var phase: String?
+    public private(set) var retryAt: Date?
 
     /// `t`, `v` and `proc` are stamped by the `ActivityLog` that writes the event.
     public init(event: LogEventName, captureID: String? = nil, kind: String? = nil, outcome: LogOutcome? = nil,

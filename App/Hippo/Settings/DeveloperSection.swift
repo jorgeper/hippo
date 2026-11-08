@@ -28,7 +28,7 @@ struct DeveloperSection: View {
                                         isPresented: $confirmingClear, titleVisibility: .visible) {
                         Button("Clear log", role: .destructive) { Task { await logModel.clear() } }
                     }
-                if let last = logModel.lastUpload { Text(last).foregroundStyle(.secondary) }
+                Text(logModel.uploadLine).foregroundStyle(.secondary)
             }
         } header: {
             Text("Developer")

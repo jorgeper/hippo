@@ -46,9 +46,9 @@ Keys are snake_case; absent values are omitted, never `null`.
 | `attempt` | int | Attempt number |
 | `count` | int | A count (items processed, queued, uploaded) |
 | `ms` | int | Duration in milliseconds |
-| `trigger` | string | What started it: capture method (`note`, `recording`, `share_extension`, `import`), or a sync trigger (`activation`, `bg`, `manual`, `after_save`) |
+| `trigger` | string | What started it: capture method (`note`, `recording`, `share_extension`, `import`), or a sync trigger (`launch` after launch recovery, `activation`, `bg`, `manual`, `after_save`, `enrichment` after enrichment ran, to upload its results) |
 | `dest` | string | The destination's provider kind (`filesystem`, `dropbox`); never an account or destination ID |
-| `on` | bool | New state of a switch, for `settings.changed` |
+| `on` | bool | New state of a switch, for `settings.changed`; for `gold.pull`, true when the server reset the change cursor and the pull listed everything again |
 | `phase` | string | `start`, `end` or `expired`, for `sync.pass`, `enrich.pass`, `bg.task` |
 | `retry_at` | string | RFC 3339 time a deferred task will next be tried |
 
@@ -79,7 +79,7 @@ Global (no `capture_id`):
 | `enrich.pass` | An enrichment pass started or ended (`phase`, `count`, `code` = why it stopped) |
 | `sync.pass` | A sync pass started or ended (`phase`, `trigger`, `count`, `code`) |
 | `bg.task` | A background task started, expired or ended (`phase`) |
-| `gold.pull` | A gold pull ended (`count`, `code`) |
+| `gold.pull` | A gold pull ended (`count` applied, `code`, `on` if the change cursor was reset) |
 | `app.launch` | The app launched (`code` = version-build) |
 | `settings.changed` | A switch changed (`kind`, `on`); never values such as folder names |
 | `log.truncated` | A segment reached its size cap; later events in it were dropped |

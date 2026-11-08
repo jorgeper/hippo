@@ -118,6 +118,8 @@ public actor SyncCoordinator {
     private func run(_ generation: Int, trigger: String) async -> SyncPassResult {
         guard generation == self.generation else { return Self.nothingDone }
         isRunning = true
+        // With nowhere to upload, the pass syncs nothing, so it isn't recorded as a sync.
+        let hadDestination = (try? store.destinations.active()) != nil
         store.log.append(LogEvent(event: .syncPass, trigger: trigger, phase: "start"))
         var total = Self.nothingDone
         var followUps = 0
@@ -133,7 +135,7 @@ public actor SyncCoordinator {
         }
         isRunning = false
         let cancelled = Task.isCancelled || generation != self.generation
-        if !cancelled { settings.recordSync(at: Date(), failed: total.failed > 0) }
+        if !cancelled, hadDestination { settings.recordSync(at: Date(), failed: total.failed > 0) }
         let endCode = Task.isCancelled || generation != self.generation ? "cancelled" : total.failed > 0 ? "failed" : "ok"
         store.log.append(LogEvent(event: .syncPass, code: endCode, count: total.synced, trigger: trigger, phase: "end"))
         if generation == self.generation { running = nil }

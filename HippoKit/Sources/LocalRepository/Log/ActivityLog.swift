@@ -125,6 +125,7 @@ public final class ActivityLog: Sendable {
             while offset < buf.count {
                 let n = write(fd, buf.baseAddress! + offset, buf.count - offset)
                 if n < 0 { if errno == EINTR { continue }; return false }
+                if n == 0 { return false }  // no progress: give up rather than spin
                 offset += n
             }
             return true

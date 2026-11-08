@@ -136,7 +136,7 @@ struct LogLineTests {
         for _ in 0..<5 { t.store.log.append(LogEvent(event: .appLaunch, code: "1-1")) }
         t.store.log.append(LogEvent(event: .captureSaved, captureID: "c", trigger: "note"))
         let model = GlobalLogModel(store: t.store, pageSize: 2)
-        #expect(model.lastUpload == nil)
+        #expect(model.uploadLine == "Logs aren't uploaded: no storage connected")
         await model.load()
         #expect(model.lines.count == 2)
         #expect(model.canLoadMore)
@@ -147,6 +147,35 @@ struct LogLineTests {
         #expect(model.copyText(appVersion: "9").hasPrefix("Hippo log · app 9\n"))
         await model.clear()
         #expect(model.lines.count == 1)   // the log.cleared marker
+    }
+
+    private func writeUploadState(_ t: TestStore, at: Date, code: String?) throws {
+        let f = ISO8601DateFormatter()
+        let codeJSON = code.map { "\"\($0)\"" } ?? "null"
+        try FileManager.default.createDirectory(at: t.store.layout.logsDir, withIntermediateDirectories: true)
+        try Data(#"{"files":{},"last_at":"\#(f.string(from: at))","last_code":\#(codeJSON)}"#.utf8)
+            .write(to: t.store.layout.logsDir.appendingPathComponent("upload-state.json"))
+    }
+
+    // M5 (spec §8.1): "Logs upload to <destination> · last upload <day and time, or result>".
+    @Test func uploadLineNamesDestinationAndDay() throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        func line() -> String { GlobalLogModel(store: t.store, now: { now }, locale: us, zone: utc).uploadLine }
+        #expect(line() == "Logs aren't uploaded: no storage connected")
+
+        _ = try t.store.destinations.connect(Destination(id: "d1", providerKind: "dropbox", accountIdentifier: "a",
+                                                         remoteRoot: "/", displayName: "Dropbox", status: .active))
+        #expect(line() == "Logs upload to Dropbox · not uploaded yet")
+
+        try writeUploadState(t, at: now.addingTimeInterval(-3_600), code: nil)        // 13:02 today
+        #expect(line() == "Logs upload to Dropbox · last upload today 13:02")
+        try writeUploadState(t, at: now.addingTimeInterval(-86_400), code: nil)
+        #expect(line() == "Logs upload to Dropbox · last upload yesterday 14:02")
+        try writeUploadState(t, at: now.addingTimeInterval(-7 * 86_400), code: nil)
+        #expect(line() == "Logs upload to Dropbox · last upload Nov 1 14:02")
+        try writeUploadState(t, at: now.addingTimeInterval(-60), code: "http_5xx")
+        #expect(line() == "Logs upload to Dropbox · last upload failed today 14:01 (http_5xx)")
     }
 
     @Test func readerSkipsGarbageLines() async throws {

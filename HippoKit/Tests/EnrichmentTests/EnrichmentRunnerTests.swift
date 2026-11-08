@@ -488,6 +488,28 @@ private let t0 = RunnerHarness.t0
         #expect(pass.last?.code == "nothing_due")
     }
 
+    // M12: a claimed task whose capture metadata can't be read fails for good and says so in the log.
+    @Test func logsFailedWhenMetadataUnreadable() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let id = try await h.note("hi")
+        let fake = FakeEnricher(kind: .dataDetection)
+        let runner = h.runner([fake])
+        try await runner.schedule()
+        let dir = try #require(try h.store.index.relativeDirectory(captureID: id))
+        try FileManager.default.removeItem(at: h.store.layout.packageURL(relativeDirectory: dir)
+            .appendingPathComponent("metadata.json"))
+
+        #expect(await runner.runPending() == EnrichmentPassResult(ran: 1, failed: 1, idle: false))
+        #expect(fake.invocations == 0)
+        #expect(try h.task(id, .dataDetection)?.status == "failed")
+        let failed = events(h, id).filter { $0.event == .enrichFailed }
+        #expect(failed.count == 1)
+        #expect(failed.first?.code == "metadata_unreadable")
+        #expect(failed.first?.kind == FacetKind.dataDetection.rawValue)
+        #expect(failed.first?.attempt == 1)
+        #expect(!events(h, id).contains { $0.event == .enrichStarted })
+    }
+
     @Test func logsDeferredThenRetryingThenFailed() async throws {
         let h = try RunnerHarness(); defer { h.cleanup() }
         let id = try await h.note("hi")
