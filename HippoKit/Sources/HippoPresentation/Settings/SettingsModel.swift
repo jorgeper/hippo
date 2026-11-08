@@ -24,6 +24,9 @@ public final class SettingsModel {
     /// previous values.
     public private(set) var loadFailed = false
 
+    /// "Last sync … · N being processed · …"; nil until the first `refresh()`.
+    public private(set) var statusSummary: String?
+
     /// One line for the Sync section.
     public var summary: String { Self.summary(counts: counts) }
 
@@ -31,13 +34,21 @@ public final class SettingsModel {
     @ObservationIgnored private let registry: ProviderRegistry
     @ObservationIgnored private let coordinator: SyncCoordinator
     @ObservationIgnored private let settings: AppSettings
+    @ObservationIgnored private let isOnline: @Sendable () -> Bool
+    @ObservationIgnored private let now: @Sendable () -> Date
+    @ObservationIgnored private let locale: Locale
     @ObservationIgnored private let requestLocationPermission: () async -> Bool
     @ObservationIgnored private let onEnrichmentEnabled: @Sendable (FacetKind) async -> Void
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "settings")
 
     public init(store: HippoStore, registry: ProviderRegistry, coordinator: SyncCoordinator, settings: AppSettings,
                 requestLocationPermission: @escaping () async -> Bool,
-                onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) {
+                onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in },
+                isOnline: @escaping @Sendable () -> Bool = { true },
+                now: @escaping @Sendable () -> Date = Date.init, locale: Locale = .current) {
+        self.isOnline = isOnline
+        self.now = now
+        self.locale = locale
         self.onEnrichmentEnabled = onEnrichmentEnabled
         self.store = store
         self.registry = registry
@@ -79,6 +90,7 @@ public final class SettingsModel {
         var destination: Destination?
         var counts: [SyncBucket: Int]
         var bytes: Int64
+        var unfinished: [EnrichmentTask]
     }
 
     /// Re-reads the destination, sync counts, storage use and location preference.
@@ -88,7 +100,8 @@ public final class SettingsModel {
         let snapshot: Snapshot? = await Task.detached {
             do {
                 return Snapshot(destination: try store.destinations.active(), counts: try store.index.counts(),
-                                bytes: StorageUsage.bytes(under: store.layout.root))
+                                bytes: StorageUsage.bytes(under: store.layout.root),
+                                unfinished: (try? store.enrichmentTasks.unfinished()) ?? [])
             } catch {
                 Self.log.error("\("refresh_failed", privacy: .public)")
                 return nil
@@ -99,6 +112,37 @@ public final class SettingsModel {
         activeDestination = snapshot.destination
         counts = snapshot.counts
         storageBytes = snapshot.bytes
+        statusSummary = buildStatusSummary(unfinished: snapshot.unfinished)
+    }
+
+    private func buildStatusSummary(unfinished: [EnrichmentTask]) -> String {
+        let current = now()
+        let settings = settings
+        var working = 0, waiting = 0, failed = 0
+        for (_, tasks) in Dictionary(grouping: unfinished, by: \.captureID) {
+            let steps = EnrichmentProgress.steps(tasks, isEnabled: { settings.isEnrichmentEnabled($0) },
+                                                 isOnline: isOnline(), now: current)
+            switch EnrichmentProgress.row(steps) {
+            case .working: working += 1
+            case .waiting: waiting += 1
+            case .none: break
+            }
+            if steps.values.contains(where: { if case .failed = $0 { true } else { false } }) { failed += 1 }
+        }
+        var head = "Last sync never"
+        if let last = settings.lastSync {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.locale = locale
+            formatter.dateTimeStyle = .named
+            formatter.unitsStyle = .full
+            head = "Last sync \(formatter.localizedString(for: last.at, relativeTo: current))"
+            if last.failed { head += " didn't finish" }
+        }
+        var parts = [head]
+        if working > 0 { parts.append("\(working) being processed") }
+        if waiting > 0 { parts.append("\(waiting) waiting for a connection") }
+        if failed > 0 { parts.append("\(failed) couldn't be processed") }
+        return parts.joined(separator: " · ")
     }
 
     /// Signs in with `p`, makes it the active destination (binding every capture that has no upload

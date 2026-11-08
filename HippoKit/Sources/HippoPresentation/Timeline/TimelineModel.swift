@@ -44,6 +44,8 @@ public final class TimelineModel {
     @ObservationIgnored private let calendar: Calendar
     @ObservationIgnored private let locale: Locale
     @ObservationIgnored private let debounce: Duration
+    @ObservationIgnored private let isEnabled: @Sendable (FacetKind) -> Bool
+    @ObservationIgnored private let isOnline: @Sendable () -> Bool
     @ObservationIgnored private var items: [Item] = []
     @ObservationIgnored private var reachedEnd = false
     @ObservationIgnored private var isLoadingMore = false
@@ -59,7 +61,11 @@ public final class TimelineModel {
     private static let prefetchDistance = 10
 
     public init(store: HippoStore, pageSize: Int = 50, now: @escaping @Sendable () -> Date = Date.init,
-                calendar: Calendar = .current, locale: Locale = .current, debounce: Duration = .milliseconds(250)) {
+                calendar: Calendar = .current, locale: Locale = .current, debounce: Duration = .milliseconds(250),
+                isEnabled: @escaping @Sendable (FacetKind) -> Bool = { _ in true },
+                isOnline: @escaping @Sendable () -> Bool = { true }) {
+        self.isEnabled = isEnabled
+        self.isOnline = isOnline
         self.store = store
         self.pageSize = pageSize
         self.now = now
@@ -88,7 +94,8 @@ public final class TimelineModel {
         let limit = resettingDepth ? pageSize : max(pageSize, items.count)
         let page: Page?
         do {
-            page = try await Self.loadPage(store: store, filter: captured, after: nil, limit: limit, locale: locale)
+            page = try await Self.loadPage(store: store, filter: captured, after: nil, limit: limit, locale: locale,
+                                           progress: progressInputs())
         } catch {
             Self.log.error("\("reload_failed", privacy: .public)")
             page = nil
@@ -123,7 +130,7 @@ public final class TimelineModel {
         let page: Page?
         do {
             page = try await Self.loadPage(store: store, filter: activeFilter, after: cursor, limit: pageSize,
-                                           locale: locale)
+                                           locale: locale, progress: progressInputs())
         } catch {
             Self.log.error("\("page_failed", privacy: .public)")
             page = nil
@@ -169,6 +176,16 @@ public final class TimelineModel {
         return loaded
     }
 
+    private func progressInputs() -> ProgressInputs {
+        ProgressInputs(now: now(), isEnabled: isEnabled, isOnline: isOnline())
+    }
+
+    private struct ProgressInputs: Sendable {
+        var now: Date
+        var isEnabled: @Sendable (FacetKind) -> Bool
+        var isOnline: Bool
+    }
+
     private func currentFilter() -> CaptureFilter { filter.makeFilter(now: now(), calendar: calendar) }
 
     private func publish() {
@@ -191,17 +208,21 @@ public final class TimelineModel {
 
     /// Index reads are synchronous SQLite calls, so they run off the main actor.
     private static func loadPage(store: HippoStore, filter: CaptureFilter, after: PageCursor?, limit: Int,
-                                 locale: Locale) async throws -> Page {
+                                 locale: Locale, progress: ProgressInputs) async throws -> Page {
         try await Task.detached {
             let summaries = try store.index.page(filter, after: after, limit: limit)
+            let tasks = Dictionary(grouping: try store.enrichmentTasks.tasks(captureIDs: summaries.map(\.id)),
+                                   by: \.captureID)
             let items = summaries.map { s -> Item in
                 let isLink = s.attachmentCount == 0 && s.contentTypes.contains(.url)
                 let isVoice = s.method == .voiceRecording || s.contentTypes.contains(.audio)
                 let needsMetadata = s.attachmentCount >= 2 || isVoice || isLink
                 let metadata = needsMetadata ? (try? store.index.metadata(captureID: s.id, layout: store.layout)) ?? nil : nil
                 let enrichment = (isLink || isVoice) ? ResolvedEnrichment.load(store: store, captureID: s.id) : nil
-                return Item(summary: s, row: TimelineRow.make(s, metadata: metadata, enrichment: enrichment,
-                                                              locale: locale))
+                var row = TimelineRow.make(s, metadata: metadata, enrichment: enrichment, locale: locale)
+                row.progress = EnrichmentProgress.row(EnrichmentProgress.steps(
+                    tasks[s.id] ?? [], isEnabled: progress.isEnabled, isOnline: progress.isOnline, now: progress.now))
+                return Item(summary: s, row: row)
             }
             return Page(items: items, reachedEnd: summaries.count < limit)
         }.value

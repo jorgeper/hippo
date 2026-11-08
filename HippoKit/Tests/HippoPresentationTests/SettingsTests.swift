@@ -37,7 +37,8 @@ private struct Harness {
         coordinator = SyncCoordinator(store: t.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0",
                                       settings: settings)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
-                              requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled)
+                              requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled,
+                              now: { Date(timeIntervalSince1970: 1_800_000_000) }, locale: Locale(identifier: "en_US"))
     }
 
     func cleanup() {
@@ -109,6 +110,31 @@ struct SettingsTests {
         let job = try #require(try h.t.store.jobs.jobs(captureID: p.metadata.captureID).first)
         #expect(job.state == .blocked)
         #expect(job.lastErrorCode == "permanent:provider_unavailable")
+    }
+
+    @Test func statusSummaryCounts() async throws {
+        let h = try Harness(); defer { h.cleanup() }
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        var ids: [String] = []
+        for n in 0..<4 { ids.append(try await h.t.note("n\(n)", at: at.addingTimeInterval(Double(n))).metadata.captureID) }
+        let tasks = h.t.store.enrichmentTasks
+        for id in ids.prefix(2) { try tasks.set(captureID: id, kind: .dataDetection, version: 1, status: "pending", now: at) }
+        try tasks.set(captureID: ids[2], kind: .linkPreview, version: 1, status: "pending", now: at)
+        try tasks.recordAttempt(captureID: ids[2], kind: .linkPreview, status: "pending", errorCode: "offline",
+                                nextAttemptAt: at.addingTimeInterval(300), incrementAttempts: false, now: at)
+        try tasks.set(captureID: ids[3], kind: .transcript, version: 1, status: "failed", now: at)
+        h.settings.recordSync(at: at.addingTimeInterval(-120), failed: false)
+        await h.model.refresh()
+        #expect(h.model.statusSummary == "Last sync 2 minutes ago · 2 being processed · 1 waiting for a connection · 1 couldn't be processed")
+        h.settings.recordSync(at: at.addingTimeInterval(-120), failed: true)
+        await h.model.refresh()
+        #expect(h.model.statusSummary?.hasPrefix("Last sync 2 minutes ago didn't finish · 2 being processed") == true)
+    }
+
+    @Test func statusSummaryNeverAndZeroCountsOmitted() async throws {
+        let h = try Harness(); defer { h.cleanup() }
+        await h.model.refresh()
+        #expect(h.model.statusSummary == "Last sync never")
     }
 
     @Test func installIDIsStable() throws {

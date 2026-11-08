@@ -65,6 +65,24 @@ public final class EnrichmentTaskStore: Sendable {
                      [.text(captureID), .text(kind.rawValue)]).first.map(Self.decodeTask)
     }
 
+    /// Every row for the given captures, in one `IN` query per 500 IDs.
+    public func tasks(captureIDs: [String]) throws -> [EnrichmentTask] {
+        var out: [EnrichmentTask] = []
+        var start = 0
+        while start < captureIDs.count {
+            let chunk = Array(captureIDs[start..<min(start + 500, captureIDs.count)])
+            start += 500
+            out += try db.query("SELECT * FROM enrichment_tasks WHERE capture_id IN (\(Self.placeholders(chunk.count)))",
+                                chunk.map { .text($0) }).map(Self.decodeTask)
+        }
+        return out
+    }
+
+    /// Every row still `pending` or `failed`, across all captures.
+    public func unfinished() throws -> [EnrichmentTask] {
+        try db.query("SELECT * FROM enrichment_tasks WHERE status IN ('pending', 'failed')").map(Self.decodeTask)
+    }
+
     /// Records the outcome of an attempt. `incrementAttempts` is false for attempts that don't count
     /// (for example, ones cancelled before they ran).
     public func recordAttempt(captureID: String, kind: FacetKind, status: String, errorCode: String?,

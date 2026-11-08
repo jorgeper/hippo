@@ -42,12 +42,18 @@ public struct CaptureDetail: Equatable, Sendable {
     public var foundLayer: Layer
     public var summaryLayer: Layer
     public var tagsLayer: Layer
+    /// Detail's Status section: bronze save line, one line per enrichment step, the server arrival. Sync rows are `sync`.
+    public var status: [StatusLine]
+    /// Where a result will appear and isn't there yet.
+    public var pending: [FacetKind: PendingLine]
 
     /// `now` is accepted for symmetry with the timeline; nothing here is relative to it, because
     /// ages are measured against the capture time. `calendar.timeZone` is the current zone.
     public static func make(metadata m: CaptureMetadata, packageURL: URL, noteBody: String?, jobs: [UploadJob],
-                            enrichment: ResolvedEnrichment, destination: (String) -> Destination?, now: Date, locale: Locale,
-                            calendar: Calendar) -> CaptureDetail {
+                            enrichment: ResolvedEnrichment, tasks: [EnrichmentTask] = [],
+                            isEnabled: (FacetKind) -> Bool = { _ in true }, isOnline: Bool = true,
+                            goldArrivedAt: Date? = nil, destination: (String) -> Destination?, now: Date,
+                            locale: Locale, calendar: Calendar) -> CaptureDetail {
         let files: [(Attachment, URL)] = m.attachments.compactMap { a in
             guard (try? PackagePath.validateRelative(a.relativePath)) != nil else { return nil }
             return (a, packageURL.appendingPathComponent(a.relativePath))
@@ -56,6 +62,8 @@ public struct CaptureDetail: Equatable, Sendable {
         let links = urls.compactMap { URL(string: $0.url) }
         let sync = jobs.isEmpty ? [SyncRow.unassigned]
             : jobs.map { SyncRow.make(job: $0, destinationName: destination($0.destinationID)?.displayName) }
+        let steps = EnrichmentProgress.steps(tasks, isEnabled: isEnabled, isOnline: isOnline, now: now)
+        let savedZone = TimeZone(identifier: m.timezoneIdentifier) ?? TimeZone(secondsFromGMT: m.utcOffsetSeconds) ?? .gmt
         return CaptureDetail(
             preview: preview(metadata: m, files: files, links: links, noteBody: noteBody),
             comment: nonEmpty(m.userNote), sharedTitle: nonEmpty(m.sharedTitle), sharedText: nonEmpty(m.sharedText),
@@ -74,7 +82,24 @@ public struct CaptureDetail: Equatable, Sendable {
             summary: nonEmpty(enrichment.summary), tags: enrichment.tags,
             foundLayer: enrichment.fromServer.detections ? .gold : .silver,
             summaryLayer: enrichment.fromServer.summary ? .gold : .silver,
-            tagsLayer: enrichment.fromServer.tags ? .gold : .silver)
+            tagsLayer: enrichment.fromServer.tags ? .gold : .silver,
+            status: StatusLine.lines(saved: m.capturedAt, steps: steps, goldKinds: goldKinds(enrichment),
+                                     goldArrivedAt: goldArrivedAt, locale: locale, zone: savedZone),
+            pending: steps.reduce(into: [:]) { out, step in
+                if let line = EnrichmentProgress.pendingLine(step.key, step.value) { out[step.key] = line }
+            })
+    }
+
+    /// Kinds whose shown result came from the server.
+    private static func goldKinds(_ e: ResolvedEnrichment) -> Set<FacetKind> {
+        var kinds: Set<FacetKind> = []
+        if e.links.values.contains(where: \.fromServer) { kinds.insert(.linkPreview) }
+        if !e.fromServer.places.isEmpty { kinds.insert(.place) }
+        if !e.fromServer.transcripts.isEmpty { kinds.insert(.transcript) }
+        if !e.fromServer.recognizedText.isEmpty { kinds.insert(.textRecognition) }
+        if e.fromServer.detections { kinds.insert(.dataDetection) }
+        if e.fromServer.sourceApp { kinds.insert(.sourceAppGuess) }
+        return kinds
     }
 
     private static func nonEmpty(_ s: String?) -> String? {

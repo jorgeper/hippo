@@ -6,6 +6,29 @@ import CaptureCore
 private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 
 @Suite struct EnrichmentTaskStoreTests {
+    @Test func tasksForCaptureIDsAndUnfinished() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let tasks = EnrichmentTaskStore(db: h.db)
+        let a = try await h.add(at: t0, note: "a").metadata.captureID
+        let b = try await h.add(at: t0.addingTimeInterval(60), note: "b").metadata.captureID
+        let c = try await h.add(at: t0.addingTimeInterval(120), note: "c").metadata.captureID
+        try tasks.set(captureID: a, kind: .linkPreview, version: 1, status: "pending", now: t0)
+        try tasks.set(captureID: a, kind: .place, version: 1, status: "ok", now: t0)
+        try tasks.set(captureID: b, kind: .transcript, version: 1, status: "failed", now: t0)
+        try tasks.set(captureID: b, kind: .dataDetection, version: 1, status: "empty", now: t0)
+        try tasks.set(captureID: c, kind: .place, version: 1, status: "not_applicable", now: t0)
+        try tasks.set(captureID: c, kind: .linkPreview, version: 1, status: "pending", now: t0)
+        let got = try tasks.tasks(captureIDs: [a, b])
+        #expect(Set(got.map { "\($0.captureID == a ? "a" : "b") \($0.kind.rawValue)" })
+                == ["a link_preview", "a place", "b transcript", "b data_detection"])
+        #expect(try tasks.tasks(captureIDs: []).isEmpty)
+        let ids = (0..<1200).map { "missing-\($0)" } + [c]
+        #expect(try tasks.tasks(captureIDs: ids).count == 2)
+        let open = try tasks.unfinished()
+        #expect(Set(open.map(\.status)) == ["pending", "failed"])
+        #expect(open.count == 3)
+    }
+
     @Test func taskStoreClaimOrder() async throws {
         let h = try IndexHarness(); defer { h.cleanup() }
         let tasks = EnrichmentTaskStore(db: h.db)

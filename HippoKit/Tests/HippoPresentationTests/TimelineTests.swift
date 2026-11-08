@@ -172,6 +172,25 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
         #expect(file.kind == .file && file.title == "doc.pdf")
     }
 
+    @Test @MainActor func rowProgressFromTasks() async throws {
+        let t = try TestStore(); defer { t.cleanup() }
+        let due = try await t.note("due", at: iso("2026-11-07T18:00:00Z")).metadata.captureID
+        let deferred = try await t.note("deferred", at: iso("2026-11-07T19:00:00Z")).metadata.captureID
+        let done = try await t.note("done", at: iso("2026-11-07T20:00:00Z")).metadata.captureID
+        let tasks = t.store.enrichmentTasks
+        try tasks.set(captureID: due, kind: .dataDetection, version: 1, status: "pending", now: now)
+        try tasks.set(captureID: deferred, kind: .place, version: 1, status: "pending", now: now)
+        try tasks.recordAttempt(captureID: deferred, kind: .place, status: "pending", errorCode: "throttled",
+                                nextAttemptAt: now.addingTimeInterval(600), incrementAttempts: true, now: now)
+        try tasks.set(captureID: done, kind: .dataDetection, version: 1, status: "ok", now: now)
+        let model = TimelineModel(store: t.store, now: { now }, calendar: calendar, locale: locale)
+        await model.reload()
+        let rows = Dictionary(uniqueKeysWithValues: model.sections.flatMap(\.rows).map { ($0.id, $0.progress) })
+        #expect(rows[due] == .working)
+        #expect(rows[deferred] == .waiting)
+        #expect(rows[done] == RowProgress.none)
+    }
+
     @Test @MainActor func groupsByRecordedLocalDayNewestFirst() async throws {
         let t = try TestStore(); defer { t.cleanup() }
         try await t.note("first", at: iso("2026-11-06T18:00:00Z"))

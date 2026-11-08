@@ -18,10 +18,16 @@ public final class CaptureDetailModel {
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let calendar: Calendar
     @ObservationIgnored private let locale: Locale
+    @ObservationIgnored private let isEnabled: @Sendable (FacetKind) -> Bool
+    @ObservationIgnored private let isOnline: @Sendable () -> Bool
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "detail")
 
     public init(store: HippoStore, captureID: String, now: @escaping @Sendable () -> Date = Date.init,
-                calendar: Calendar = .current, locale: Locale = .current) {
+                calendar: Calendar = .current, locale: Locale = .current,
+                isEnabled: @escaping @Sendable (FacetKind) -> Bool = { _ in true },
+                isOnline: @escaping @Sendable () -> Bool = { true }) {
+        self.isEnabled = isEnabled
+        self.isOnline = isOnline
         self.store = store
         self.captureID = captureID
         self.now = now
@@ -37,6 +43,7 @@ public final class CaptureDetailModel {
     /// Reads the capture's metadata, note body and upload jobs. Leaves `detail` nil if it can't be read.
     public func load() async {
         let store = store, id = captureID, now = now(), calendar = calendar, locale = locale
+        let isEnabled = isEnabled, isOnline = isOnline
         let loaded: Loaded? = await Task.detached {
             do {
                 guard let metadata = try store.index.metadata(captureID: id, layout: store.layout),
@@ -50,8 +57,11 @@ public final class CaptureDetailModel {
                     ($0, try store.destinations.destination(id: $0))
                 })
                 let enrichment = ResolvedEnrichment.load(store: store, captureID: id)
+                let tasks = try store.enrichmentTasks.tasks(captureIDs: [id])
+                let goldArrivedAt = (try? store.enrichments.document(.server, captureID: id))?.generatedAt
                 let detail = CaptureDetail.make(metadata: metadata, packageURL: url, noteBody: package.noteBody(),
-                                                jobs: jobs, enrichment: enrichment, destination: { names[$0] ?? nil }, now: now,
+                                                jobs: jobs, enrichment: enrichment, tasks: tasks, isEnabled: isEnabled,
+                                                isOnline: isOnline(), goldArrivedAt: goldArrivedAt, destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName)
                 return Loaded(detail: detail, prompt: prompt)
