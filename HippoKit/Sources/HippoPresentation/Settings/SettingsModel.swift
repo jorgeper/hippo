@@ -1,11 +1,18 @@
 import Foundation
 import Observation
 import os
+import CaptureCore
 import LocalRepository
 import SyncEngine
 
 /// The Settings screen's state and actions: the connected destination, sync status, retry, uploading
 /// existing captures, the location preference, and local storage use (spec §11 "Settings").
+public struct EnrichmentSwitch: Identifiable, Sendable {
+    public let kind: FacetKind
+    public let title: String
+    public var id: String { kind.rawValue }
+}
+
 @MainActor @Observable
 public final class SettingsModel {
     public private(set) var activeDestination: Destination?
@@ -25,16 +32,38 @@ public final class SettingsModel {
     @ObservationIgnored private let coordinator: SyncCoordinator
     @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private let requestLocationPermission: () async -> Bool
+    @ObservationIgnored private let onEnrichmentEnabled: @Sendable (FacetKind) async -> Void
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "settings")
 
     public init(store: HippoStore, registry: ProviderRegistry, coordinator: SyncCoordinator, settings: AppSettings,
-                requestLocationPermission: @escaping () async -> Bool) {
+                requestLocationPermission: @escaping () async -> Bool,
+                onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) {
+        self.onEnrichmentEnabled = onEnrichmentEnabled
         self.store = store
         self.registry = registry
         self.coordinator = coordinator
         self.settings = settings
         self.requestLocationPermission = requestLocationPermission
         locationEnabled = settings.locationEnabled
+    }
+
+    public static let enrichmentSwitches: [EnrichmentSwitch] = [
+        EnrichmentSwitch(kind: .linkPreview, title: "Link previews"),
+        EnrichmentSwitch(kind: .place, title: "Place names"),
+        EnrichmentSwitch(kind: .textRecognition, title: "Text in images"),
+        EnrichmentSwitch(kind: .transcript, title: "Voice note transcripts"),
+        EnrichmentSwitch(kind: .dataDetection, title: "Dates, phone numbers and addresses"),
+        EnrichmentSwitch(kind: .sourceAppGuess, title: "App guesses"),
+    ]
+
+    public static let enrichmentFooter = "Link previews fetch the page title and picture from the website. Place names are looked up with Apple Maps. Everything else runs on this iPhone."
+
+    public func isEnrichmentEnabled(_ kind: FacetKind) -> Bool { settings.isEnrichmentEnabled(kind) }
+
+    /// Stores the switch. Turning a kind on backfills existing captures through `onEnrichmentEnabled`.
+    public func setEnrichment(_ kind: FacetKind, on: Bool) async {
+        settings.setEnrichmentEnabled(kind, on)
+        if on { await onEnrichmentEnabled(kind) }
     }
 
     nonisolated static func summary(counts: [SyncBucket: Int]) -> String {

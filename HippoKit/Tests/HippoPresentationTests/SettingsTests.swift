@@ -24,7 +24,8 @@ private struct Harness {
     let model: SettingsModel
 
     init(faults: FaultPlan = FaultPlan(), adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil,
-         permission: @escaping () async -> Bool = { true }) throws {
+         permission: @escaping () async -> Bool = { true },
+         onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) throws {
         t = try TestStore()
         remote = t.base.appendingPathComponent("Remote", isDirectory: true)
         provider = FakeStorageProvider(root: remote, faults: faults, adapter: adapter)
@@ -35,7 +36,7 @@ private struct Harness {
         suite = "hippo-settings-\(UUID().uuidString)"
         settings = AppSettings(defaults: UserDefaults(suiteName: suite)!)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
-                              requestLocationPermission: permission)
+                              requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled)
     }
 
     func cleanup() {
@@ -425,5 +426,34 @@ struct SettingsTests {
         settings.locationEnabled = true
         #expect(defaults.bool(forKey: "location_enabled"))
         #expect(AppSettings(defaults: defaults).locationEnabled)
+    }
+
+    @Test func enrichmentDefaultsOn() throws {
+        let suite = "hippo-defaults-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        for item in SettingsModel.enrichmentSwitches { #expect(settings.isEnrichmentEnabled(item.kind)) }
+    }
+
+    @Test func turningOnTriggersBackfill() async throws {
+        let calls = Mutex<[String]>([])
+        let h = try Harness(onEnrichmentEnabled: { kind in calls.withLock { $0.append(kind.rawValue) } })
+        defer { h.cleanup() }
+        await h.model.setEnrichment(.place, on: false)
+        #expect(calls.withLock { $0 }.isEmpty)
+        #expect(h.settings.isEnrichmentEnabled(.place) == false)
+        await h.model.setEnrichment(.place, on: true)
+        #expect(calls.withLock { $0 } == ["place"])
+        #expect(h.settings.isEnrichmentEnabled(.place))
+    }
+
+    @Test func switchCopyExact() {
+        #expect(SettingsModel.enrichmentSwitches.map(\.title) == [
+            "Link previews", "Place names", "Text in images", "Voice note transcripts",
+            "Dates, phone numbers and addresses", "App guesses"])
+        #expect(SettingsModel.enrichmentSwitches.map(\.kind) == [
+            .linkPreview, .place, .textRecognition, .transcript, .dataDetection, .sourceAppGuess])
+        #expect(SettingsModel.enrichmentFooter == "Link previews fetch the page title and picture from the website. Place names are looked up with Apple Maps. Everything else runs on this iPhone.")
     }
 }
