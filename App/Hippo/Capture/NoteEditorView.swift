@@ -14,7 +14,8 @@ struct NoteEditorView: View {
     @State private var saveFailed = false
     @FocusState private var focused: Bool
 
-    private var canSave: Bool { !text.allSatisfy(\.isWhitespace) && !saving }
+    private var isBlank: Bool { text.allSatisfy { $0.isWhitespace } }
+    private var canSave: Bool { !isBlank && !saving }
 
     var body: some View {
         NavigationStack {
@@ -28,6 +29,7 @@ struct NoteEditorView: View {
                             .padding(.horizontal, 17)
                             .padding(.top, 8)
                             .allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
                 }
                 .navigationTitle("Note")
@@ -35,11 +37,11 @@ struct NoteEditorView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
-                            if text.isEmpty { dismiss() } else { confirmingDiscard = true }
+                            if isBlank { dismiss() } else { confirmingDiscard = true }
                         }
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") { Task { await save() } }.disabled(!canSave)
+                        Button("Save") { saving = true; Task { await save() } }.disabled(!canSave)
                     }
                 }
                 .confirmationDialog("Discard note?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
@@ -50,7 +52,7 @@ struct NoteEditorView: View {
                     Button("OK", role: .cancel) {}
                 }
         }
-        .interactiveDismissDisabled(!text.isEmpty)
+        .interactiveDismissDisabled(!isBlank)
         .onAppear {
             startedAt = Date()
             focused = true
@@ -62,8 +64,7 @@ struct NoteEditorView: View {
         let started = startedAt
         guard let draft = NoteComposer.draft(
             text: text, captureID: UUID(), startedAt: started, timeZone: .current,
-            location: location.location(startedAt: started)) else { return }
-        saving = true
+            location: location.location(startedAt: started)) else { saving = false; return }
         let store = environment.store
         do {
             _ = try await BackgroundActivity.run(name: "note-save") { try await store.capture(draft) }

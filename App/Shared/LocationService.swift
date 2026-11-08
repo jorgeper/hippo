@@ -2,6 +2,7 @@ import CoreLocation
 import Foundation
 import CaptureCore
 import HippoPresentation
+import os
 
 /// One-shot location for captures. Never blocks saving: a denied, disabled or missing fix is nil.
 /// One instance per process; the app's sheets share `LocationService.shared`.
@@ -15,7 +16,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     }
 
     private let manager = CLLocationManager()
-    private var permissionContinuation: CheckedContinuation<Bool, Never>?
+    private var permissionContinuations: [CheckedContinuation<Bool, Never>] = []
+    nonisolated private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "location")
 
     private(set) var sessionFix: LocationFix?
 
@@ -39,10 +41,9 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     func requestPermission() async -> Bool {
         switch manager.authorizationStatus {
         case .notDetermined:
-            guard permissionContinuation == nil else { return false }
             return await withCheckedContinuation { continuation in
-                permissionContinuation = continuation
-                manager.requestWhenInUseAuthorization()
+                permissionContinuations.append(continuation)
+                if permissionContinuations.count == 1 { manager.requestWhenInUseAuthorization() }
             }
         default:
             return isAuthorized
@@ -72,9 +73,11 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         MainActor.assumeIsolated {
-            guard status != .notDetermined, let c = permissionContinuation else { return }
-            permissionContinuation = nil
-            c.resume(returning: status == .authorizedWhenInUse || status == .authorizedAlways)
+            guard status != .notDetermined else { return }
+            let granted = status == .authorizedWhenInUse || status == .authorizedAlways
+            let waiting = permissionContinuations
+            permissionContinuations = []
+            for c in waiting { c.resume(returning: granted) }
         }
     }
 
@@ -83,5 +86,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         MainActor.assumeIsolated { sessionFix = Self.fix(last) }
     }
 
-    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Self.log.error("\("location_request_failed", privacy: .public)")
+    }
 }

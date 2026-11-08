@@ -158,6 +158,36 @@ private struct Rig {
         #expect(rig.model.state == .saved)
     }
 
+    @MainActor @Test func interruptedDurationFallsBackToWallClock() async throws {
+        let ts = try TestStore()
+        defer { ts.cleanup() }
+        let recorder = FakeRecorder()
+        recorder.currentTime = 0
+        var clock = t0
+        let model = RecorderModel(store: ts.store, intake: IntakeDirectory(storeRoot: ts.base.appendingPathComponent("Hippo")),
+                                  recorder: recorder, permission: { .granted }, location: { _ in nil }, now: { clock })
+        await model.start()
+        clock = t0.addingTimeInterval(12)
+        model.interruptionBegan()
+        #expect(model.state == .stopped(duration: 12, interrupted: true))
+    }
+
+    @MainActor @Test func hasPendingRecordingTracksTheFileOnDisk() async throws {
+        let rig = try Rig()
+        defer { rig.ts.cleanup() }
+        #expect(!rig.model.hasPendingRecording)
+        await rig.model.start()
+        #expect(!rig.model.hasPendingRecording)     // still recording
+        rig.model.stop()
+        #expect(rig.model.hasPendingRecording)
+        let url = try #require(rig.recorder.startedURL)
+        try FileManager.default.removeItem(at: url)
+        await rig.model.save()                       // fails, file still pending
+        #expect(rig.model.hasPendingRecording)
+        rig.model.discard()
+        #expect(!rig.model.hasPendingRecording)
+    }
+
     @MainActor @Test func discardDeletesTempFile() async throws {
         let rig = try Rig()
         defer { rig.ts.cleanup() }

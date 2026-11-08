@@ -3,14 +3,11 @@ import HippoPresentation
 
 /// `AudioRecording` over AVAudioRecorder, with the play-and-record session and interruption handling.
 @MainActor
-final class SystemAudioRecorder: AudioRecording {
+final class SystemAudioRecorder: NSObject, AudioRecording, AVAudioRecorderDelegate {
     private var recorder: AVAudioRecorder?
     nonisolated(unsafe) private var observer: NSObjectProtocol?
-    /// Set by the owner; called on the main actor when an interruption begins.
+    /// Called on the main actor when the system takes the session or the recorder fails mid-recording.
     var onInterruption: (() -> Void)?
-
-    /// `AVAudioSession.InterruptionType.began`; the enum is deprecated in iOS 27 but the notification is not.
-    nonisolated private static let interruptionBegan: UInt = 1
 
     var currentTime: TimeInterval { recorder?.currentTime ?? 0 }
 
@@ -46,28 +43,31 @@ final class SystemAudioRecorder: AudioRecording {
         ]
         do {
             let r = try AVAudioRecorder(url: url, settings: settings)
+            r.delegate = self
             guard r.record() else { throw CocoaError(.fileWriteUnknown) }
             recorder = r
         } catch {
             deactivate()
             throw error
         }
+        // Our own `deactivate()` posts this too, with source `.app`; only the system's counts.
         observer = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
-            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-            guard raw == Self.interruptionBegan else { return }
+            forName: AVAudioSession.didBecomeInactiveNotification, object: nil, queue: .main) { [weak self] note in
+            guard let context = note.userInfo?[AVAudioSession.deactivationContextKey] as? AVAudioSession.DeactivationContext,
+                  context.source == .system else { return }
             MainActor.assumeIsolated { self?.onInterruption?() }
         }
     }
 
     func stop() {
+        removeObserver()   // before deactivating, so our own deactivation is never seen as an interruption
+        recorder?.delegate = nil
         recorder?.stop()
         recorder = nil
-        removeObserver()
         deactivate()
     }
 
-    /// Lets other apps' audio resume. Also called after discard or save via `stop()`.
+    /// Lets other apps' audio resume.
     func deactivate() {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
@@ -75,5 +75,16 @@ final class SystemAudioRecorder: AudioRecording {
     private func removeObserver() {
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = nil
+    }
+
+    // MARK: AVAudioRecorderDelegate
+
+    nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        guard !flag else { return }
+        MainActor.assumeIsolated { onInterruption?() }
+    }
+
+    nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+        MainActor.assumeIsolated { onInterruption?() }
     }
 }

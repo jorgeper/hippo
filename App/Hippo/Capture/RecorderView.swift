@@ -8,19 +8,20 @@ struct RecorderView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var model: RecorderModel
-    private let recorder: SystemAudioRecorder
+    @State private var recorder: SystemAudioRecorder
+    @State private var confirmingDiscard = false
 
     init(environment: AppEnvironment, location: LocationService) {
         self.environment = environment
         self.location = location
         let recorder = SystemAudioRecorder()
-        self.recorder = recorder
         let model = RecorderModel(
             store: environment.store, intake: environment.intake, recorder: recorder,
             permission: { await SystemAudioRecorder.requestMicPermission() },
             location: { [location] in location.location(startedAt: $0) })
         recorder.onInterruption = { [weak model] in model?.interruptionBegan() }
         _model = State(initialValue: model)
+        _recorder = State(initialValue: recorder)
     }
 
     var body: some View {
@@ -37,11 +38,18 @@ struct RecorderView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { model.discard(); dismiss() }.disabled(model.state == .saving)
+                    Button("Cancel") {
+                        if case .recording = model.state { confirmingDiscard = true } else { model.discard(); dismiss() }
+                    }
+                    .disabled(model.state == .saving)
                 }
             }
         }
         .interactiveDismissDisabled(isBusy)
+        .confirmationDialog("Discard recording?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
+            Button("Discard", role: .destructive) { model.discard(); dismiss() }
+            Button("Keep recording", role: .cancel) {}
+        }
         .onAppear {
             location.beginSessionFix()
         }
@@ -108,7 +116,7 @@ struct RecorderView: View {
         case .recording:
             recordButton(recording: true)
         case .stopped, .failed:
-            if hasPendingRecording {
+            if model.hasPendingRecording {
                 HStack(spacing: 16) {
                     Button("Discard", role: .destructive) { model.discard(); dismiss() }
                         .buttonStyle(.bordered)
@@ -122,12 +130,6 @@ struct RecorderView: View {
         case .saving, .saved:
             EmptyView()
         }
-    }
-
-    /// A failed start has nothing recorded; a failed save keeps the file and offers Save again.
-    private var hasPendingRecording: Bool {
-        if case .failed(let m) = model.state { return m == RecorderModel.saveFailedMessage }
-        return true
     }
 
     private func save() async {
@@ -153,6 +155,6 @@ struct RecorderView: View {
 
 private extension Text {
     func timeText() -> some View {
-        font(.system(size: 56, weight: .light, design: .rounded)).monospacedDigit()
+        font(.system(.largeTitle, design: .rounded, weight: .light)).monospacedDigit()
     }
 }

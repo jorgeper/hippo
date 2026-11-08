@@ -86,6 +86,9 @@ public final class RecorderModel {
         state = .recording(startedAt: startedAt)
     }
 
+    /// True once a recording is on disk awaiting `save()` or `discard()`.
+    public var hasPendingRecording: Bool { pending != nil }
+
     public func stop() { finish(interrupted: false) }
 
     /// A call, Siri or similar took the microphone: keep what was recorded and offer to save it.
@@ -93,7 +96,10 @@ public final class RecorderModel {
 
     private func finish(interrupted: Bool) {
         guard case .recording = state, let current else { return }
-        let duration = max(0, recorder.currentTime)   // read before stop(), which can reset it
+        // Read before stop(), which can reset it. After a system stop the recorder may report 0, so fall
+        // back to the wall-clock time since the start.
+        var duration = max(0, recorder.currentTime)
+        if duration == 0 { duration = max(0, now().timeIntervalSince(current.startedAt)) }
         recorder.stop()
         self.current = nil
         pending = Pending(id: current.id, url: current.url, startedAt: current.startedAt,
