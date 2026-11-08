@@ -178,7 +178,7 @@ import HippoTestSupport
                 let ms = Int64(1_794_070_800_000 + i * 60_000)
                 let title = "\(words[i % 8]) \(words[(i / 8) % 8]) item \(i)"
                 try tx.execute("""
-                    INSERT INTO captures VALUES(?,?,?,?,?,?,NULL,0,0,1,NULL,?,?,0)
+                    INSERT INTO captures VALUES(?,?,?,?,?,?,NULL,0,0,1,NULL,?,?,0,NULL)
                     """, [.text(cid), .int(ms), .text("2026-11-07"), .text("share_extension"),
                           .text(types[i % types.count]), .text(title), .text("captures/\(cid)"), .text("d")])
                 try tx.execute("INSERT INTO captures_fts VALUES(?,?,?,?,?,?)",
@@ -195,5 +195,29 @@ import HippoTestSupport
         let t2 = try clock.measure { found = try h.index.page(search, after: nil, limit: 50) }
         #expect(!found.isEmpty)
         #expect(t2 < .milliseconds(200))
+    }
+
+    @Test func summaryCarriesUTCOffset() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let draft = CaptureDraft(captureID: id(1), startedAt: date(0), timeZone: TimeZone(identifier: "Asia/Tokyo")!,
+                                 method: .typedNote, userNote: "konnichiwa", sharedTitle: nil, sharedText: nil, urls: [],
+                                 attachments: [], location: nil)
+        let pkg = try await h.writer.commit(draft)
+        _ = try h.index.register(pkg, noteBody: pkg.noteBody())
+        #expect(try h.index.page(CaptureFilter(), after: nil, limit: 10).first?.utcOffsetSeconds == 32400)
+    }
+
+    @Test func countsByBucketIncludesZeros() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        #expect(try h.index.counts() == [.synced: 0, .notSynced: 0, .needsAttention: 0])
+        let destinations = DestinationStore(db: h.db)
+        _ = try destinations.connect(Destination(id: "d", providerKind: "filesystem", accountIdentifier: "a",
+                                                  remoteRoot: "/H", displayName: "A", status: .active))
+        let synced = try await h.add(id: id(1), note: "a")
+        try await h.add(id: id(2), note: "b")
+        try await h.add(id: id(3), note: "c")
+        try JobStore(db: h.db).enqueueIfActive(captureID: synced.metadata.captureID)
+        try h.db.execute("UPDATE jobs SET state = 'synced'")
+        #expect(try h.index.counts() == [.synced: 1, .notSynced: 2, .needsAttention: 0])
     }
 }

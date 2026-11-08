@@ -13,9 +13,9 @@ private func prepared() throws -> URL {
     @Test func migratesOnceAndIsIdempotent() throws {
         let url = try prepared()
         let first = try Database(url: url)
-        #expect(try first.query("PRAGMA user_version")[0].int("user_version") == 1)
+        #expect(try first.query("PRAGMA user_version")[0].int("user_version") == 2)
         let second = try Database(url: url)
-        #expect(try second.query("PRAGMA user_version")[0].int("user_version") == 1)
+        #expect(try second.query("PRAGMA user_version")[0].int("user_version") == 2)
         #expect(try second.query("SELECT count(*) AS n FROM sqlite_master WHERE name = 'captures'")[0].int("n") == 1)
     }
 
@@ -110,11 +110,29 @@ private func prepared() throws -> URL {
             for try await v in group { out.append(v) }
             return out
         }
-        #expect(versions == [1, 1])
+        #expect(versions == [2, 2])
     }
 
     @Test func fileDatabaseUsesWAL() throws {
         let db = try Database(url: try prepared())
         #expect(try db.query("PRAGMA journal_mode")[0].string("journal_mode") == "wal")
+    }
+
+    @Test func migrationFromV1AddsOffsetColumn() async throws {
+        let url = try prepared()
+        let v1 = try Database(url: url, migratingUpTo: 1)
+        try v1.execute("""
+            INSERT INTO captures(capture_id, captured_at_ms, local_day, method, content_types, title, note_excerpt,
+              has_comment, has_location, attachment_count, primary_attachment_path, relative_directory,
+              package_digest, registered_at_ms) VALUES ('old',1,'2026-11-07','typed_note',',text,','t',NULL,0,0,0,NULL,'captures/x','d',1)
+            """)
+        #expect(try v1.query("PRAGMA user_version")[0].int("user_version") == 1)
+
+        let upgraded = try Database(url: url)
+        #expect(try upgraded.query("PRAGMA user_version")[0].int("user_version") == 2)
+        let index = CaptureIndex(db: upgraded)
+        let old = try #require(try index.page(CaptureFilter(), after: nil, limit: 10).first)
+        #expect(old.id == "old")
+        #expect(old.utcOffsetSeconds == nil)
     }
 }

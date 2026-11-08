@@ -47,13 +47,16 @@ public struct CaptureSummary: Sendable, Equatable, Identifiable {
     public var primaryAttachmentPath: String?
     public var relativeDirectory: String
     public var syncBucket: SyncBucket
+    /// The capture's UTC offset when it was taken. Nil for rows indexed before schema v2.
+    public var utcOffsetSeconds: Int?
 
     public init(id: String, capturedAt: Date, localDay: String, title: String, noteExcerpt: String?,
                 contentTypes: [ContentType], method: CaptureMethod, attachmentCount: Int,
-                primaryAttachmentPath: String?, relativeDirectory: String, syncBucket: SyncBucket) {
+                primaryAttachmentPath: String?, relativeDirectory: String, syncBucket: SyncBucket, utcOffsetSeconds: Int? = nil) {
         self.id = id; self.capturedAt = capturedAt; self.localDay = localDay; self.title = title
         self.noteExcerpt = noteExcerpt; self.contentTypes = contentTypes; self.method = method
         self.attachmentCount = attachmentCount; self.primaryAttachmentPath = primaryAttachmentPath
         self.relativeDirectory = relativeDirectory; self.syncBucket = syncBucket
+        self.utcOffsetSeconds = utcOffsetSeconds
     }
 }

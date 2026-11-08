@@ -339,7 +339,7 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(Set(json.keys) == ["generated_at", "app_version", "schema_version", "capture_count", "jobs_by_state",
                                    "recent_error_codes", "destinations"])
         #expect(json["app_version"] as? String == "1.4.2")
-        #expect(json["schema_version"] as? Int == 1)
+        #expect(json["schema_version"] as? Int == 2)
         #expect(json["capture_count"] as? Int == 1)
         #expect(json["jobs_by_state"] as? [String: Int] == [
             "pending": 0, "uploading": 0, "synced": 0, "retryable_failure": 1, "needs_authentication": 0,

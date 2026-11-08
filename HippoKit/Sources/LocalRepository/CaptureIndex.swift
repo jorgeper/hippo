@@ -28,13 +28,13 @@ public final class CaptureIndex: Sendable {
             try tx.execute("""
                 INSERT INTO captures(capture_id, captured_at_ms, local_day, method, content_types, title, note_excerpt,
                   has_comment, has_location, attachment_count, primary_attachment_path, relative_directory,
-                  package_digest, registered_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  package_digest, registered_at_ms, utc_offset_seconds) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, [.text(m.captureID), .int(Self.ms(m.capturedAt)), .text(String(m.localDatetime.prefix(10))),
                       .text(m.captureMethod.rawValue), .text(types), .text(title),
                       note.map { .text(String($0.prefix(120))) } ?? .null,
                       .int(note == nil ? 0 : 1), .int(hasLocation ? 1 : 0), .int(Int64(m.attachments.count)),
                       Self.primaryPath(m).map { .text($0) } ?? .null, .text(p.relativeDirectory),
-                      .text(digest), .int(now)])
+                      .text(digest), .int(now), .int(Int64(m.utcOffsetSeconds))])
             try tx.execute("""
                 INSERT INTO captures_fts(capture_id, title, user_note, shared_text, urls, filenames) VALUES (?,?,?,?,?,?)
                 """, [.text(m.captureID), .text(title), .text(m.userNote ?? ""), .text(shared),
@@ -86,6 +86,16 @@ public final class CaptureIndex: Sendable {
           WHEN NOT EXISTS (SELECT 1 FROM jobs j WHERE j.capture_id = c.capture_id AND j.state <> 'synced') THEN 'synced'
           ELSE 'notSynced' END
         """
+
+    /// Capture counts per sync bucket (same mapping as `page`); every bucket is present.
+    public func counts() throws -> [SyncBucket: Int] {
+        var result = Dictionary(uniqueKeysWithValues: SyncBucket.allCases.map { ($0, 0) })
+        let rows = try db.query("SELECT bucket, count(*) AS n FROM (SELECT (\(Self.syncBucketSQL)) AS bucket FROM captures c) GROUP BY bucket")
+        for row in rows {
+            if let bucket = row.string("bucket").flatMap(SyncBucket.init(rawValue:)) { result[bucket] = Int(row.int("n") ?? 0) }
+        }
+        return result
+    }
 
     public func page(_ f: CaptureFilter, after: PageCursor?, limit: Int) throws -> [CaptureSummary] {
         var clauses: [String] = []
@@ -139,7 +149,8 @@ public final class CaptureIndex: Sendable {
                 attachmentCount: Int(r.int("attachment_count") ?? 0),
                 primaryAttachmentPath: r.string("primary_attachment_path"),
                 relativeDirectory: r.string("relative_directory") ?? "",
-                syncBucket: SyncBucket(rawValue: r.string("sync_bucket") ?? "") ?? .notSynced)
+                syncBucket: SyncBucket(rawValue: r.string("sync_bucket") ?? "") ?? .notSynced,
+                utcOffsetSeconds: r.int("utc_offset_seconds").map(Int.init))
         }
     }
 

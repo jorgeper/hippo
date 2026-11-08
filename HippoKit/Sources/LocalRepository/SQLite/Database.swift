@@ -48,7 +48,12 @@ public final class Database: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private var inTransaction = false
 
-    public init(url: URL) throws {
+    public convenience init(url: URL) throws {
+        try self.init(url: url, migratingUpTo: Migrations.currentVersion)
+    }
+
+    /// Tests pass an older version to build a database as a previous release left it.
+    init(url: URL, migratingUpTo version: Int64) throws {
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         var db: OpaquePointer?
         let rc = sqlite3_open_v2(url.path, &db, flags, nil)
@@ -68,7 +73,7 @@ public final class Database: @unchecked Sendable {
                 throw DatabaseError.sqlite(code: SQLITE_ERROR, message: "WAL journal mode unavailable")
             }
             try execute("PRAGMA foreign_keys=ON")
-            try Migrations.run(on: self)
+            try Migrations.apply(on: self, upTo: version)
         } catch {
             sqlite3_close(db)
             handle = nil

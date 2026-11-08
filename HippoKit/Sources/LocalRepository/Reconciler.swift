@@ -38,19 +38,21 @@ public final class Reconciler: Sendable {
         removeAbandonedStaging(into: &report)
 
         // Drop rows whose package is gone, so the walk below can re-register a package that came back.
-        for row in (try? index.indexedDirectories()) ?? []
-        where !FileManager.default.fileExists(atPath: layout.packageURL(relativeDirectory: row.relativeDirectory).path) {
-            do {
-                try index.remove(captureID: row.captureID)
-                report.orphanedIndexRows += 1
-            } catch { itemFailed(&report) }
-        }
+        do {
+            for row in try index.indexedDirectories()
+            where !FileManager.default.fileExists(atPath: layout.packageURL(relativeDirectory: row.relativeDirectory).path) {
+                do {
+                    try index.remove(captureID: row.captureID)
+                    report.orphanedIndexRows += 1
+                } catch { itemFailed(&report) }
+            }
+        } catch { itemFailed(&report) }
 
         let indexed: Set<String>
         do { indexed = Set(try index.indexedDirectories().map(\.captureID)) } catch { itemFailed(&report); indexed = [] }
         for directory in packageDirectories() where !indexed.contains(directory.lastPathComponent) {
-            guard case .complete = PackageValidator.validate(directory: directory),
-                  let package = CommittedPackage.load(directory: directory, layout: layout) else {
+            // `load` validates (hashing the package once) and checks the path.
+            guard let package = CommittedPackage.load(directory: directory, layout: layout) else {
                 report.invalidPackages += 1
                 continue
             }
