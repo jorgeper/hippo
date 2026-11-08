@@ -149,6 +149,18 @@ private func det(_ t: String) -> Detection { Detection(type: "phone", text: t, v
         #expect(f.transcripts["a1"]?.text == "s1" && f.recognizedText["a1"] == "s1" && !f.usesServer)
     }
 
+    @Test func serverOriginPerItem() throws {
+        func t(_ id: String, _ text: String) -> TranscriptItem { TranscriptItem(attachmentID: id, text: text, locale: "en_US", segments: []) }
+        let r = try docs(silver: [.transcript: (.ok, TranscriptData(items: [t("A", "s"), t("B", "s")])),
+                                  .summary: (.ok, SummaryData(text: "s"))],
+                         gold: [.transcript: (.ok, TranscriptData(items: [t("A", "g")])),
+                                .place: (.ok, PlaceData(items: [PlaceItem(target: "capture", locality: "Tacoma")])),
+                                .summary: (.ok, SummaryData(text: ""))])
+        #expect(r.fromServer.transcripts == ["A"])
+        #expect(r.fromServer.places == ["capture"])
+        #expect(!r.fromServer.summary)
+    }
+
     @Test func silverOnlyAndNonOkSilver() throws {
         let only = ResolvedEnrichment.make(device: try enrichmentDoc(.device, facets: [
             .summary: (.ok, SummaryData(text: "s"))]), server: nil, assetURL: assetURL)

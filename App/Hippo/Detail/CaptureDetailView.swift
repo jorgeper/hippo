@@ -85,12 +85,7 @@ struct CaptureDetailView: View {
                 if !detail.captured.isEmpty {
                     Section {
                         ForEach(detail.captured, id: \.label) { row($0) }
-                    } footer: {
-                        if let note = detail.fromServerNote { Text(note) }
                     }
-                }
-                if detail.captured.isEmpty, let note = detail.fromServerNote {
-                    Section { EmptyView() } footer: { Text(note) }
                 }
                 if !detail.attachments.isEmpty {
                     Section("Attachments") {

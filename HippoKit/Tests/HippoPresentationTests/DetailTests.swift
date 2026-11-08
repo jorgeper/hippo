@@ -82,7 +82,7 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         let facts = MediaFacts(embeddedCreatedAt: EmbeddedTimestamp(value: "2026-11-07T10:00:00-08:00", hasUTCOffset: true))
         let place = PlaceItem(target: "a1", locality: "Lisbon", country: "Portugal")
         let d = make(meta(attachments: [att(media: facts)]), enrichment: resolved(places: ["a1": place]))
-        #expect(d.attachments[0].last == DetailRow(label: "Taken in", value: "Lisbon, Portugal"))
+        #expect(d.attachments[0].last == DetailRow(label: "Taken in", value: "Lisbon, Portugal", layer: .silver))
     }
 
     @Test func detailSourceGuessRow() {
@@ -144,9 +144,27 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(d.linkCards.map(\.url) == [a])
     }
 
-    @Test func detailServerNote() {
-        #expect(make(meta(), enrichment: resolved(server: true)).fromServerNote == "Some details come from your server.")
-        #expect(make(meta()).fromServerNote == nil)
+    @Test func layersPerRow() {
+        let loc = CaptureLocation(latitude: 47.6, longitude: -122.3, horizontalAccuracyMeters: 10, observedAt: now, provenance: "t")
+        var e = resolved(places: ["capture": PlaceItem(target: "capture", locality: "Seattle")], guess: "Safari")
+        e.fromServer.places = ["capture"]
+        let d = make(meta(urls: ["https://example.com/x"], location: loc), enrichment: e)
+        let layers = Dictionary(uniqueKeysWithValues: d.captured.map { ($0.label, $0.layer) })
+        #expect(layers == ["When": .bronze, "How": .bronze, "Coordinates": .bronze, "Source": .silver, "Where": .gold])
+
+        let t = { (id: String, s: String) in TranscriptItem(attachmentID: id, text: s, locale: "en_US", segments: []) }
+        var e2 = resolved(transcripts: ["a1": t("a1", "x"), "a2": t("a2", "y")])
+        e2.fromServer.transcripts = ["a1"]
+        let a2 = CaptureCore.Attachment(attachmentID: "a2", relativePath: "content/a2.bin", originalFilename: "b", uti: "public.mpeg-4-audio",
+                                        mimeType: nil, byteCount: 1, sha256: "x", representationSource: "r", media: nil)
+        let d2 = make(meta(attachments: [att(), a2]), enrichment: e2)
+        #expect(d2.transcripts.map(\.layer) == [.gold, .silver])
+        #expect(d2.foundLayer == .silver && d2.summaryLayer == .silver && d2.tagsLayer == .silver)
+
+        var e3 = ResolvedEnrichment.empty
+        e3.fromServer = ServerOrigin(detections: true, summary: true, tags: true)
+        let d3 = make(meta(), enrichment: e3)
+        #expect(d3.foundLayer == .gold && d3.summaryLayer == .gold && d3.tagsLayer == .gold)
     }
 
     @Test func detailTranscriptsTitled() {

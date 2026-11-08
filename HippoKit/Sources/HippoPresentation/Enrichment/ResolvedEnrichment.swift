@@ -19,6 +19,23 @@ public struct ResolvedLink: Equatable, Sendable {
     }
 }
 
+/// Which parts of the resolved result gold supplied. Item keys are attachment IDs (transcripts, recognized
+/// text) or place targets.
+public struct ServerOrigin: Equatable, Sendable {
+    public var places: Set<String>
+    public var transcripts: Set<String>
+    public var recognizedText: Set<String>
+    public var detections: Bool
+    public var sourceApp: Bool
+    public var summary: Bool
+    public var tags: Bool
+    public init(places: Set<String> = [], transcripts: Set<String> = [], recognizedText: Set<String> = [],
+                detections: Bool = false, sourceApp: Bool = false, summary: Bool = false, tags: Bool = false) {
+        self.places = places; self.transcripts = transcripts; self.recognizedText = recognizedText
+        self.detections = detections; self.sourceApp = sourceApp; self.summary = summary; self.tags = tags
+    }
+}
+
 /// Gold over silver over bronze, per item key and per field. A gold field wins only when its facet is `ok`
 /// and the field is present; an empty or failed gold facet never hides silver.
 public struct ResolvedEnrichment: Equatable, Sendable {
@@ -32,6 +49,8 @@ public struct ResolvedEnrichment: Equatable, Sendable {
     public var tags: [String]
     /// Any field came from gold.
     public var usesServer: Bool
+    /// What gold supplied, for the layer stripes. Links carry their own `fromServer`.
+    public var fromServer = ServerOrigin()
 
     public static let empty = ResolvedEnrichment(links: [:], places: [:], recognizedText: [:], transcripts: [:],
                                                  detections: [], sourceAppGuess: nil, summary: nil, tags: [],
@@ -107,37 +126,39 @@ public struct ResolvedEnrichment: Equatable, Sendable {
                 target: t, subLocality: pick(g?.subLocality, s?.subLocality), locality: pick(g?.locality, s?.locality),
                 region: pick(g?.region, s?.region), country: pick(g?.country, s?.country),
                 nearby: nearby)
-            if fromServer { out.usesServer = true }
+            if fromServer { out.usesServer = true; out.fromServer.places.insert(t) }
         }
 
         // Recognized text and transcripts: one item per attachment.
         for i in data(device, .textRecognition, TextRecognitionData.self)?.items ?? [] { out.recognizedText[i.attachmentID] = i.text }
         for i in data(server, .textRecognition, TextRecognitionData.self)?.items ?? [] where blank(i.text) != nil {
             out.recognizedText[i.attachmentID] = i.text; out.usesServer = true
+            out.fromServer.recognizedText.insert(i.attachmentID)
         }
         for i in data(device, .transcript, TranscriptData.self)?.items ?? [] { out.transcripts[i.attachmentID] = i }
         for i in data(server, .transcript, TranscriptData.self)?.items ?? [] where blank(i.text) != nil {
             out.transcripts[i.attachmentID] = i; out.usesServer = true
+            out.fromServer.transcripts.insert(i.attachmentID)
         }
 
         // Single items.
         if let g = data(server, .dataDetection, DataDetectionData.self)?.items, !g.isEmpty {
-            out.detections = g; out.usesServer = true
+            out.detections = g; out.usesServer = true; out.fromServer.detections = true
         } else {
             out.detections = data(device, .dataDetection, DataDetectionData.self)?.items ?? []
         }
         if let g = data(server, .sourceAppGuess, SourceAppGuessData.self), blank(g.app) != nil {
-            out.sourceAppGuess = g.app; out.usesServer = true
+            out.sourceAppGuess = g.app; out.usesServer = true; out.fromServer.sourceApp = true
         } else {
             out.sourceAppGuess = data(device, .sourceAppGuess, SourceAppGuessData.self)?.app
         }
         if let g = data(server, .summary, SummaryData.self), blank(g.text) != nil {
-            out.summary = g.text; out.usesServer = true
+            out.summary = g.text; out.usesServer = true; out.fromServer.summary = true
         } else {
             out.summary = data(device, .summary, SummaryData.self)?.text
         }
         if let g = data(server, .tags, TagsData.self), !g.values.isEmpty {
-            out.tags = g.values; out.usesServer = true
+            out.tags = g.values; out.usesServer = true; out.fromServer.tags = true
         } else {
             out.tags = data(device, .tags, TagsData.self)?.values ?? []
         }
