@@ -111,7 +111,13 @@ public final class LogUploader: Sendable {
             let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
             return size != nil && size != state.files[url.lastPathComponent]
         }.prefix(maxFilesPerPass)
-        guard !candidates.isEmpty else { return LogUploadResult(uploaded: 0) }
+        guard !candidates.isEmpty else {
+            // Nothing changed, but the pass ran: refresh the time the UI shows.
+            state.lastAt = Date()
+            state.lastCode = nil
+            Self.writeState(state, layout)
+            return LogUploadResult(uploaded: 0)
+        }
 
         var uploaded = 0
         var code: String?
@@ -120,7 +126,7 @@ public final class LogUploader: Sendable {
             let directory = "logs/\(installID)"
             try await adapter.ensureContainer(relativePath: directory)
             for url in candidates {
-                if Task.isCancelled { return LogUploadResult(uploaded: uploaded, code: nil) }
+                if Task.isCancelled { break }
                 let name = url.lastPathComponent
                 do {
                     let copy = layout.stagingDir.appendingPathComponent("log-\(UUID().uuidString.lowercased()).jsonl")

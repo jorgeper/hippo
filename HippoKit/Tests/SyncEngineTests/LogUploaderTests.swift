@@ -9,11 +9,14 @@ import FilesystemAdapter
 private struct GrowingAdapter: StorageAdapter {
     let inner: FilesystemAdapter
     let duringReplace: @Sendable (String) -> Void
+    var afterReplace: @Sendable (String) -> Void = { _ in }
 
     var capabilities: StorageCapabilities { inner.capabilities }
     func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
         duringReplace(relativePath)
-        return try await inner.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
+        let receipt = try await inner.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
+        afterReplace(relativePath)
+        return receipt
     }
     func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
         try await inner.listChanges(under: prefix, cursor: cursor)
@@ -33,6 +36,20 @@ private struct GrowingAdapter: StorageAdapter {
                     saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt {
         try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
                                    checkpoint: checkpoint, saveCheckpoint: saveCheckpoint)
+    }
+}
+
+private final class TaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<LogUploadResult, Never>?
+    private var pendingCancel = false
+    func set(_ t: Task<LogUploadResult, Never>) {
+        lock.lock(); task = t; let c = pendingCancel; lock.unlock()
+        if c { t.cancel() }
+    }
+    func cancel() {
+        lock.lock(); pendingCancel = true; let t = task; lock.unlock()
+        t?.cancel()
     }
 }
 
@@ -99,6 +116,34 @@ private struct Setup {
         #expect(second == LogUploadResult(uploaded: 1, code: nil))
         #expect(try Data(contentsOf: s.remote("2026-11-08.jsonl")) == Data(contentsOf: url))
         #expect(try Data(contentsOf: url).count > snapshot.count)
+    }
+
+    @Test func cancelKeepsProgressAlreadyMade() async throws {
+        let s = try Setup(); defer { s.h.cleanup() }
+        try s.write("2026-11-07.jsonl", "{\"a\":1}\n")
+        try s.write("2026-11-08.jsonl", "{\"b\":2}\n")
+        let box = TaskBox()
+        let adapter = GrowingAdapter(inner: s.h.adapter, duringReplace: { _ in }, afterReplace: { _ in box.cancel() })
+        let up = s.uploader(adapter)
+        let task = Task { await up.upload() }
+        box.set(task)
+        #expect(await task.value.uploaded == 1)
+        #expect(FileManager.default.fileExists(atPath: s.remote("2026-11-07.jsonl").path))
+        #expect(!FileManager.default.fileExists(atPath: s.remote("2026-11-08.jsonl").path))
+        // The first file is recorded, so only the second goes up next time.
+        #expect(await s.uploader().upload() == LogUploadResult(uploaded: 1, code: nil))
+    }
+
+    @Test func idlePassRefreshesLastAt() async throws {
+        let s = try Setup(); defer { s.h.cleanup() }
+        try s.write("2026-11-08.jsonl", "{\"a\":1}\n")
+        let up = s.uploader()
+        _ = await up.upload()
+        let first = try #require(LogUploader.lastResult(layout: s.h.layout)).at
+        try await Task.sleep(for: .milliseconds(1100))
+        #expect(await up.upload().uploaded == 0)
+        let second = try #require(LogUploader.lastResult(layout: s.h.layout)).at
+        #expect(second > first)
     }
 
     @Test func respectsMaxFilesPerPass() async throws {
