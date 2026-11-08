@@ -58,6 +58,15 @@ final class HeldAdapter: StorageAdapter {
     func release() { releaseSignal.finish() }
 
     var capabilities: StorageCapabilities { base.capabilities }
+    func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
+        try await base.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
+    }
+    func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
+        try await base.listChanges(under: prefix, cursor: cursor)
+    }
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
+        try await base.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes)
+    }
     func validateDestination() async throws { try await base.validateDestination() }
     func ensureContainer(relativePath: String) async throws { try await base.ensureContainer(relativePath: relativePath) }
     func inspectFile(relativePath: String) async throws -> RemoteFileInfo? {

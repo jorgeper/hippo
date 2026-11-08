@@ -125,4 +125,107 @@ func runAdapterContract(makeAdapter: () async throws -> any StorageAdapter, scra
         }
         #expect(try await adapter.inspectFile(relativePath: pathC) == nil)
     }
+
+    try await runReplaceListDownloadContract(adapter: adapter, scratch: scratch)
+}
+
+private func runReplaceListDownloadContract(adapter: any StorageAdapter, scratch: URL) async throws {
+    let ignore: @Sendable (UploadCheckpoint) async throws -> Void = { _ in }
+
+    // Replace: second content wins under enrichments/.
+    let enrichPath = "enrichments/device/2026/11/07/abc/enrichment.json"
+    let (r1, r1Int) = try makeFile(scratch, "r1.bin", bytes: 300, seed: 11)
+    let (r2, r2Int) = try makeFile(scratch, "r2.bin", bytes: 450, seed: 12)
+    _ = try await adapter.replaceFile(localURL: r1, relativePath: enrichPath, expected: r1Int)
+    let second = try await adapter.replaceFile(localURL: r2, relativePath: enrichPath, expected: r2Int)
+    #expect(second.relativePath == enrichPath)
+    #expect(second.byteCount == r2Int.byteCount)
+    let replaced = try #require(try await adapter.inspectFile(relativePath: enrichPath))
+    #expect(replaced.byteCount == r2Int.byteCount)
+    #expect(try await adapter.verify(remote: replaced, localURL: r2, expected: r2Int) != nil)
+
+    // Replace is refused outside enrichments/.
+    do {
+        _ = try await adapter.replaceFile(localURL: r1, relativePath: "captures/2026/11/07/abc/x.bin", expected: r1Int)
+        Issue.record("expected replace_not_allowed")
+    } catch let e as StorageError {
+        #expect(e == .permanent(code: "replace_not_allowed"))
+    }
+
+    // List changes.
+    let (s1, s1Int) = try makeFile(scratch, "s1.bin", bytes: 100, seed: 21)
+    let (s2, s2Int) = try makeFile(scratch, "s2.bin", bytes: 110, seed: 22)
+    let (s3, s3Int) = try makeFile(scratch, "s3.bin", bytes: 120, seed: 23)
+    let (s1b, s1bInt) = try makeFile(scratch, "s1b.bin", bytes: 130, seed: 24)
+    let p1 = "enrichments/server/2026/11/07/one/enrichment.json"
+    let p2 = "enrichments/server/2026/11/07/two/enrichment.json"
+    let p3 = "enrichments/server/2026/11/08/three/enrichment.json"
+    _ = try await adapter.uploadFile(localURL: s1, relativePath: p1, expected: s1Int, checkpoint: nil, saveCheckpoint: ignore)
+    _ = try await adapter.uploadFile(localURL: s2, relativePath: p2, expected: s2Int, checkpoint: nil, saveCheckpoint: ignore)
+
+    let first = try await adapter.listChanges(under: "enrichments/server/", cursor: nil)
+    #expect(Set(first.changes.map(\.upsertedPath)) == [p1, p2])
+    #expect(first.changes.count == 2)
+    #expect(!first.cursor.isEmpty)
+    var cursor = first.cursor
+    var page = first
+    while page.hasMore {
+        page = try await adapter.listChanges(under: "enrichments/server/", cursor: cursor)
+        cursor = page.cursor
+    }
+
+    _ = try await adapter.replaceFile(localURL: s1b, relativePath: p1, expected: s1bInt)
+    _ = try await adapter.uploadFile(localURL: s3, relativePath: p3, expected: s3Int, checkpoint: nil, saveCheckpoint: ignore)
+    let delta = try await adapter.listChanges(under: "enrichments/server/", cursor: cursor)
+    #expect(delta.changes.count == 2)
+    #expect(Set(delta.changes.map(\.upsertedPath)) == [p1, p3])
+    #expect(!delta.hasMore)
+
+    let quiet = try await adapter.listChanges(under: "enrichments/server/", cursor: delta.cursor)
+    #expect(quiet.changes.isEmpty)
+
+    do {
+        _ = try await adapter.listChanges(under: "enrichments/server/", cursor: "garbage")
+        Issue.record("expected cursorReset")
+    } catch let e as StorageError {
+        #expect(e == .cursorReset)
+    }
+
+    // Download.
+    let (d, dInt) = try makeFile(scratch, "d.bin", bytes: 1000, seed: 31)
+    let pathD = "enrichments/server/2026/11/07/dl/asset.bin"
+    _ = try await adapter.uploadFile(localURL: d, relativePath: pathD, expected: dInt, checkpoint: nil, saveCheckpoint: ignore)
+    let dest = scratch.appendingPathComponent("downloaded.bin")
+    let got = try await adapter.downloadFile(relativePath: pathD, to: dest, maxBytes: 5000)
+    #expect(got.byteCount == dInt.byteCount)
+    #expect(got.relativePath == pathD)
+    let downloaded = try Data(contentsOf: dest)
+    #expect(SHA256.hash(data: downloaded).map { String(format: "%02x", $0) }.joined() == dInt.sha256)
+
+    let small = scratch.appendingPathComponent("small.bin")
+    do {
+        _ = try await adapter.downloadFile(relativePath: pathD, to: small, maxBytes: 10)
+        Issue.record("expected too_large")
+    } catch let e as StorageError {
+        #expect(e == .permanent(code: "too_large"))
+    }
+    #expect(!FileManager.default.fileExists(atPath: small.path))
+
+    let missing = scratch.appendingPathComponent("missing.bin")
+    do {
+        _ = try await adapter.downloadFile(relativePath: "enrichments/server/nope.bin", to: missing, maxBytes: 5000)
+        Issue.record("expected not_found")
+    } catch let e as StorageError {
+        #expect(e == .permanent(code: "not_found"))
+    }
+    #expect(!FileManager.default.fileExists(atPath: missing.path))
+}
+
+private extension RemoteChange {
+    var upsertedPath: String {
+        switch self {
+        case .upserted(let info): info.relativePath
+        case .deleted(let path): "deleted:\(path)"
+        }
+    }
 }

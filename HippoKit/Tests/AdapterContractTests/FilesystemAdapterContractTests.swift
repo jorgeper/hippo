@@ -42,6 +42,22 @@ private final class Box: @unchecked Sendable {
         try await runAdapterContract(makeAdapter: { FilesystemAdapter(root: root) }, scratch: scratch)
     }
 
+    @Test func deletedFilesAreReported() async throws {
+        let root = try tempDir(), scratch = try tempDir()
+        let adapter = FilesystemAdapter(root: root)
+        let (url, integrity, _) = try write(scratch, "g.bin", bytes: 64)
+        let path = "enrichments/server/2026/11/07/gone/enrichment.json"
+        _ = try await adapter.uploadFile(localURL: url, relativePath: path, expected: integrity,
+                                         checkpoint: nil, saveCheckpoint: { _ in })
+        let first = try await adapter.listChanges(under: "enrichments/server/", cursor: nil)
+        #expect(first.changes.count == 1)
+        try FileManager.default.removeItem(at: root.appendingPathComponent(path))
+        let next = try await adapter.listChanges(under: "enrichments/server/", cursor: first.cursor)
+        #expect(next.changes == [.deleted(relativePath: path)])
+        let quiet = try await adapter.listChanges(under: "enrichments/server/", cursor: next.cursor)
+        #expect(quiet.changes.isEmpty)
+    }
+
     @Test func faultWriteButThrowLeavesFileForInspection() async throws {
         let root = try tempDir(), scratch = try tempDir()
         let faults = FaultPlan()

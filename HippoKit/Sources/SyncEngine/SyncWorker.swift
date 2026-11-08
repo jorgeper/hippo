@@ -236,6 +236,7 @@ public final class SyncWorker: Sendable {
         case .transient(let code): Failure(state: .retryableFailure, code: "transient:\(code)")
         case .rateLimited(let retryAfter): Failure(state: .retryableFailure, code: "rate_limited", retryAfter: retryAfter)
         case .checkpointExpired: Failure(state: .retryableFailure, code: "checkpoint_expired")
+        case .cursorReset: Failure(state: .retryableFailure, code: "cursor_reset")
         case .needsAuthentication: Failure(state: .needsAuthentication, code: "needs_authentication")
         case .quotaExceeded: Failure(state: .blocked, code: "quota_exceeded")
         case .conflict: Failure(state: .blocked, code: "remote_conflict")

@@ -137,6 +137,140 @@ public struct FilesystemAdapter: StorageAdapter {
                              evidence: VerificationEvidence(kind: "sha256", value: digest.sha256))
     }
 
+    // MARK: - Replace, list changes, download
+
+    public func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
+        faults.record("replace \(relativePath)")
+        let finalURL = try resolve(relativePath)
+        guard relativePath.hasPrefix("enrichments/") else { throw StorageError.permanent(code: "replace_not_allowed") }
+        try Task.checkCancellation()
+        let fm = FileManager.default
+        let tempURL = root.appendingPathComponent(".tmp-\(UUID().uuidString.lowercased())")
+        defer { try? fm.removeItem(at: tempURL) }
+        let digest: FileDigest
+        do {
+            try fm.copyItem(at: localURL, to: tempURL)
+            digest = try StreamingHasher.digest(of: tempURL)
+        } catch let e as CocoaError where e.code == .fileNoSuchFile || e.code == .fileReadNoSuchFile {
+            throw StorageError.permanent(code: "local_file_missing")
+        } catch {
+            throw StorageError.transient(code: "io_error")
+        }
+        guard digest.byteCount == expected.byteCount, digest.sha256 == expected.sha256 else {
+            throw StorageError.permanent(code: "integrity_mismatch")
+        }
+        do {
+            try fm.createDirectory(at: finalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: finalURL.path) {
+                _ = try fm.replaceItemAt(finalURL, withItemAt: tempURL)
+            } else {
+                try fm.moveItem(at: tempURL, to: finalURL)
+            }
+        } catch {
+            throw StorageError.transient(code: "replace_failed")
+        }
+        return UploadReceipt(relativePath: relativePath, byteCount: digest.byteCount,
+                             evidence: VerificationEvidence(kind: "sha256", value: digest.sha256))
+    }
+
+    private struct Snapshot: Codable {
+        var prefix: String
+        var files: [String: Entry]
+        struct Entry: Codable, Equatable { var size: Int64; var mtime: Double }
+    }
+
+    private var cursorDirectory: URL { root.appendingPathComponent(".hippo-cursors") }
+
+    public func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
+        faults.record("list \(prefix)")
+        guard !prefix.hasPrefix("/"), !prefix.contains("\\"), !prefix.contains("\0"),
+              !prefix.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0 == ".." || $0 == "." })
+        else { throw StorageError.permanent(code: "invalid_path") }
+
+        var previous: Snapshot?
+        if let cursor {
+            guard cursor.utf8.count <= 4096, UUID(uuidString: cursor) != nil,
+                  let data = try? Data(contentsOf: cursorDirectory.appendingPathComponent("\(cursor).json")),
+                  let snap = try? JSONDecoder().decode(Snapshot.self, from: data), snap.prefix == prefix else {
+                throw StorageError.cursorReset
+            }
+            previous = snap
+        }
+
+        let current = Snapshot(prefix: prefix, files: try scan(prefix: prefix))
+        let id = UUID().uuidString.lowercased()
+        do {
+            try FileManager.default.createDirectory(at: cursorDirectory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(current).write(to: cursorDirectory.appendingPathComponent("\(id).json"), options: .atomic)
+        } catch {
+            throw StorageError.transient(code: "cursor_write_failed")
+        }
+
+        var changes: [RemoteChange] = []
+        for path in current.files.keys.sorted() where previous?.files[path] != current.files[path] {
+            if let info = try info(path) { changes.append(.upserted(info)) }
+        }
+        if let previous {
+            for path in previous.files.keys.sorted() where current.files[path] == nil {
+                changes.append(.deleted(relativePath: path))
+            }
+        }
+        return ChangePage(changes: changes, cursor: id, hasMore: false)
+    }
+
+    private func scan(prefix: String) throws -> [String: Snapshot.Entry] {
+        let fm = FileManager.default
+        let dirPart = prefix.contains("/") ? String(prefix[..<prefix.lastIndex(of: "/")!]) : ""
+        let start = dirPart.isEmpty ? root : try resolve(dirPart)
+        var result: [String: Snapshot.Entry] = [:]
+        guard let walker = fm.enumerator(at: start, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+                                         options: [.skipsHiddenFiles]) else { return result }
+        let basePath = root.resolvingSymlinksInPath().path
+        for case let url as URL in walker {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
+            if values?.isDirectory == true { continue }
+            let full = url.resolvingSymlinksInPath().path
+            guard full.hasPrefix(basePath + "/") else { continue }
+            let rel = String(full.dropFirst(basePath.count + 1))
+            guard rel.hasPrefix(prefix), !rel.split(separator: "/").contains(where: { $0.hasPrefix(".") }) else { continue }
+            result[rel] = Snapshot.Entry(size: Int64(values?.fileSize ?? 0),
+                                         mtime: values?.contentModificationDate?.timeIntervalSince1970 ?? 0)
+        }
+        return result
+    }
+
+    public func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
+        faults.record("download \(relativePath)")
+        let url = try resolve(relativePath)
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else {
+            throw StorageError.permanent(code: "not_found")
+        }
+        let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? nil
+        guard let size else { throw StorageError.transient(code: "read_failed") }
+        guard size <= maxBytes else { throw StorageError.permanent(code: "too_large") }
+        try Task.checkCancellation()
+        do {
+            try? fm.removeItem(at: localURL)
+            try fm.copyItem(at: url, to: localURL)
+        } catch {
+            try? fm.removeItem(at: localURL)
+            throw StorageError.transient(code: "io_error")
+        }
+        let digest: FileDigest
+        do { digest = try StreamingHasher.digest(of: localURL) } catch {
+            try? fm.removeItem(at: localURL)
+            throw StorageError.transient(code: "read_failed")
+        }
+        if digest.byteCount > maxBytes {
+            try? fm.removeItem(at: localURL)
+            throw StorageError.permanent(code: "too_large")
+        }
+        return RemoteFileInfo(relativePath: relativePath, byteCount: digest.byteCount,
+                              providerHash: ProviderHash(algorithm: "sha256", value: digest.sha256))
+    }
+
     // MARK: - Helpers
 
     private func info(_ relativePath: String) throws -> RemoteFileInfo? {
