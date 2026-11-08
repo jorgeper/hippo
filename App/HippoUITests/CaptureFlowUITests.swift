@@ -62,8 +62,8 @@ final class CaptureFlowUITests: XCTestCase {
         XCTAssertEqual(result, .completed, "row still present")
     }
 
-    /// Needs microphone permission pre-granted (e.g. `xcrun simctl privacy booted grant microphone <bundle id>`),
-    /// then `HIPPO_UITEST_MIC_GRANTED=1` in the test environment; otherwise the system alert blocks the flow.
+    /// `make uitest` grants the microphone via simctl and sets HIPPO_UITEST_MIC_GRANTED=1 (forwarded with the
+    /// TEST_RUNNER_ prefix); without it the system permission alert would block the flow, so the test skips.
     func testRecordStartsImmediately() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["HIPPO_UITEST_MIC_GRANTED"] == "1",
                           "microphone permission is not pre-granted")

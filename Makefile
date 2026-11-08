@@ -23,4 +23,6 @@ diagnostics:
 # UI smoke tests in the iOS Simulator.
 uitest:
 	xcodegen generate
-	xcodebuild test -project Hippo.xcodeproj -scheme Hippo -destination 'platform=iOS Simulator,name=$(or $(HIPPO_SIM),iPhone 18 Pro)' -derivedDataPath build/DerivedData
+	xcrun simctl boot '$(or $(HIPPO_SIM),iPhone 18 Pro)' || true
+	xcrun simctl privacy '$(or $(HIPPO_SIM),iPhone 18 Pro)' grant microphone com.jorgeper.hippo || true
+	xcodebuild test -project Hippo.xcodeproj -scheme Hippo -destination 'platform=iOS Simulator,name=$(or $(HIPPO_SIM),iPhone 18 Pro)' -derivedDataPath build/DerivedData TEST_RUNNER_HIPPO_UITEST_MIC_GRANTED=1
