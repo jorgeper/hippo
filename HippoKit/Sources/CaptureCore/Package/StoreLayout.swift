@@ -12,6 +12,8 @@ public struct StoreLayout: Sendable {
     public var capturesDir: URL { root.appendingPathComponent("captures", isDirectory: true) }
     public var databaseURL: URL { root.appendingPathComponent("hippo.sqlite") }
     public var diagnosticsURL: URL { root.appendingPathComponent("diagnostics.json") }
+    /// The event log: `logs/YYYY-MM-DD[.N].jsonl` plus bookkeeping. Never inside `captures/` or `enrichments/`.
+    public var logsDir: URL { root.appendingPathComponent("logs", isDirectory: true) }
 
     /// Local silver and gold, outside the packages: `enrichments/<layer>/<capture-id>/`.
     public var enrichmentsDir: URL { root.appendingPathComponent("enrichments", isDirectory: true) }

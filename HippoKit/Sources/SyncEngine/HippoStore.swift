@@ -24,7 +24,7 @@ public final class HippoStore: Sendable {
     static let leasePollInterval: Duration = .milliseconds(100)
 
     /// Messages are fixed category strings only: never IDs, paths or error descriptions.
-    private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "store")
+    private static let osLog = Logger(subsystem: "com.jorgeper.hippo", category: "store")
 
     public let layout: StoreLayout
     public let index: CaptureIndex
@@ -34,11 +34,14 @@ public final class HippoStore: Sendable {
     public let enrichments: EnrichmentStore
     /// Silver enrichment work per (capture, kind).
     public let enrichmentTasks: EnrichmentTaskStore
+    /// The content-free event log, in `logs/` beside the store. Shared by the app and the extension.
+    public let log: ActivityLog
     private let db: Database
     private let writer: PackageWriter
     private let leaseWaitLimit: Duration
 
-    private init(layout: StoreLayout, db: Database, producer: Producer, leaseWaitLimit: Duration) {
+    private init(layout: StoreLayout, db: Database, producer: Producer, process: LogProcess,
+                 leaseWaitLimit: Duration) {
         self.layout = layout
         self.db = db
         self.leaseWaitLimit = leaseWaitLimit
@@ -48,21 +51,24 @@ public final class HippoStore: Sendable {
         enrichments = EnrichmentStore(db: db, layout: layout)
         enrichmentTasks = EnrichmentTaskStore(db: db)
         writer = PackageWriter(layout: layout, producer: producer)
+        log = ActivityLog(layout: layout, process: process)
     }
 
     /// Opens (creating if needed) the store at `root`. Does not run recovery: call `recover()` at launch.
-    public static func open(root: URL, producer: Producer) throws -> HippoStore {
-        try open(root: root, producer: producer, leaseWaitLimit: defaultLeaseWaitLimit)
+    /// `process` says who writes this store's log lines: the app or the share extension.
+    public static func open(root: URL, producer: Producer, process: LogProcess = .app) throws -> HippoStore {
+        try open(root: root, producer: producer, process: process, leaseWaitLimit: defaultLeaseWaitLimit)
     }
 
     /// `leaseWaitLimit` is shortened only by tests.
-    static func open(root: URL, producer: Producer, leaseWaitLimit: Duration) throws -> HippoStore {
+    static func open(root: URL, producer: Producer, process: LogProcess = .app,
+                     leaseWaitLimit: Duration) throws -> HippoStore {
         let layout = StoreLayout(root: root)
         for dir in [root, layout.stagingDir, layout.capturesDir] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return HippoStore(layout: layout, db: try Database(url: layout.databaseURL), producer: producer,
-                          leaseWaitLimit: leaseWaitLimit)
+                          process: process, leaseWaitLimit: leaseWaitLimit)
     }
 
     /// Startup recovery (spec §4), then the enrichment steps (design §6.2, §9): enrichment staging
@@ -72,10 +78,10 @@ public final class HippoStore: Sendable {
     public func recover() throws -> RecoveryReport {
         let report = try Reconciler(layout: layout, index: index, jobs: jobs, destinations: destinations).run()
         do { _ = try enrichments.sweep(removingOrphans: report.failed == 0) } catch {
-            Self.log.error("\("recover_enrichment_sweep_failed", privacy: .public)")
+            Self.osLog.error("\("recover_enrichment_sweep_failed", privacy: .public)")
         }
         do { _ = try enrichments.reconcileIndex() } catch {
-            Self.log.error("\("recover_enrichment_reindex_failed", privacy: .public)")
+            Self.osLog.error("\("recover_enrichment_reindex_failed", privacy: .public)")
         }
         return report
     }
@@ -85,19 +91,38 @@ public final class HippoStore: Sendable {
     /// not reported (only logged, as a fixed category), and the next `recover()` registers and binds
     /// the package.
     public func capture(_ d: CaptureDraft, partialPolicy: PartialPolicy = .rejectPartial) async throws -> CommittedPackage {
-        let package = try await writer.commit(d, partialPolicy: partialPolicy)
+        let package: CommittedPackage
+        do {
+            package = try await writer.commit(d, partialPolicy: partialPolicy)
+        } catch {
+            log.append(LogEvent(event: .captureSaveFailed, code: Self.saveFailureCode(error)))
+            throw error
+        }
+        log.append(LogEvent(event: .captureSaved, captureID: package.metadata.captureID,
+                            trigger: package.metadata.captureMethod.rawValue))
         do {
             _ = try index.register(package, noteBody: package.noteBody())
         } catch {
-            Self.log.error("\("register_failed", privacy: .public)")
+            Self.osLog.error("\("register_failed", privacy: .public)")
             return package
         }
         do {
             try jobs.enqueueIfActive(captureID: package.metadata.captureID)
         } catch {
-            Self.log.error("\("enqueue_failed", privacy: .public)")
+            Self.osLog.error("\("enqueue_failed", privacy: .public)")
         }
         return package
+    }
+
+    /// A fixed name for the error's case, never its payload (paths, file names, byte counts).
+    private static func saveFailureCode(_ error: Error) -> String {
+        switch error as? CaptureError {
+        case .insufficientSpace: "insufficient_space"
+        case .attachmentsFailed: "attachments_failed"
+        case .emptyCapture: "empty_capture"
+        case .io: "io"
+        case nil: "unknown"
+        }
     }
 
     /// A sync worker over this store's database and files, with the default retry policy and clock.
@@ -166,13 +191,14 @@ public final class HippoStore: Sendable {
         }
         try index.remove(captureID: captureID)
         removed = true
+        log.append(LogEvent(event: .captureDeleted, captureID: captureID))
         // Without the index row these are orphans, and the next recover() sweeps whatever is left.
         do { try enrichments.removeAll(captureID: captureID) } catch {
-            Self.log.error("\("delete_enrichment_cleanup_failed", privacy: .public)")
+            Self.osLog.error("\("delete_enrichment_cleanup_failed", privacy: .public)")
         }
         // The capture is already deleted from the user's point of view. Another process's recover()
         // may be sweeping the directory at the same time, and the next recover() finishes it anyway.
-        do { try Self.removeIfPresent(staged) } catch { Self.log.error("\("delete_cleanup_failed", privacy: .public)") }
+        do { try Self.removeIfPresent(staged) } catch { Self.osLog.error("\("delete_cleanup_failed", privacy: .public)") }
         return DeletionResult(wasSynced: wasSynced, hadActiveUpload: hadActiveUpload)
     }
 

@@ -107,7 +107,7 @@ public enum Diagnostics {
     }
 
     /// `code` if it matches `^[a-z0-9_:.-]{1,64}$`, otherwise "unrecognized".
-    static func safeCode(_ code: String) -> String {
+    public static func safeCode(_ code: String) -> String {
         let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789_:.-".utf8)
         let bytes = code.utf8
         return (1...64).contains(bytes.count) && bytes.allSatisfy(allowed.contains) ? code : unrecognizedCode

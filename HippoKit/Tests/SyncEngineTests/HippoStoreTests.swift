@@ -601,3 +601,38 @@ private func enrichmentDocument(_ pkg: CommittedPackage, _ layer: EnrichmentLaye
                               generatedAt: Date(timeIntervalSince1970: 1_800_000_000),
                               facets: [FacetKind.summary.rawValue: facet])
 }
+
+@Suite struct HippoStoreLogTests {
+    @Test func captureLogsSaved() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.urlDraft())
+        let events = t.store.log.events(captureID: pkg.metadata.captureID.description, from: Date().addingTimeInterval(-86_400))
+        #expect(events.map(\.event) == [.captureSaved])
+        #expect(events.first?.trigger == "share_extension")
+        #expect(events.first?.proc == .app)
+
+        let share = try HippoStore.open(root: t.root, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"),
+                                        process: .share)
+        let pkg2 = try await share.capture(t.urlDraft("https://example.com/b"))
+        #expect(share.log.events(captureID: pkg2.metadata.captureID.description, from: Date().addingTimeInterval(-86_400)).first?.proc == .share)
+    }
+
+    @Test func deleteLogsDeleted() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.urlDraft())
+        let id = pkg.metadata.captureID
+        _ = try await t.store.delete(captureID: id)
+        let events = t.store.log.events(captureID: id, from: Date().addingTimeInterval(-86_400))
+        #expect(events.map(\.event) == [.captureSaved, .captureDeleted])
+    }
+
+    @Test func failedCommitLogsGlobalSaveFailed() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let empty = CaptureDraft(captureID: UUID(), startedAt: Date(), timeZone: TimeZone(identifier: "UTC")!,
+                                 method: .shareExtension)
+        await #expect(throws: CaptureError.emptyCapture) { try await t.store.capture(empty) }
+        let globals = t.store.log.globalEvents(limit: 10, before: nil)
+        #expect(globals.map(\.event) == [.captureSaveFailed])
+        #expect(globals.first?.code == "empty_capture")
+    }
+}
