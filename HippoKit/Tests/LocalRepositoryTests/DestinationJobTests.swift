@@ -240,11 +240,112 @@ private struct Stores {
 
         let reclaimed = try #require(try s.jobs.claimNext(owner: "w2", now: t0.addingTimeInterval(41), lease: 30))
         #expect(reclaimed.jobID == job.jobID)
-        #expect(reclaimed.attemptCount == 0)
+        #expect(reclaimed.attemptCount == 1)  // the expired lease counts as a crashed attempt
         #expect(try s.lease(job.jobID) == ("w2", 1_800_000_071_000))
         #expect(try s.jobs.renewLease(jobID: job.jobID, owner: "w1", now: t0.addingTimeInterval(42), lease: 30) == false)
         #expect(throws: JobError.leaseLost) { try s.jobs.markSynced(jobID: job.jobID, owner: "w1") }
         try s.jobs.markSynced(jobID: job.jobID, owner: "w2")
+    }
+
+    @Test func expiredLeaseReclaimCountsAttempt() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        let id = try await s.capture()
+
+        let job = try #require(try s.jobs.claimNext(owner: "w1", now: t0, lease: 30))
+        #expect(job.attemptCount == 0)
+        let reclaimed = try #require(try s.jobs.claimNext(owner: "w2", now: t0.addingTimeInterval(31), lease: 30))
+        #expect(reclaimed.jobID == job.jobID)
+        #expect(reclaimed.state == .uploading)
+        #expect(reclaimed.attemptCount == 1)
+        #expect(reclaimed.lastErrorCode == "lease_expired")
+        #expect(try s.jobs.jobs(captureID: id)[0] == reclaimed)
+        #expect(try s.lease(job.jobID) == ("w2", 1_800_000_061_000))
+    }
+
+    @Test func thirdExpiredReclaimBacksOff() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        let id = try await s.capture("crashes")
+        let backoff: @Sendable (Int) -> TimeInterval = { _ in 600 }
+
+        let job = try #require(try s.jobs.claimNext(owner: "w", now: t0, lease: 30, reclaimDelay: backoff))
+        var now = t0
+        for expected in 1...2 {
+            now = now.addingTimeInterval(31)
+            let again = try #require(try s.jobs.claimNext(owner: "w", now: now, lease: 30, reclaimDelay: backoff))
+            #expect(again.jobID == job.jobID)
+            #expect(again.attemptCount == expected)
+        }
+        // Another job, due but ordered after the crashing one, is claimed in the same call.
+        let other = try await s.capture("healthy")
+        let otherJobID = try s.jobs.jobs(captureID: other)[0].jobID
+        try s.h.db.execute("UPDATE jobs SET state = 'retryable_failure', next_attempt_at_ms = ? WHERE job_id = ?",
+                           [.int(1_800_000_000_000), .text(otherJobID)])
+
+        now = now.addingTimeInterval(31)
+        #expect(try s.jobs.claimNext(owner: "w", now: now, lease: 30, reclaimDelay: backoff)?.jobID == otherJobID)
+        try s.jobs.markSynced(jobID: otherJobID, owner: "w")
+        let parked = try s.jobs.jobs(captureID: id)[0]
+        #expect(parked.state == .retryableFailure)
+        #expect(parked.attemptCount == 3)
+        #expect(parked.lastErrorCode == "lease_expired")
+        #expect(parked.nextAttemptAt == now.addingTimeInterval(600))
+        #expect(try s.lease(job.jobID) == (nil, nil))
+
+        #expect(try s.jobs.claimNext(owner: "w", now: now, lease: 30, reclaimDelay: backoff) == nil)
+        let retried = try #require(try s.jobs.claimNext(owner: "w", now: now.addingTimeInterval(600), lease: 30,
+                                                        reclaimDelay: backoff))
+        #expect(retried.jobID == job.jobID)
+        #expect(retried.attemptCount == 3)
+    }
+
+    @Test func defaultReclaimDelayDoublesUpToSixHours() {
+        #expect(JobStore.defaultReclaimDelay(1) == 30)
+        #expect(JobStore.defaultReclaimDelay(3) == 120)
+        #expect(JobStore.defaultReclaimDelay(10) == 15_360)
+        #expect(JobStore.defaultReclaimDelay(11) == 21_600)
+        #expect(JobStore.defaultReclaimDelay(40) == 21_600)
+    }
+
+    @Test func clearCancelRevivesJobPausedByCancel() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        let id = try await s.capture()
+        let job = try #require(try s.jobs.claimNext(owner: "w", now: t0, lease: 60))
+        try s.jobs.requestCancel(captureID: id)
+        try s.jobs.markFailed(jobID: job.jobID, owner: "w", state: .paused, errorCode: "cancelled", nextAttemptAt: nil)
+        #expect(try s.jobs.claimNext(owner: "w", now: t0, lease: 60) == nil)
+
+        try s.jobs.clearCancel(captureID: id)
+        let revived = try s.jobs.jobs(captureID: id)[0]
+        #expect(revived.state == .pending)
+        #expect(revived.nextAttemptAt == nil)
+        #expect(revived.cancelRequested == false)
+        #expect(try s.jobs.claimNext(owner: "w", now: t0, lease: 60)?.jobID == job.jobID)
+    }
+
+    @Test func clearCancelLeavesOtherPausedJobsPaused() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        let id = try await s.capture()
+        let job = try #require(try s.jobs.claimNext(owner: "w", now: t0, lease: 60))
+        try s.jobs.markFailed(jobID: job.jobID, owner: "w", state: .paused, errorCode: "destination_inactive",
+                              nextAttemptAt: nil)
+        try s.jobs.requestCancel(captureID: id)
+
+        try s.jobs.clearCancel(captureID: id)
+        let kept = try s.jobs.jobs(captureID: id)[0]
+        #expect(kept.state == .paused)
+        #expect(kept.cancelRequested == false)
+    }
+
+    @Test func destinationByID() throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        let a = destination("dest-a", account: "a")
+        _ = try s.destinations.connect(a)
+        #expect(try s.destinations.destination(id: "dest-a") == a)
+        #expect(try s.destinations.destination(id: "unknown") == nil)
     }
 
     @Test func activeLeaseExistsOnlyWhileUploadingUnderAnUnexpiredLease() async throws {

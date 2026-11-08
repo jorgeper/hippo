@@ -85,6 +85,7 @@ public final class HippoStore: Sendable {
     }
 
     /// A sync worker over this store's database and files, with the default retry policy and clock.
+    /// `owner` is a prefix (e.g. "app"); the worker's `leaseOwner` makes it unique per worker.
     public func makeWorker(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
                            owner: String) -> SyncWorker {
         SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index, adapterFor: adapterFor,

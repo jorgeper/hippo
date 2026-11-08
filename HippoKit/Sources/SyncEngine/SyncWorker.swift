@@ -28,7 +28,9 @@ public final class SyncWorker: Sendable {
     private let destinations: DestinationStore
     private let index: CaptureIndex
     private let adapterFor: @Sendable (Destination) throws -> any StorageAdapter
-    private let owner: String
+    /// The lease owner for every job this worker claims: the `owner` prefix plus a per-instance UUID,
+    /// so two workers with the same prefix (e.g. two app passes) never share a lease.
+    public let leaseOwner: String
     private let policy: RetryPolicy
     private let now: @Sendable () -> Date
     private let random: @Sendable () -> Double
@@ -42,7 +44,7 @@ public final class SyncWorker: Sendable {
         self.destinations = destinations
         self.index = index
         self.adapterFor = adapterFor
-        self.owner = owner
+        self.leaseOwner = "\(owner)#\(UUID().uuidString.lowercased())"
         self.policy = policy
         self.now = now
         self.random = random
@@ -58,7 +60,9 @@ public final class SyncWorker: Sendable {
         while claimed < maxJobs, !Task.isCancelled {
             let next: UploadJob?
             do {
-                next = try jobs.claimNext(owner: owner, now: now(), lease: Self.lease)
+                next = try jobs.claimNext(owner: leaseOwner, now: now(), lease: Self.lease, reclaimDelay: { [policy, random] in
+                    policy.delay(attempt: $0, retryAfter: nil, random: random)
+                })
             } catch {
                 // A claim that fails is not "nothing to do".
                 result.idle = false
@@ -92,7 +96,7 @@ public final class SyncWorker: Sendable {
     private func process(_ job: UploadJob) async -> Outcome {
         do {
             try await upload(job)
-            try jobs.markSynced(jobID: job.jobID, owner: owner)
+            try jobs.markSynced(jobID: job.jobID, owner: leaseOwner)
             return .synced
         } catch is CancellationError {
             return .stopped
@@ -154,7 +158,7 @@ public final class SyncWorker: Sendable {
         try Task.checkCancellation()
         guard let current = try jobs.job(jobID: job.jobID) else { throw JobError.notFound }
         if current.cancelRequested { throw Failure(state: .paused, code: "cancelled") }
-        guard try jobs.renewLease(jobID: job.jobID, owner: owner, now: now(), lease: Self.lease) else {
+        guard try jobs.renewLease(jobID: job.jobID, owner: leaseOwner, now: now(), lease: Self.lease) else {
             throw JobError.leaseLost
         }
 
@@ -168,7 +172,7 @@ public final class SyncWorker: Sendable {
             return
         }
 
-        let (jobs, jobID, owner, now) = (self.jobs, job.jobID, self.owner, self.now)
+        let (jobs, jobID, owner, now) = (self.jobs, job.jobID, leaseOwner, self.now)
         var checkpoint = try jobs.checkpoint(jobID: jobID, relativePath: path).map(UploadCheckpoint.init(opaque:))
         var restarted = false
         while true {
@@ -218,7 +222,7 @@ public final class SyncWorker: Sendable {
                                                     random: random))
             : nil
         do {
-            try jobs.markFailed(jobID: job.jobID, owner: owner, state: failure.state, errorCode: failure.code,
+            try jobs.markFailed(jobID: job.jobID, owner: leaseOwner, state: failure.state, errorCode: failure.code,
                                 nextAttemptAt: next)
             return .failed
         } catch {

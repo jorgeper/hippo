@@ -57,7 +57,8 @@ public final class PackageWriter: Sendable {
         self.layout = layout; self.producer = producer; self.space = space; self.makeID = makeID
     }
 
-    public func commit(_ draft: CaptureDraft, partialPolicy: PartialPolicy = .rejectPartial) async throws -> CommittedPackage {
+    public func commit(_ rawDraft: CaptureDraft, partialPolicy: PartialPolicy = .rejectPartial) async throws -> CommittedPackage {
+        let draft = DraftSanitizer.sanitize(rawDraft)
         // Optional text that is blank is unknown, and unknown is omitted (never "").
         let userNote = Self.nonBlank(draft.userNote)
         let sharedTitle = Self.nonBlank(draft.sharedTitle)

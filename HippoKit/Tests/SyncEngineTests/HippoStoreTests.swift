@@ -72,53 +72,6 @@ private func isComplete(_ r: ValidationResult) -> Bool {
     return false
 }
 
-/// A one-shot signal: `wait()` returns once `open()` has been called, before or after the wait began.
-/// One waiter per gate.
-private final class Gate: Sendable {
-    private let stream: AsyncStream<Void>
-    private let continuation: AsyncStream<Void>.Continuation
-
-    init() { (stream, continuation) = AsyncStream.makeStream() }
-
-    func open() { continuation.finish() }
-    func wait() async { for await _ in stream {} }
-}
-
-/// Wraps the filesystem adapter and suspends the upload of `path` just after its first checkpoint
-/// has been saved, so a worker is genuinely mid-file until `release` opens.
-private struct PausingAdapter: StorageAdapter {
-    let inner: FilesystemAdapter
-    let path: String
-    let paused = Gate()
-    let release = Gate()
-
-    var capabilities: StorageCapabilities { inner.capabilities }
-    func validateDestination() async throws { try await inner.validateDestination() }
-    func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }
-    func inspectFile(relativePath: String) async throws -> RemoteFileInfo? {
-        try await inner.inspectFile(relativePath: relativePath)
-    }
-    func verify(remote: RemoteFileInfo, localURL: URL, expected: FileIntegrity) async throws -> VerificationEvidence? {
-        try await inner.verify(remote: remote, localURL: localURL, expected: expected)
-    }
-    func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
-                    saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt {
-        guard relativePath == path else {
-            return try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
-                                              checkpoint: checkpoint, saveCheckpoint: saveCheckpoint)
-        }
-        let (count, paused, release) = (Counter(), self.paused, self.release)
-        return try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
-                                          checkpoint: checkpoint, saveCheckpoint: { cp in
-            try await saveCheckpoint(cp)
-            if count.next() == 1 {
-                paused.open()
-                await release.wait()
-            }
-        })
-    }
-}
-
 @Suite struct HippoStoreTests {
     // Acceptance 1: a screenshot shared offline saves locally, is listed, and uploads later.
     @Test func captureThenSyncEndToEnd() async throws {
@@ -386,7 +339,7 @@ private struct PausingAdapter: StorageAdapter {
         #expect(Set(json.keys) == ["generated_at", "app_version", "schema_version", "capture_count", "jobs_by_state",
                                    "recent_error_codes", "destinations"])
         #expect(json["app_version"] as? String == "1.4.2")
-        #expect(json["schema_version"] as? Int == 1)
+        #expect(json["schema_version"] as? Int == 2)
         #expect(json["capture_count"] as? Int == 1)
         #expect(json["jobs_by_state"] as? [String: Int] == [
             "pending": 0, "uploading": 0, "synced": 0, "retryable_failure": 1, "needs_authentication": 0,

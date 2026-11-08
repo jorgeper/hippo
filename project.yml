@@ -1,0 +1,110 @@
+# XcodeGen spec for the Hippo iPhone app and its Share Extension. Generate with `make generate`;
+# the generated Hippo.xcodeproj is not committed. DEVELOPMENT_TEAM comes only from the gitignored
+# Config/Local.xcconfig (see Config/Local.example.xcconfig).
+name: Hippo
+options:
+  deploymentTarget:
+    iOS: "27.0"
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  HippoKit:
+    path: HippoKit
+targets:
+  Hippo:
+    type: application
+    platform: iOS
+    sources: [App/Hippo, App/Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jorgeper.hippo
+    dependencies:
+      - package: HippoKit
+        products: [CaptureCore, LocalRepository, SyncEngine, FilesystemAdapter, ShareIntake, HippoPresentation]
+      - target: HippoShare
+    info:
+      path: App/Hippo/Info.plist
+      properties:
+        CFBundleDisplayName: Hippo
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSMicrophoneUsageDescription: "Hippo records voice notes when you tap Record."
+        NSLocationWhenInUseUsageDescription: "Hippo can save where you were when you capture something. This is off unless you turn it on in Settings."
+        UIBackgroundModes: [audio, processing]
+        BGTaskSchedulerPermittedIdentifiers: [com.jorgeper.hippo.sync]
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    entitlements:
+      path: App/Hippo/Hippo.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.jorgeper.hippo]
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.jorgeper.hippo.shared"]
+  HippoShare:
+    type: app-extension
+    platform: iOS
+    sources: [App/HippoShare, App/Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jorgeper.hippo.share
+        # App/Shared code checks this to avoid app-only APIs such as UIApplication.shared.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) HIPPO_SHARE_EXTENSION
+    dependencies:
+      - package: HippoKit
+        products: [CaptureCore, LocalRepository, SyncEngine, ShareIntake, HippoPresentation]
+    info:
+      path: App/HippoShare/Info.plist
+      properties:
+        CFBundleDisplayName: Hippo
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsAttachmentsWithMaxCount: 20
+              NSExtensionActivationSupportsImageWithMaxCount: 20
+              NSExtensionActivationSupportsMovieWithMaxCount: 10
+              NSExtensionActivationSupportsFileWithMaxCount: 20
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsWebPageWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
+    entitlements:
+      path: App/HippoShare/HippoShare.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.jorgeper.hippo]
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.jorgeper.hippo.shared"]
+  HippoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [App/HippoUITests]
+    dependencies:
+      - target: Hippo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jorgeper.hippo.uitests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Hippo:
+    build:
+      targets:
+        Hippo: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [HippoUITests]
+    archive:
+      config: Release

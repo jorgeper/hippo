@@ -1,0 +1,4 @@
+// Shared by every target and configuration (project.yml `configFiles`).
+// DEVELOPMENT_TEAM is per developer and lives only in the gitignored Local.xcconfig;
+// copy Local.example.xcconfig to Local.xcconfig and put your team ID in it.
+#include? "Local.xcconfig"

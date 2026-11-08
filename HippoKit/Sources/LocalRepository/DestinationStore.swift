@@ -103,12 +103,20 @@ public final class DestinationStore: Sendable {
     }
 
     public func active() throws -> Destination? {
-        try db.query("SELECT * FROM destinations WHERE status = 'active' ORDER BY destination_id LIMIT 1").first.map { r in
-            Destination(id: r.string("destination_id") ?? "", providerKind: r.string("provider_kind") ?? "",
-                        accountIdentifier: r.string("account_identifier") ?? "", remoteRoot: r.string("remote_root") ?? "",
-                        displayName: r.string("display_name") ?? "",
-                        status: DestinationStatus(rawValue: r.string("status") ?? "") ?? .disabled)
-        }
+        try db.query("SELECT * FROM destinations WHERE status = 'active' ORDER BY destination_id LIMIT 1").first
+            .map(Self.destination)
+    }
+
+    /// The stored destination with this ID, whatever its status, or nil if there is none.
+    public func destination(id: String) throws -> Destination? {
+        try db.query("SELECT * FROM destinations WHERE destination_id = ?", [.text(id)]).first.map(Self.destination)
+    }
+
+    private static func destination(_ r: Row) -> Destination {
+        Destination(id: r.string("destination_id") ?? "", providerKind: r.string("provider_kind") ?? "",
+                    accountIdentifier: r.string("account_identifier") ?? "", remoteRoot: r.string("remote_root") ?? "",
+                    displayName: r.string("display_name") ?? "",
+                    status: DestinationStatus(rawValue: r.string("status") ?? "") ?? .disabled)
     }
 
     /// The explicit "Upload existing local captures to this destination" action: creates jobs for

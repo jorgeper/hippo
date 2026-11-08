@@ -1,0 +1,20 @@
+import SwiftUI
+
+/// The first screen: the timeline, or, if the store could not be opened, an explanation instead.
+struct RootView: View {
+    let startup: Result<AppEnvironment, StartupError>
+    @State private var path = NavigationPath()
+
+    var body: some View {
+        switch startup {
+        case .success(let environment):
+            NavigationStack(path: $path) {
+                TimelineView(environment: environment, path: $path)
+            }
+            .syncScheduling(environment)
+        case .failure(let error):
+            ContentUnavailableView("Storage unavailable", systemImage: "exclamationmark.triangle",
+                                   description: Text(LocalizedStringKey(error.message)))
+        }
+    }
+}

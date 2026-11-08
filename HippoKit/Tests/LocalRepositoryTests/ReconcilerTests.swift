@@ -155,4 +155,12 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
         let report = try r.reconciler.run()
         #expect(report.failed == 0 && report.removedStaging == 0)
     }
+
+    @Test func failedIndexedListingIsCounted() async throws {
+        let r = try Rig(); defer { r.h.cleanup() }
+        _ = try await r.commitOnly()
+        try r.h.db.execute("DROP TABLE captures")
+        let report = try r.reconciler.run()
+        #expect(report.failed == 3)
+    }
 }

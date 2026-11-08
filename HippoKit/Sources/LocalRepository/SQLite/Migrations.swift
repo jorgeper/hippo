@@ -1,20 +1,26 @@
 import SQLite3
 
 enum Migrations {
-    static let currentVersion: Int64 = 1
+    static let currentVersion: Int64 = 2
 
-    /// Applies pending migrations inside `BEGIN IMMEDIATE`. `user_version` is re-read
+    /// Applies pending migrations up to `target` inside `BEGIN IMMEDIATE`. `user_version` is re-read
     /// after the write lock is held, so two connections opening a fresh file cannot
-    /// both apply v1.
-    static func run(on db: Database) throws {
+    /// both apply the same migration.
+    static func apply(on db: Database, upTo target: Int64) throws {
         try db.transaction { tx in
             let version = try tx.query("PRAGMA user_version")[0].int("user_version") ?? 0
-            if version < 1 {
+            if version < 1, target >= 1 {
                 try tx.executeScript(v1)
                 try tx.executeScript("PRAGMA user_version = 1")
             }
+            if version < 2, target >= 2 {
+                try tx.executeScript(v2)
+                try tx.executeScript("PRAGMA user_version = 2")
+            }
         }
     }
+
+    static let v2 = "ALTER TABLE captures ADD COLUMN utc_offset_seconds INTEGER;"
 
     static let v1 = """
     CREATE TABLE captures(capture_id TEXT PRIMARY KEY, captured_at_ms INTEGER NOT NULL, local_day TEXT NOT NULL,

@@ -331,8 +331,9 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(await h.worker(adapter).runOnce() == SyncPassResult(synced: 0, failed: 0, idle: false))
         let job = try h.job(pkg)
         #expect(job.state == .uploading)
-        #expect(job.attemptCount == 0)
-        #expect(job.lastErrorCode == nil)
+        // Only the thief's reclaim counted the expired lease; the old owner recorded nothing.
+        #expect(job.attemptCount == 1)
+        #expect(job.lastErrorCode == "lease_expired")
         #expect(try h.db.query("SELECT lease_owner FROM jobs WHERE job_id = ?", [.text(job.jobID)])[0]
                     .string("lease_owner") == "thief")
         #expect(try h.jobs.receipts(jobID: job.jobID).map(\.relativePath) == ["metadata.json"])
@@ -343,6 +344,34 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(offset == 1 << 20)
         #expect(!FileManager.default.fileExists(atPath: h.remote.appendingPathComponent(path).path))
         #expect(!h.uploads.contains("upload \(pkg.markerPath)"))
+    }
+
+    @Test func workersWithSamePrefixHaveDistinctLeaseOwners() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture(attachmentBytes: 3 * FilesystemAdapter.chunkSize)
+        let adapter = PausingAdapter(inner: h.adapter, path: pkg.attachmentPath)
+        let a = h.worker(adapter, owner: "app")
+        let b = h.worker(owner: "app")
+        #expect(a.leaseOwner != b.leaseOwner)
+        #expect(a.leaseOwner.hasPrefix("app#"))
+        #expect(b.leaseOwner.hasPrefix("app#"))
+        let suffix = String(a.leaseOwner.dropFirst("app#".count))
+        #expect(UUID(uuidString: suffix) != nil)
+        #expect(suffix == suffix.lowercased())
+
+        let run = Task { let r = await a.runOnce(); adapter.paused.open(); return r }
+        await adapter.paused.wait()
+        // A is suspended mid-file holding the job under its own lease owner.
+        let jobID = try h.job(pkg).jobID
+        #expect(try h.db.query("SELECT lease_owner FROM jobs WHERE job_id = ?", [.text(jobID)])[0]
+                    .string("lease_owner") == a.leaseOwner)
+        #expect(await b.runOnce().idle)
+        // The bare prefix owns nothing.
+        #expect(try h.jobs.renewLease(jobID: jobID, owner: "app", now: h.clock.now, lease: 120) == false)
+        adapter.release.open()
+
+        #expect(await run.value == SyncPassResult(synced: 1, failed: 0, idle: false))
+        #expect(try h.job(pkg).state == .synced)
     }
 
     @Test func claimErrorIsNotIdle() async throws {
@@ -387,6 +416,31 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(job.state == .blocked)
         #expect(job.lastErrorCode == "local_package_invalid")
         #expect(h.faults.operations.isEmpty)
+    }
+
+    @Test func reclaimBackoffUsesTheWorkersPolicyAndRandomSource() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        let job = try h.job(pkg)
+        // Two earlier lease expiries; the worker's claim is the third and parks the job with a backoff.
+        try h.db.execute("""
+            UPDATE jobs SET state = 'uploading', attempt_count = 2, lease_owner = 'ghost', lease_expires_at_ms = ?
+            WHERE job_id = ?
+            """, [.int(Int64(t0.timeIntervalSince1970 * 1000) - 1), .text(job.jobID)])
+        let adapter = h.adapter
+        let clock = h.clock
+        let worker = SyncWorker(layout: h.layout, jobs: h.jobs, destinations: h.destinations, index: h.index,
+                                adapterFor: { _ in adapter }, owner: "w", policy: RetryPolicy(base: 1000, cap: 1000),
+                                now: { clock.now }, random: { 0.5 })
+
+        _ = await worker.runOnce()
+
+        let parked = try h.job(pkg)
+        #expect(parked.state == .retryableFailure)
+        // 0.5 * min(1000, 1000 * 2^2) = 500 s; the default policy would give 0.5 * 120 = 60 s.
+        let retryAt = try #require(try h.db.query("SELECT next_attempt_at_ms FROM jobs WHERE job_id = ?",
+                                                  [.text(job.jobID)])[0].int("next_attempt_at_ms"))
+        #expect(retryAt == Int64(t0.timeIntervalSince1970 * 1000) + 500_000)
     }
 
     @Test func syncedJobIsNotReclaimed() async throws {
