@@ -37,6 +37,7 @@ public final class Reconciler: Sendable {
         // fixed string (never IDs, paths or error text).
         removeAbandonedStaging(into: &report)
 
+        // `failed` counts failed operations: a persistent DB failure counts once per listing and per register.
         // Drop rows whose package is gone, so the walk below can re-register a package that came back.
         do {
             for row in try index.indexedDirectories()

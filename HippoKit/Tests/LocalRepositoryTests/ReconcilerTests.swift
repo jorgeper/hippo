@@ -161,6 +161,6 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
         _ = try await r.commitOnly()
         try r.h.db.execute("DROP TABLE captures")
         let report = try r.reconciler.run()
-        #expect(report.failed >= 1)
+        #expect(report.failed == 3)
     }
 }
