@@ -798,7 +798,7 @@ Error mapping is the same as `SyncWorker.failure(for:)`: blocked for permanent, 
 
 All 15 tasks are built and final-reviewed on `feat/enrichment`. These items were left open on purpose; pick them up from here.
 
-- [ ] **Relative dates:** a note saying "tomorrow" is read against the day enrichment runs, so older notes can prefill the wrong calendar day. Fix: resolve detected dates against the capture's `created_at`, not the run time.
+- [x] **Relative dates:** a note saying "tomorrow" is read against the day enrichment runs, so older notes can prefill the wrong calendar day. Fix: resolve detected dates against the capture's `created_at`, not the run time. Done in the enrichment visibility plan (data detection v3).
 - [ ] **Stale server results:** if the sync position (gold cursor) is ever lost, server results deleted in the meantime stay on the phone, because the relist after a cursor reset doesn't report deletions. Fix: after a reset, drop local gold docs the relist didn't return.
 - [ ] **Video downloads:** link previews (LinkPresentation subresource fetching) might download video on cellular. Device row E15 should show whether they do; if it does, treat it as Important for cellular backfill.
 - [ ] **Dropbox work:** the Dropbox adapter (Plan 3) still has to implement the three new storage operations: `replaceFile`, `listChanges` and `downloadFile`.
