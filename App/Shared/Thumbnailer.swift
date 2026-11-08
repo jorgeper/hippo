@@ -21,11 +21,22 @@ actor Thumbnailer {
         let url = packageURL(relativeDirectory).appendingPathComponent(path)
         let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: 60, height: 60), scale: scale,
                                                    representationTypes: .thumbnail)
-        guard let representation = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
-        else { failed.insert(key as String); return nil }
-        guard representation.type == .thumbnail else { failed.insert(key as String); return nil }
+        let representation: QLThumbnailRepresentation
+        do {
+            representation = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+        } catch {
+            // A cancelled task (row scrolled away) is not a definitive failure.
+            if !Task.isCancelled && !(error is CancellationError) { recordFailure(key) }
+            return nil
+        }
+        guard representation.type == .thumbnail else { recordFailure(key); return nil }
         let image = representation.uiImage
         cache.setObject(image, forKey: key)
         return image
+    }
+
+    private func recordFailure(_ key: NSString) {
+        if failed.count >= 500 { failed.removeAll() }
+        failed.insert(key as String)
     }
 }

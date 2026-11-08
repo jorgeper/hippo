@@ -64,7 +64,7 @@ public final class TimelineModel {
         self.debounce = debounce
     }
 
-    /// Waits for a reload started by changing `filter`. Tests use it.
+    /// Waits for a pending search debounce and for the reload started by changing `filter`. Tests use it.
     func settle() async {
         while let pending = debounceTask {
             await pending.value
