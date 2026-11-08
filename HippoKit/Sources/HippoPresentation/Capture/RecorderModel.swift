@@ -35,7 +35,6 @@ public final class RecorderModel {
     private let permission: () async -> MicPermission
     private let location: (Date) -> CaptureLocation?
     private let now: () -> Date
-    private let timeZone: TimeZone
 
     /// The recording on disk that `save()`/`discard()` act on.
     private var pending: Pending?
@@ -43,10 +42,11 @@ public final class RecorderModel {
         var id: UUID
         var url: URL
         var startedAt: Date
+        var timeZone: TimeZone
         var duration: TimeInterval
         var interrupted: Bool
     }
-    private var current: (id: UUID, url: URL, startedAt: Date)?
+    private var current: (id: UUID, url: URL, startedAt: Date, timeZone: TimeZone)?
 
     public init(store: HippoStore, intake: IntakeDirectory, recorder: AudioRecording,
                 permission: @escaping () async -> MicPermission,
@@ -54,7 +54,6 @@ public final class RecorderModel {
                 now: @escaping () -> Date = Date.init) {
         self.store = store; self.intake = intake; self.recorder = recorder
         self.permission = permission; self.location = location; self.now = now
-        self.timeZone = .current
     }
 
     /// Asks for permission if needed, then starts recording. Ignored unless idle, denied, or failed
@@ -65,6 +64,7 @@ public final class RecorderModel {
         case .failed where pending == nil: break
         default: return
         }
+        // `.undetermined` after the request is treated as `.denied`.
         guard await permission() == .granted else { state = .denied; return }
         // Another call may have started while the permission prompt was up.
         switch state {
@@ -82,7 +82,7 @@ public final class RecorderModel {
             return
         }
         let startedAt = now()
-        current = (id, url, startedAt)
+        current = (id, url, startedAt, .current)
         state = .recording(startedAt: startedAt)
     }
 
@@ -97,6 +97,7 @@ public final class RecorderModel {
         recorder.stop()
         self.current = nil
         pending = Pending(id: current.id, url: current.url, startedAt: current.startedAt,
+                          timeZone: current.timeZone,
                           duration: duration, interrupted: interrupted)
         state = .stopped(duration: duration, interrupted: interrupted)
     }
@@ -110,7 +111,7 @@ public final class RecorderModel {
         }
         state = .saving
         let draft = CaptureDraft(
-            captureID: p.id, startedAt: p.startedAt, timeZone: timeZone, method: .voiceRecording,
+            captureID: p.id, startedAt: p.startedAt, timeZone: p.timeZone, method: .voiceRecording,
             attachments: [AttachmentSource(body: .file(p.url), originalFilename: nil,
                                            uti: "com.apple.m4a-audio", mimeType: "audio/mp4",
                                            representationSource: "recording")],
@@ -125,8 +126,9 @@ public final class RecorderModel {
         }
     }
 
-    /// Throws the recording away (stopping it first if it is still running).
+    /// Throws the recording away (stopping it first if it is still running). Ignored while saving.
     public func discard() {
+        if case .saving = state { return }   // the commit is in flight; it decides the outcome
         if case .recording = state { recorder.stop() }
         if let url = current?.url ?? pending?.url { try? FileManager.default.removeItem(at: url) }
         current = nil

@@ -176,6 +176,22 @@ private struct Rig {
         #expect(rig.recorder.stopCount == 2)
     }
 
+    @MainActor @Test func discardDuringSaveIsIgnored() async throws {
+        let rig = try Rig()
+        defer { rig.ts.cleanup() }
+        await rig.model.start()
+        rig.model.stop()
+        let saving = Task { await rig.model.save() }
+        await Task.yield()                       // save() runs up to its suspension in store.capture
+        #expect(rig.model.state == .saving)
+        rig.model.discard()
+        #expect(rig.model.state == .saving)
+        await saving.value
+        #expect(rig.model.state == .saved)
+        let page = try rig.ts.store.index.page(CaptureFilter(), after: nil, limit: 10)
+        #expect(page.count == 1)
+    }
+
     @MainActor @Test func failedSaveKeepsFileAndCanRetry() async throws {
         let rig = try Rig()
         defer { rig.ts.cleanup() }
