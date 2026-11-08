@@ -37,7 +37,7 @@ public struct SyncRow: Equatable, Sendable {
             label = .needsAttention; message = "Uploads are paused because this account is signed out."
         case .blocked:
             label = .needsAttention
-            switch job.lastErrorCode {
+            switch job.lastErrorCode.map(Self.unprefixed) {
             case "quota_exceeded": message = "Your storage is full. Free up space, then tap Retry."
             case "remote_conflict":
                 message = "A different file already exists in your storage at this capture's path. Hippo won't overwrite it."
@@ -48,5 +48,13 @@ public struct SyncRow: Equatable, Sendable {
         }
         return SyncRow(destinationName: destinationName, label: label, message: message,
                        canRetry: job.state == .blocked || job.state == .retryableFailure)
+    }
+
+    /// The sync engine records adapter errors as `permanent:<code>` or `transient:<code>`.
+    private static func unprefixed(_ code: String) -> String {
+        for prefix in ["permanent:", "transient:"] where code.hasPrefix(prefix) {
+            return String(code.dropFirst(prefix.count))
+        }
+        return code
     }
 }

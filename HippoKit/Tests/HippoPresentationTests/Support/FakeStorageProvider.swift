@@ -8,22 +8,25 @@ import SyncEngine
 /// A non-interactive provider whose destination is a local folder, uploaded to with `FilesystemAdapter`.
 /// `adapter` replaces the adapter it builds, for tests that need to hold an upload.
 final class FakeStorageProvider: StorageProvider {
-    let kind = "filesystem"
+    let kind: String
     let displayName = "Developer folder"
+    let id: String
     let root: URL
     let faults: FaultPlan
     private let adapter: (@Sendable (Destination) -> any StorageAdapter)?
     private let signOuts = Mutex(0)
 
-    init(root: URL, faults: FaultPlan = FaultPlan(),
+    init(root: URL, id: String = "dev", kind: String = "filesystem", faults: FaultPlan = FaultPlan(),
          adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil) {
         self.root = root
+        self.id = id
+        self.kind = kind
         self.faults = faults
         self.adapter = adapter
     }
 
     var destination: Destination {
-        Destination(id: "dev", providerKind: kind, accountIdentifier: "this-iphone", remoteRoot: root.path,
+        Destination(id: id, providerKind: kind, accountIdentifier: "this-iphone", remoteRoot: root.path,
                     displayName: displayName, status: .active)
     }
 

@@ -136,6 +136,9 @@ struct SyncCase: Sendable {
          "A different file already exists in your storage at this capture's path. Hippo won't overwrite it.", .needsAttention, true),
         SyncCase(.blocked, "local_package_invalid", "This capture's files on iPhone are damaged or missing.", .needsAttention, true),
         SyncCase(.blocked, "provider_unavailable", "This storage provider isn't available in this version of Hippo.", .needsAttention, true),
+        SyncCase(.blocked, "permanent:provider_unavailable", "This storage provider isn't available in this version of Hippo.", .needsAttention, true),
+        SyncCase(.blocked, "permanent:quota_exceeded", "Your storage is full. Free up space, then tap Retry.", .needsAttention, true),
+        SyncCase(.blocked, "permanent:something_else", "Upload stopped. Tap Retry to try again.", .needsAttention, true),
         SyncCase(.blocked, "something_else", "Upload stopped. Tap Retry to try again.", .needsAttention, true),
         SyncCase(.blocked, nil, "Upload stopped. Tap Retry to try again.", .needsAttention, true),
     ])

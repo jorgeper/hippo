@@ -15,6 +15,9 @@ private struct Harness {
     let t: TestStore
     let remote: URL
     let provider: FakeStorageProvider
+    /// A second account, uploading to `remoteB`.
+    let providerB: FakeStorageProvider
+    let remoteB: URL
     let coordinator: SyncCoordinator
     let settings: AppSettings
     let suite: String
@@ -25,7 +28,9 @@ private struct Harness {
         t = try TestStore()
         remote = t.base.appendingPathComponent("Remote", isDirectory: true)
         provider = FakeStorageProvider(root: remote, faults: faults, adapter: adapter)
-        let registry = ProviderRegistry([provider])
+        remoteB = t.base.appendingPathComponent("RemoteB", isDirectory: true)
+        providerB = FakeStorageProvider(root: remoteB, id: "dev-b", kind: "filesystem-b")
+        let registry = ProviderRegistry([provider, providerB])
         coordinator = SyncCoordinator(store: t.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0")
         suite = "hippo-settings-\(UUID().uuidString)"
         settings = AppSettings(defaults: UserDefaults(suiteName: suite)!)
@@ -40,6 +45,11 @@ private struct Harness {
 
     func states(_ p: CommittedPackage) throws -> [JobState] {
         try t.store.jobs.jobs(captureID: p.metadata.captureID).map(\.state)
+    }
+
+    /// Waits until the coordinator has received `n` `syncNow()` calls in total.
+    func waitForCalls(_ n: Int) async throws {
+        while await coordinator.callsReceived < n { try await Task.sleep(for: .milliseconds(1)) }
     }
 
     /// The `upload` operations a complete, first-time sync of these packages performs, marker included.
@@ -135,7 +145,7 @@ struct SettingsTests {
         #expect(await h.coordinator.isRunning)
         let second = Task { await h.coordinator.syncNow() }
         let third = Task { await h.coordinator.syncNow() }
-        try await Task.sleep(for: .milliseconds(200))
+        try await h.waitForCalls(3)
         held.release()
 
         let r1 = await first.value
@@ -144,6 +154,63 @@ struct SettingsTests {
         #expect(r2.idle && r3.idle)
         #expect(passes.withLock { $0 } == 2)
         #expect(await h.coordinator.isRunning == false)
+        #expect(await h.coordinator.isBusy == false)
+    }
+
+    @Test func stopCancelsRunningPassAndNextCallStillSyncs() async throws {
+        let remote = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-held-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remote) }
+        let held = HeldAdapter(FilesystemAdapter(root: remote))
+        let h = try Harness(adapter: { _ in held })
+        defer { h.cleanup() }
+        let interrupted = try await h.t.note("held", at: start)
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+
+        let first = Task { await h.coordinator.syncNow() }
+        await held.started()
+        let waiting = Task { await h.coordinator.syncNow() }
+        try await h.waitForCalls(2)
+        await h.coordinator.stop()
+
+        let r1 = await first.value
+        let r2 = await waiting.value
+        #expect(r1.synced == 0 && r2.synced == 0)
+        #expect(await h.coordinator.isBusy == false)
+        // The interrupted job keeps its lease until it expires; it is not lost.
+        #expect(try h.states(interrupted) == [.uploading])
+
+        let later = try await h.t.note("after stop", at: start.addingTimeInterval(1))
+        let r3 = await h.coordinator.syncNow()
+        #expect(r3.synced == 1)
+        #expect(try h.states(later) == [.synced])
+        #expect(await h.coordinator.isBusy == false)
+    }
+
+    @Test func cancelledCallerDoesNotStopSharedPass() async throws {
+        let remote = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-held-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remote) }
+        let held = HeldAdapter(FilesystemAdapter(root: remote))
+        let h = try Harness(adapter: { _ in held })
+        defer { h.cleanup() }
+        var packages: [CommittedPackage] = []
+        for i in 0..<2 { packages.append(try await h.t.note("note \(i)", at: start.addingTimeInterval(Double(i)))) }
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+
+        let first = Task { await h.coordinator.syncNow() }
+        await held.started()
+        let joinedFollowUp = Task { await h.coordinator.syncNow() }
+        let alsoJoined = Task { await h.coordinator.syncNow() }
+        try await h.waitForCalls(3)
+        first.cancel()
+        joinedFollowUp.cancel()
+        held.release()
+
+        #expect(await first.value.synced == 2)
+        for p in packages { #expect(try h.states(p) == [.synced]) }
+        // The follow-up still ran for the caller that was not cancelled.
+        #expect(await alsoJoined.value.idle)
+        #expect(await joinedFollowUp.value.idle)
+        #expect(await h.coordinator.isBusy == false)
     }
 
     @Test func signOutPausesJobs() async throws {
@@ -163,14 +230,39 @@ struct SettingsTests {
         #expect(try h.states(later).isEmpty)
     }
 
-    @Test func retryAndUploadExistingSync() async throws {
+    @Test func retryAllSyncsBlockedUpload() async throws {
+        let faults = FaultPlan()
+        let h = try Harness(faults: faults)
+        defer { h.cleanup() }
+        let p = try await h.t.note("quota", at: start)
+        let first = try #require(p.marker.files.first { $0.relativePath != "complete.json" })
+        faults.failBeforeWrite("\(p.relativeDirectory)/\(first.relativePath)", .quotaExceeded)
+        try await h.model.connect(h.provider)
+        #expect(try h.states(p) == [.blocked])
+        #expect(h.model.summary == "1 need attention")
+
+        try await h.model.retryAll()
+
+        #expect(try h.states(p) == [.synced])
+        #expect(h.model.summary == "All captures synced")
+    }
+
+    @Test func uploadExistingCopiesToNewDestination() async throws {
         let h = try Harness()
         defer { h.cleanup() }
+        let p = try await h.t.note("first account", at: start)
         try await h.model.connect(h.provider)
-        let p = try await h.t.note("waiting", at: start)
-        try await h.model.retryAll()
+        try await h.model.signOut()
+        try await h.model.connect(h.providerB)
+        // Connecting B never picks up a capture already bound to A.
         #expect(try h.states(p) == [.synced])
-        // Every capture already has a job for this destination.
+        #expect(h.model.activeDestination == h.providerB.destination)
+
+        #expect(try await h.model.uploadExisting() == 1)
+
+        #expect(try h.states(p) == [.synced, .synced])
+        let marker = h.remoteB.appendingPathComponent(p.relativeDirectory).appendingPathComponent("complete.json")
+        #expect(FileManager.default.fileExists(atPath: marker.path))
         #expect(try await h.model.uploadExisting() == 0)
     }
 
