@@ -40,7 +40,7 @@ struct RunnerHarness {
         return EnrichmentRunner(layout: store.layout, index: store.index, tasks: store.enrichmentTasks,
                                 store: store.enrichments, enrichers: enrichers, producer: Self.producer,
                                 isEnabled: { !disabled.value.contains($0) }, isOnline: { online.value },
-                                policy: RetryPolicy(), now: { clock.value }, random: { 1 })
+                                now: { clock.value }, random: { 1 })
     }
 
     /// A typed note; returns its capture ID.

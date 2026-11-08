@@ -150,8 +150,8 @@ private let t0 = RunnerHarness.t0
             #expect(await runner.runPending().idle)
             h.clock.value = next
         }
-        // random() == 1 gives the full backoff ceiling: 30, 60, 120, 240 seconds.
-        #expect(delays == [30, 60, 120, 240])
+        // The runner's own policy; random() == 1 gives the full backoff ceiling: 5, 10, 20, 40 minutes.
+        #expect(delays == [300, 600, 1200, 2400])
 
         #expect(await runner.runPending() == EnrichmentPassResult(ran: 1, failed: 1, idle: false))
         let task = try #require(try h.task(id, .textRecognition))
@@ -165,6 +165,18 @@ private let t0 = RunnerHarness.t0
         #expect(fake.invocations == 5)
         h.clock.value = h.clock.value.addingTimeInterval(86_400)
         #expect(await runner.runPending().idle)
+    }
+
+    @Test func enrichmentRetryPolicySpansHours() {
+        let p = EnrichmentRunner.retryPolicy
+        #expect(p.base == 300)
+        #expect(p.cap == 21_600)
+        #expect(EnrichmentRunner.maxAttempts == 5)
+        #expect(p.delay(attempt: 1, retryAfter: nil, random: { 1 }) == 300)
+        #expect(p.delay(attempt: 10, retryAfter: nil, random: { 1 }) == 21_600)
+        // Package sync keeps its own, shorter policy.
+        #expect(RetryPolicy().base == 30)
+        #expect(RetryPolicy().cap == 21_600)
     }
 
     @Test func permanentWritesFailedFacet() async throws {

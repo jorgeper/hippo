@@ -24,6 +24,10 @@ public struct EnrichmentPassResult: Sendable, Equatable {
 /// failures back off up to `maxAttempts`; a facet that gets new data reruns the enrichers that read it.
 public actor EnrichmentRunner {
     public static let maxAttempts = 5
+    /// Enrichment's own backoff (package sync keeps `RetryPolicy()`): 5 min doubling to a 6 h cap, so
+    /// `maxAttempts` spans hours, and a site that is down for a while or a throttled geocoder isn't
+    /// given up on within minutes.
+    public static let retryPolicy = RetryPolicy(base: 300, cap: 21_600)
     /// Posted on the main actor after each `runPending` pass, with the runner as the object.
     public static let passFinished = Notification.Name("HippoEnrichmentPassFinished")
 
@@ -50,7 +54,7 @@ public actor EnrichmentRunner {
     public init(layout: StoreLayout, index: CaptureIndex, tasks: EnrichmentTaskStore, store: EnrichmentStore,
                 enrichers: [any Enricher], producer: EnrichmentProducer,
                 isEnabled: @escaping @Sendable (FacetKind) -> Bool, isOnline: @escaping @Sendable () -> Bool,
-                policy: RetryPolicy = .init(), now: @escaping @Sendable () -> Date = Date.init,
+                policy: RetryPolicy = EnrichmentRunner.retryPolicy, now: @escaping @Sendable () -> Date = Date.init,
                 random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) {
         self.layout = layout
         self.index = index

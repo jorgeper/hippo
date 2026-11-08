@@ -95,12 +95,12 @@ struct MapKitPlaceLookup: PlaceLookup {
         if error is CancellationError || Task.isCancelled { return CancellationError() }
         if (error as? MKError)?.code == .loadingThrottled {
             log.error("\("geocode_throttled", privacy: .public)")
-            return EnrichmentError.transient(code: "geocode_throttled")
+            // Apple's rate limit, not a failure: wait it out without spending an attempt (design §5.2).
+            return EnrichmentError.deferred(code: "geocode_throttled", retryAfter: 300)
         }
         if let url = underlyingURLError(error as NSError) {
             switch url.code {
-            case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff,
-                 .callIsActive:
+            case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive:
                 return EnrichmentError.deferred(code: "offline", retryAfter: 60)
             default:
                 break
