@@ -51,7 +51,9 @@ enum SyncScheduling {
         }
         Task {
             await runPass(coordinator, name: "background-sync")
-            await scheduleBackgroundTask(environment)
+            // After expiry the task may already be completed and the assertion ended; the next
+            // background entry resubmits, so skip the unprotected SQLite read here.
+            if !completion.expired { await scheduleBackgroundTask(environment) }
             finish(!completion.expired)
         }
     }

@@ -200,7 +200,12 @@ struct SettingsTests {
         h.coordinator.requestStop()  // synchronous, no await
         let r = await first.value
         #expect(r.synced == 0)
-        while await h.coordinator.isBusy { try await Task.sleep(for: .milliseconds(1)) }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while await h.coordinator.isBusy {
+            #expect(ContinuousClock.now < deadline, "coordinator still busy 5 s after requestStop")
+            if ContinuousClock.now >= deadline { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
 
         let later = try await h.t.note("after stop", at: start.addingTimeInterval(1))
         #expect(await h.coordinator.syncNow().synced == 1)
