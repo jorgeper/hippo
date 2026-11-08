@@ -20,7 +20,7 @@ import Enrichment
     }
 
     @Test func detectsPhoneDateAddressWithSources() async throws {
-        let m = fixtureMetadata(userNote: "Call 415-555-0100 tomorrow")
+        let m = fixtureMetadata(zone: "Asia/Tokyo", userNote: "Call 415-555-0100 tomorrow")
         let doc = try ocrDoc("Meet 12 Dec 2026 at 3pm at 1 Infinite Loop, Cupertino, CA")
         let out = try await DataDetectionEnricher().run(fixtureInput(m, current: doc))
         #expect(out.status == .ok)
@@ -37,7 +37,7 @@ import Enrichment
     }
 
     @Test func dateWithZoneKeepsOffset() async throws {
-        let m = fixtureMetadata(userNote: "3pm PST on Dec 12 2026")
+        let m = fixtureMetadata(zone: "Asia/Tokyo", userNote: "3pm PST on Dec 12 2026")
         let out = try await DataDetectionEnricher().run(fixtureInput(m))
         let date = try #require(try detections(out).first { $0.type == "date" })
         #expect(try #require(date.value).hasSuffix("-08:00"))
