@@ -60,6 +60,47 @@ Hippo saves a location with a capture only if you turn on "Save location with ca
 - A new install does not rebuild the library from Dropbox.
 - Background upload timing is up to iOS.
 
+## Enrichment
+
+Enrichment is derived data added to a capture after it is saved: link titles and pictures, place names, text found in images, voice note transcripts, found dates, phone numbers and addresses, and a guess at the source app. It never changes a capture package. The format is in [`docs/enrichment-format.md`](docs/enrichment-format.md); the design is in [`docs/superpowers/specs/2026-11-07-hippo-enrichment-design.md`](docs/superpowers/specs/2026-11-07-hippo-enrichment-design.md).
+
+### Layers and paths
+
+| Layer | Writer | Local path | Remote path |
+|---|---|---|---|
+| `device` (silver) | the phone, in the app only | `Library/Application Support/Hippo/enrichments/device/<capture-id>/` | `enrichments/device/YYYY/MM/DD/<capture-id>/` |
+| `server` (gold) | a server | `Library/Application Support/Hippo/enrichments/server/<capture-id>/` | `enrichments/server/YYYY/MM/DD/<capture-id>/` |
+
+Local paths are inside the App Group container. Each directory holds `enrichment.json` and an optional `assets/` folder. The phone writes only silver and only reads gold. Gold for a capture that is not on the phone is ignored. Deleting a capture on the phone also deletes its local silver and gold; remote copies are never touched. Each Settings switch under "Enrichment" turns one kind off.
+
+### What leaves the phone
+
+- Link previews run with a 15 s timeout, for the first 5 links per capture:
+  - A YouTube link sends the video URL to `www.youtube.com/oembed`, not to the watch page. The thumbnail is downloaded from the host that response names (normally `i.ytimg.com`).
+  - Any other link first gets a `HEAD` request (or, if the site rejects `HEAD`, a one-byte `GET`) to follow its redirects. Then the page is fetched from where they lead through LinkPresentation, which may also load that page's image.
+- Place names send coordinates to Apple Maps. The place line shows city and region; "near <Name>" appears only for an accurate fix.
+- Everything else (text in images, transcripts, found dates and addresses, app guesses) runs on the iPhone.
+- The results (silver) are uploaded to the connected storage destination, beside each capture's package once it has synced: link previews and their thumbnails, place names, recognized text, transcripts, found items and app guesses.
+
+### English-only transcripts
+
+Transcription runs on device only and never falls back to server recognition. It uses the phone's locale if its language is English, and `en_US` otherwise. Audio longer than an hour is skipped.
+
+### Links that are never fetched
+
+These links are recorded as empty and never requested (YouTube oEmbed excepted):
+
+- anything other than `http` or `https`;
+- IP-literal hosts, dotless names (such as `router`), and `localhost`, `.local`, `.lan`, `.internal` and `.home.arpa` names;
+- URLs with a query key `token`, `code`, `key`, `sig`, `signature`, `auth`, `otp` or `magic`;
+- URLs whose path contains `unsubscribe`, `login`, `verify`, `reset` or `confirm`.
+
+Redirects are followed one hop at a time before LinkPresentation is called, and each hop is checked against the same rules. A link that redirects to one of these is recorded as empty, and that hop is never requested. LinkPresentation is given only the checked final URL. One gap remains: a page that redirects again while LinkPresentation loads it (a `GET`-only redirect, or one made by the page's script) is not checked until afterwards, and then the preview is discarded.
+
+### Server and Dropbox
+
+The server that produces gold is not built yet. The phone already pulls and shows gold from the Developer folder. The Dropbox adapter (Plan 3) must implement `replaceFile` (overwrite, under `enrichments/` only), `listChanges` and `downloadFile`, as `FilesystemAdapter` does.
+
 ## HippoKit
 
 `HippoKit/` is a Swift package with no third-party dependencies. It builds for iOS 27 and macOS 27, so all of its tests run on a Mac without a simulator or device.

@@ -1,0 +1,49 @@
+{
+  "capture_id" : "00000000-0000-4000-8000-000000000002",
+  "facets" : {
+    "link_preview" : {
+      "data" : {
+        "items" : [
+          {
+            "title" : "Example Domain (server)",
+            "url" : "https://example.com/item"
+          }
+        ]
+      },
+      "generated_at" : "2026-11-07T18:00:00.000Z",
+      "provenance" : "server_fetch",
+      "status" : "ok",
+      "version" : 1
+    },
+    "summary" : {
+      "data" : {
+        "text" : "A placeholder page used in documentation examples."
+      },
+      "generated_at" : "2026-11-07T18:00:00.000Z",
+      "provenance" : "server_model",
+      "status" : "ok",
+      "version" : 1
+    },
+    "tags" : {
+      "data" : {
+        "values" : [
+          "example",
+          "reference"
+        ]
+      },
+      "generated_at" : "2026-11-07T18:00:00.000Z",
+      "provenance" : "server_model",
+      "status" : "ok",
+      "version" : 1
+    }
+  },
+  "generated_at" : "2026-11-07T18:00:00.000Z",
+  "layer" : "server",
+  "package_digest" : "dcb65caedf824a4442f61c2aba5495f3cf04eeac0a84af3796fa8491fae4c04f",
+  "producer" : {
+    "build" : "1",
+    "name" : "hippo-fixtures",
+    "version" : "1"
+  },
+  "schema_version" : 1
+}

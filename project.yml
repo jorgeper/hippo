@@ -28,7 +28,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.jorgeper.hippo
     dependencies:
       - package: HippoKit
-        products: [CaptureCore, LocalRepository, SyncEngine, FilesystemAdapter, ShareIntake, HippoPresentation]
+        products: [CaptureCore, LocalRepository, SyncEngine, FilesystemAdapter, ShareIntake, HippoPresentation, Enrichment]
       - target: HippoShare
     info:
       path: App/Hippo/Info.plist

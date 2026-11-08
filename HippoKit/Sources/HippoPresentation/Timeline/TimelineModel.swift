@@ -7,6 +7,10 @@ import SyncEngine
 
 @MainActor @Observable
 public final class TimelineModel {
+    /// Posted by the enrichment runner (same name as `EnrichmentRunner.passFinished`, which this target
+    /// can't import) when a pass finishes; the view reloads on it.
+    public static let enrichmentChanged = Notification.Name("HippoEnrichmentPassFinished")
+
     private struct Item: Sendable {
         var summary: CaptureSummary
         var row: TimelineRow
@@ -191,10 +195,13 @@ public final class TimelineModel {
         try await Task.detached {
             let summaries = try store.index.page(filter, after: after, limit: limit)
             let items = summaries.map { s -> Item in
-                let needsMetadata = s.attachmentCount >= 2 || s.method == .voiceRecording
-                    || s.contentTypes.contains(.audio) || (s.attachmentCount == 0 && s.contentTypes.contains(.url))
+                let isLink = s.attachmentCount == 0 && s.contentTypes.contains(.url)
+                let isVoice = s.method == .voiceRecording || s.contentTypes.contains(.audio)
+                let needsMetadata = s.attachmentCount >= 2 || isVoice || isLink
                 let metadata = needsMetadata ? (try? store.index.metadata(captureID: s.id, layout: store.layout)) ?? nil : nil
-                return Item(summary: s, row: TimelineRow.make(s, metadata: metadata, locale: locale))
+                let enrichment = (isLink || isVoice) ? ResolvedEnrichment.load(store: store, captureID: s.id) : nil
+                return Item(summary: s, row: TimelineRow.make(s, metadata: metadata, enrichment: enrichment,
+                                                              locale: locale))
             }
             return Page(items: items, reachedEnd: summaries.count < limit)
         }.value

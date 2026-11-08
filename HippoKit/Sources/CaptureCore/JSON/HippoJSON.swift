@@ -45,7 +45,7 @@ public enum HippoJSON {
         enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version" }
     }
 
-    private static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+    public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {
             let version = try JSONDecoder().decode(VersionProbe.self, from: data).schemaVersion
             guard version == 1 else { throw FormatError.unsupportedSchemaVersion(version) }

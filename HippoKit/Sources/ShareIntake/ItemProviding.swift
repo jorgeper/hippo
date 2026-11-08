@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// One shared attachment, as the intake sees it. `SystemItemProvider` wraps the real `NSItemProvider`;
 /// tests use a fake.
@@ -46,11 +47,36 @@ public struct SystemItemProvider: ItemProviding, @unchecked Sendable {
         }
     }
 
+    /// Loads as a `String` object; if the provider can't coerce its item (an app that registered an
+    /// NSString, URL or attributed string under `public.plain-text`, as YouTube does), loads that item
+    /// directly and converts it.
     public func loadText() async throws -> String {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, any Error>) in
-            _ = provider.loadObject(ofClass: String.self) { text, error in
-                if let text { continuation.resume(returning: text) } else { continuation.resume(throwing: error ?? MissingItem()) }
+        do {
+            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, any Error>) in
+                _ = provider.loadObject(ofClass: String.self) { text, error in
+                    if let text { continuation.resume(returning: text) } else { continuation.resume(throwing: error ?? MissingItem()) }
+                }
             }
+        } catch {
+            guard let identifier = provider.registeredTypeIdentifiers.first(where: {
+                UTType($0)?.conforms(to: .plainText) == true
+            }) else { throw error }
+            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, any Error>) in
+                provider.loadItem(forTypeIdentifier: identifier, options: nil) { item, itemError in
+                    if let text = Self.text(from: item) { continuation.resume(returning: text) }
+                    else { continuation.resume(throwing: itemError ?? error) }
+                }
+            }
+        }
+    }
+
+    static func text(from item: (any NSSecureCoding)?) -> String? {
+        switch item {
+        case let s as String: s
+        case let a as NSAttributedString: a.string
+        case let u as URL: u.absoluteString
+        case let d as Data: String(data: d, encoding: .utf8)
+        default: nil
         }
     }
 }

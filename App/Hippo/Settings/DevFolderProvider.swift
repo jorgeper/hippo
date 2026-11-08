@@ -3,6 +3,7 @@ import Foundation
 import LocalRepository
 import SyncEngine
 import FilesystemAdapter
+import CaptureCore
 import HippoPresentation
 
 /// Debug-only destination that "uploads" into a folder in the App Group container, so the whole sync
@@ -14,7 +15,7 @@ struct DevFolderProvider: StorageProvider {
     let displayName = "Developer folder"
 
     /// Recomputed on every use: App Group container paths can change across reinstalls.
-    private static func remoteRoot() throws -> URL {
+    static func remoteRoot() throws -> URL {
         guard let container = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: AppEnvironment.appGroupID) else { throw Failure.appGroupUnavailable }
         return container
@@ -35,5 +36,30 @@ struct DevFolderProvider: StorageProvider {
     }
 
     func signOut(_ d: Destination) async {}
+}
+
+extension DevFolderProvider {
+    /// Writes `GoldSample` for the newest capture to `<HippoDevRemote>/enrichments/server/…/enrichment.json`.
+    /// Returns false when there is no capture or it has no synced job to the developer folder.
+    static func writeSampleGold(store: HippoStore) async -> Bool {
+        await Task.detached { () -> Bool in
+            do {
+                guard let newest = try store.index.page(CaptureFilter(), after: nil, limit: 1).first,
+                      try store.jobs.jobs(captureID: newest.id).contains(where: {
+                          $0.destinationID == "dev-folder" && $0.state == .synced }),
+                      let metadata = try store.index.metadata(captureID: newest.id, layout: store.layout),
+                      let digest = try store.index.packageDigest(captureID: newest.id) else { return false }
+                let doc = GoldSample.make(metadata: metadata, packageDigest: digest, now: Date())
+                let directory = try remoteRoot().appendingPathComponent(
+                    try EnrichmentPaths.remoteDirectory(.server, packageDirectory: newest.relativeDirectory), isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try EnrichmentJSON.encode(doc).write(to: directory.appendingPathComponent(EnrichmentPaths.documentName),
+                                                     options: .atomic)
+                return true
+            } catch {
+                return false
+            }
+        }.value
+    }
 }
 #endif

@@ -48,6 +48,7 @@ enum SyncScheduling {
         task.expirationHandler = {
             completion.markExpired()
             coordinator.requestStop()
+            EnrichmentScheduling.cancel()
             Task {
                 try? await Task.sleep(for: BackgroundActivity.expiryGrace)
                 finish(false)
@@ -55,6 +56,7 @@ enum SyncScheduling {
         }
         Task {
             await runPass(coordinator, name: "background-sync")
+            if !completion.expired { await EnrichmentScheduling.run(environment, reason: "background") }
             // After expiry the task may already be completed and the assertion ended; the next
             // background entry resubmits, so skip the unprotected SQLite read here.
             if !completion.expired { await scheduleBackgroundTask(environment) }
@@ -77,16 +79,25 @@ enum SyncScheduling {
         }
     }
 
-    /// Asks iOS to run a sync later, if anything is waiting to upload to a connected destination.
+    /// Asks iOS to run the task later, if anything is waiting to upload to a connected destination
+    /// (packages or silver), or enrichment has work for a kind that is switched on.
     static func scheduleBackgroundTask(_ environment: AppEnvironment) async {
         let store = environment.store
-        let hasWork = await Task.detached { () -> Bool in
-            guard (try? store.destinations.active()) != nil else { return false }
-            return ((try? store.index.counts()) ?? [:])[.notSynced, default: 0] > 0
+        let versions = await EnrichmentScheduling.enabledVersions(environment)
+        let (syncWork, enrichmentWork) = await Task.detached { () -> (Bool, Bool) in
+            var sync = false
+            if let active = try? store.destinations.active() {
+                sync = ((try? store.index.counts()) ?? [:])[.notSynced, default: 0] > 0
+                    || ((try? store.enrichments.pendingUploadCount(destinationID: active.id, now: Date())) ?? 0) > 0
+            }
+            // Also counts captures with no task rows yet, such as ones the Share Extension saved.
+            let enrich = (try? store.enrichmentTasks.hasWork(versions: versions, now: Date())) ?? false
+            return (sync, enrich)
         }.value
-        guard hasWork else { return }
+        guard syncWork || enrichmentWork else { return }
         let request = BGProcessingTaskRequest(identifier: taskIdentifier)
-        request.requiresNetworkConnectivity = true
+        // On-device enrichment alone doesn't need the network.
+        request.requiresNetworkConnectivity = syncWork
         request.earliestBeginDate = Date(timeIntervalSinceNow: earliestBeginDelay)
         do {
             try await BGTaskScheduler.shared.submitTaskRequest(request)
@@ -116,6 +127,8 @@ private struct SyncSchedulingModifier: ViewModifier {
                 if let coordinator = environment.coordinator {
                     Task { await SyncScheduling.runPass(coordinator, name: "foreground-sync") }
                 }
+                // Picks up anything pending, including captures saved by the Share Extension.
+                Task { await EnrichmentScheduling.run(environment, reason: "foreground") }
             default:
                 break
             }

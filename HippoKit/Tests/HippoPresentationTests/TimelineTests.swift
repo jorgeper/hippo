@@ -101,45 +101,74 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
     @Test func rowTimeUsesRecordedOffset() {
         var s = summary(types: [.url], attachments: 0, offset: 32400)
         s.capturedAt = iso("2026-11-07T07:30:00Z")
-        let time = TimelineRow.make(s, metadata: nil, locale: locale).time
+        let time = TimelineRow.make(s, metadata: nil, enrichment: nil, locale: locale).time
         #expect(time.replacingOccurrences(of: "\u{202F}", with: " ") == "4:30 PM")
     }
 
     @Test func rowCarriesPackageDirectory() {
         let row = TimelineRow.make(summary(types: [.image], attachments: 1, primary: "attachments/1.jpg"),
-                                   metadata: nil, locale: locale)
+                                   metadata: nil, enrichment: nil, locale: locale)
         #expect(row.relativeDirectory == "2026/11/x")
     }
 
     @Test func voiceRowShowsDuration() {
         let s = summary(types: [.audio], method: .voiceRecording, attachments: 1)
         let m = metadata(attachments: [attachment(1, uti: "public.mpeg-4-audio", duration: 75.4)])
-        let row = TimelineRow.make(s, metadata: m, locale: locale)
+        let row = TimelineRow.make(s, metadata: m, enrichment: nil, locale: locale)
         #expect(row.kind == .voice && row.title == "Voice note · 1:15")
-        #expect(TimelineRow.make(s, metadata: nil, locale: locale).title == "Voice note")
+        #expect(TimelineRow.make(s, metadata: nil, enrichment: nil, locale: locale).title == "Voice note")
     }
 
     @Test func linkRowShowsHost() {
         let s = summary(types: [.url], attachments: 0, title: "A page", comment: "read later")
-        let row = TimelineRow.make(s, metadata: metadata(urls: ["https://www.example.com/a"]), locale: locale)
+        let row = TimelineRow.make(s, metadata: metadata(urls: ["https://www.example.com/a"]), enrichment: nil, locale: locale)
         #expect(row.kind == .link && row.title == "A page" && row.subtitle == "example.com")
         #expect(row.comment == "read later" && row.sync == .onIPhone)
+    }
+
+    @Test func linkRowUsesPreview() {
+        let s = summary(types: [.url], attachments: 0, title: "A page")
+        let e = ResolvedEnrichment(links: ["https://www.example.com/a": ResolvedLink(
+            url: "https://www.example.com/a", title: "Preview title", siteName: "Example", channel: "Chan",
+            thumbnailURL: URL(fileURLWithPath: "/t.jpg"))], places: [:], recognizedText: [:], transcripts: [:],
+            detections: [], sourceAppGuess: nil, summary: nil, tags: [], usesServer: false)
+        let row = TimelineRow.make(s, metadata: metadata(urls: ["https://www.example.com/a"]), enrichment: e,
+                                   locale: locale)
+        #expect(row.title == "Preview title" && row.subtitle == "Chan")
+        #expect(row.thumbnailURL == URL(fileURLWithPath: "/t.jpg"))
+        let plain = TimelineRow.make(s, metadata: metadata(urls: ["https://www.example.com/a"]), enrichment: nil,
+                                     locale: locale)
+        #expect(plain.title == "A page" && plain.subtitle == "example.com" && plain.thumbnailURL == nil)
+    }
+
+    @Test func voiceRowShowsTranscriptLine() {
+        let s = summary(types: [.audio], method: .voiceRecording, attachments: 1)
+        let m = metadata(attachments: [attachment(1, uti: "public.mpeg-4-audio", duration: 5)])
+        let long = String(repeating: "word ", count: 30)
+        let e = ResolvedEnrichment(links: [:], places: [:], recognizedText: [:], transcripts: [
+            "a1": TranscriptItem(attachmentID: "a1", text: "\n  \nFirst line here\nsecond", locale: "en_US", segments: [])],
+            detections: [], sourceAppGuess: nil, summary: nil, tags: [], usesServer: false)
+        #expect(TimelineRow.make(s, metadata: m, enrichment: e, locale: locale).subtitle == "First line here")
+        let e2 = ResolvedEnrichment(links: [:], places: [:], recognizedText: [:], transcripts: [
+            "a1": TranscriptItem(attachmentID: "a1", text: long, locale: "en_US", segments: [])],
+            detections: [], sourceAppGuess: nil, summary: nil, tags: [], usesServer: false)
+        #expect(TimelineRow.make(s, metadata: m, enrichment: e2, locale: locale).subtitle?.count == 80)
     }
 
     @Test func multiRowCountsExtra() {
         let s = summary(types: [.image], attachments: 5, primary: "attachments/1.bin")
         let m = metadata(attachments: (1...5).map { attachment($0) })
-        let row = TimelineRow.make(s, metadata: m, locale: locale)
+        let row = TimelineRow.make(s, metadata: m, enrichment: nil, locale: locale)
         #expect(row.kind == .multi && row.thumbnailAttachmentPaths.count == 3 && row.extraCount == 2)
     }
 
     @Test func singleMediaNoteAndFileRows() {
         let media = TimelineRow.make(summary(types: [.image], attachments: 1, primary: "attachments/1.bin"),
-                                     metadata: nil, locale: locale)
+                                     metadata: nil, enrichment: nil, locale: locale)
         #expect(media.kind == .media && media.thumbnailAttachmentPaths == ["attachments/1.bin"])
-        #expect(TimelineRow.make(summary(types: [.text], method: .typedNote, attachments: 1), metadata: nil,
+        #expect(TimelineRow.make(summary(types: [.text], method: .typedNote, attachments: 1), metadata: nil, enrichment: nil,
                                  locale: locale).kind == .note)
-        let file = TimelineRow.make(summary(types: [.pdf], attachments: 1, title: "doc.pdf"), metadata: nil, locale: locale)
+        let file = TimelineRow.make(summary(types: [.pdf], attachments: 1, title: "doc.pdf"), metadata: nil, enrichment: nil, locale: locale)
         #expect(file.kind == .file && file.title == "doc.pdf")
     }
 

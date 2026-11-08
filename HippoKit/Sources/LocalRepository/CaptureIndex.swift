@@ -36,7 +36,8 @@ public final class CaptureIndex: Sendable {
                       Self.primaryPath(m).map { .text($0) } ?? .null, .text(p.relativeDirectory),
                       .text(digest), .int(now), .int(Int64(m.utcOffsetSeconds))])
             try tx.execute("""
-                INSERT INTO captures_fts(capture_id, title, user_note, shared_text, urls, filenames) VALUES (?,?,?,?,?,?)
+                INSERT INTO captures_fts(capture_id, title, user_note, shared_text, urls, filenames, enrichment)
+                  VALUES (?,?,?,?,?,?,'')
                 """, [.text(m.captureID), .text(title), .text(m.userNote ?? ""), .text(shared),
                       .text(m.urls.map(\.url).joined(separator: " ")),
                       .text(m.attachments.compactMap(\.originalFilename).joined(separator: " "))])
@@ -62,6 +63,12 @@ public final class CaptureIndex: Sendable {
     public func relativeDirectory(captureID: String) throws -> String? {
         try db.query("SELECT relative_directory FROM captures WHERE capture_id = ?", [.text(captureID)]).first?
             .string("relative_directory")
+    }
+
+    /// The capture's package digest (SHA-256 of `complete.json`), or nil if it isn't indexed.
+    public func packageDigest(captureID: String) throws -> String? {
+        try db.query("SELECT package_digest FROM captures WHERE capture_id = ?", [.text(captureID)]).first?
+            .string("package_digest")
     }
 
     public func count() throws -> Int {
@@ -97,6 +104,7 @@ public final class CaptureIndex: Sendable {
         return result
     }
 
+    /// Search matches every `captures_fts` column, including the enrichment text `EnrichmentStore` keeps current.
     public func page(_ f: CaptureFilter, after: PageCursor?, limit: Int) throws -> [CaptureSummary] {
         var clauses: [String] = []
         var args: [SQLValue] = []

@@ -134,7 +134,7 @@ public final class ShareSessionModel {
     static func message(for error: CaptureError) -> String {
         switch error {
         case .insufficientSpace: "Not enough space on this iPhone. Nothing was saved."
-        case .attachmentsFailed(let failures): "\(failures.count) items couldn't be saved."
+        case .attachmentsFailed(let failures): "\(items(failures.count)) couldn't be saved."
         case .emptyCapture: nothingSavableMessage
         case .io: genericFailureMessage
         }
@@ -142,11 +142,14 @@ public final class ShareSessionModel {
 
     static func partialMessage(unsupported a: Int, loadFailed b: Int) -> String {
         switch (a > 0, b > 0) {
-        case (true, true): "\(a) items can't be saved and \(b) couldn't be copied."
+        case (true, true): "\(items(a)) can't be saved and \(b) couldn't be copied."
         case (true, false): "Hippo can't save \(a) of these items."
-        default: "\(b) items couldn't be copied."
+        default: "\(items(b)) couldn't be copied."
         }
     }
+
+    /// "1 item", "2 items".
+    private static func items(_ n: Int) -> String { n == 1 ? "1 item" : "\(n) items" }
 
     static func symbol(for draft: CaptureDraft) -> String {
         if let first = draft.attachments.first {

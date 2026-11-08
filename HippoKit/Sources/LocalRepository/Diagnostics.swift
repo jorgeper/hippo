@@ -14,6 +14,9 @@ public enum Diagnostics {
         var jobsByState: [String: Int64]
         var recentErrorCodes: [String]
         var destinations: [DestinationSummary]
+        var enrichmentTasks: [String: [String: Int]]
+        var enrichmentUploadsPending: Int
+        var gold: GoldSummary
 
         enum CodingKeys: String, CodingKey {
             case generatedAt = "generated_at"
@@ -23,6 +26,25 @@ public enum Diagnostics {
             case jobsByState = "jobs_by_state"
             case recentErrorCodes = "recent_error_codes"
             case destinations
+            case enrichmentTasks = "enrichment_tasks"
+            case enrichmentUploadsPending = "enrichment_uploads_pending"
+            case gold
+        }
+    }
+
+    private struct GoldSummary: Encodable {
+        var lastResultCode: String?
+        var lastPullAgeSeconds: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case lastResultCode = "last_result_code"
+            case lastPullAgeSeconds = "last_pull_age_seconds"
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encodeIfPresent(lastResultCode, forKey: .lastResultCode)
+            try c.encodeIfPresent(lastPullAgeSeconds, forKey: .lastPullAgeSeconds)
         }
     }
 
@@ -56,6 +78,21 @@ public enum Diagnostics {
             SELECT provider_kind, status FROM destinations ORDER BY created_at_ms, destination_id
             """).map { DestinationSummary(providerKind: $0.string("provider_kind") ?? "", status: $0.string("status") ?? "") }
 
+        // Gold and upload figures describe the active destination, if there is one.
+        var pending = 0
+        var gold = GoldSummary()
+        if let active = try db.query("SELECT destination_id FROM destinations WHERE status = 'active' ORDER BY destination_id LIMIT 1")
+            .first?.string("destination_id") {
+            pending = try EnrichmentStore.uploadCandidateCount(db: db, destinationID: active, now: now)
+            if let row = try db.query("SELECT last_result_code, last_pull_at_ms FROM gold_cursors WHERE destination_id = ?",
+                                      [.text(active)]).first {
+                gold.lastResultCode = row.string("last_result_code").map(safeCode)
+                gold.lastPullAgeSeconds = row.int("last_pull_at_ms").map {
+                    max(0, Int((now.timeIntervalSince1970 - Double($0) / 1000).rounded()))
+                }
+            }
+        }
+
         return try HippoJSON.encode(Report(
             generatedAt: now,
             appVersion: appVersion,
@@ -63,7 +100,10 @@ public enum Diagnostics {
             captureCount: try db.query("SELECT count(*) AS n FROM captures")[0].int("n") ?? 0,
             jobsByState: byState,
             recentErrorCodes: errors,
-            destinations: destinations))
+            destinations: destinations,
+            enrichmentTasks: try EnrichmentTaskStore(db: db).counts(),
+            enrichmentUploadsPending: pending,
+            gold: gold))
     }
 
     /// `code` if it matches `^[a-z0-9_:.-]{1,64}$`, otherwise "unrecognized".

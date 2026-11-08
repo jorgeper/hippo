@@ -143,7 +143,7 @@ private let unsupported = FakeProvider(types: ["com.example.unknown"])
 
     @Test func storeAttachmentFailureOffersPartialConfirmation() {
         let failures = [AttachmentFailure(index: 0, reason: "x")]
-        #expect(ShareSessionModel.message(for: .attachmentsFailed(failures)) == "1 items couldn't be saved.")
+        #expect(ShareSessionModel.message(for: .attachmentsFailed(failures)) == "1 item couldn't be saved.")
     }
 
     @Test func previewSymbols() async throws {
@@ -220,5 +220,10 @@ private let unsupported = FakeProvider(types: ["com.example.unknown"])
         #expect(ShareSessionModel.message(for: .io("x")) == "Hippo couldn't save this. Nothing was saved.")
         #expect(ShareSessionModel.partialMessage(unsupported: 0, loadFailed: 3) == "3 items couldn't be copied.")
         #expect(ShareSessionModel.partialMessage(unsupported: 2, loadFailed: 1) == "2 items can't be saved and 1 couldn't be copied.")
+        // One item reads as one item.
+        #expect(ShareSessionModel.partialMessage(unsupported: 0, loadFailed: 1) == "1 item couldn't be copied.")
+        #expect(ShareSessionModel.partialMessage(unsupported: 1, loadFailed: 2) == "1 item can't be saved and 2 couldn't be copied.")
+        #expect(ShareSessionModel.message(for: .attachmentsFailed([AttachmentFailure(index: 0, reason: "x")]))
+                == "1 item couldn't be saved.")
     }
 }

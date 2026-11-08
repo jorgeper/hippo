@@ -24,7 +24,8 @@ private struct Harness {
     let model: SettingsModel
 
     init(faults: FaultPlan = FaultPlan(), adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil,
-         permission: @escaping () async -> Bool = { true }) throws {
+         permission: @escaping () async -> Bool = { true },
+         onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) throws {
         t = try TestStore()
         remote = t.base.appendingPathComponent("Remote", isDirectory: true)
         provider = FakeStorageProvider(root: remote, faults: faults, adapter: adapter)
@@ -35,7 +36,7 @@ private struct Harness {
         suite = "hippo-settings-\(UUID().uuidString)"
         settings = AppSettings(defaults: UserDefaults(suiteName: suite)!)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
-                              requestLocationPermission: permission)
+                              requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled)
     }
 
     func cleanup() {
@@ -104,6 +105,65 @@ struct SettingsTests {
         #expect(h.model.counts[.synced] == 1)
         #expect(h.model.summary == "All captures synced")
         #expect(FileManager.default.fileExists(atPath: h.t.store.layout.diagnosticsURL.path))
+    }
+
+    @Test func passUploadsSilverAfterPackagesWithoutChangingTheResult() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let p = try await h.t.note("with silver", at: start)
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        let digest = try #require(try h.t.store.index.packageDigest(captureID: p.metadata.captureID))
+        let facet = Facet(version: 1, status: .ok, generatedAt: start, provenance: "test",
+                          data: .object(["text": .string("hello")]))
+        try h.t.store.enrichments.write(
+            EnrichmentDocument(schemaVersion: 1, captureID: p.metadata.captureID, layer: .device, packageDigest: digest,
+                               producer: EnrichmentProducer(name: "t", version: "1", build: "1"), generatedAt: start,
+                               facets: [FacetKind.summary.rawValue: facet]), newAssets: [:])
+
+        let result = await h.coordinator.syncNow()
+
+        // Only the package counts toward the result.
+        #expect(result.synced == 1 && result.failed == 0)
+        let directory = try EnrichmentPaths.remoteDirectory(.device, packageDirectory: p.relativeDirectory)
+        let remoteDoc = h.remote.appendingPathComponent(directory).appendingPathComponent("enrichment.json")
+        #expect(FileManager.default.fileExists(atPath: remoteDoc.path))
+        #expect(try h.t.store.enrichments.uploadCandidates(destinationID: h.provider.destination.id, now: Date(),
+                                                           limit: 10).isEmpty)
+    }
+
+    @Test func passDrainsSilverBacklogInBoundedBatches() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let extra = 7
+        let count = SyncCoordinator.maxUploadRounds * 20 + extra   // 20 captures per uploader round
+        var packages: [CommittedPackage] = []
+        for i in 0..<count { packages.append(try await h.t.note("note \(i)", at: start.addingTimeInterval(Double(i)))) }
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        // Packages first, with no silver yet, so the next pass has silver to upload and no package work.
+        #expect(await h.coordinator.syncNow().synced == count)
+        for p in packages {
+            let digest = try #require(try h.t.store.index.packageDigest(captureID: p.metadata.captureID))
+            try h.t.store.enrichments.write(
+                EnrichmentDocument(schemaVersion: 1, captureID: p.metadata.captureID, layer: .device,
+                                   packageDigest: digest, producer: EnrichmentProducer(name: "t", version: "1", build: "1"),
+                                   generatedAt: start,
+                                   facets: [FacetKind.summary.rawValue: Facet(version: 1, status: .ok, generatedAt: start,
+                                                                               provenance: "test", data: nil)]),
+                newAssets: [:])
+        }
+        func pending() throws -> Int {
+            try h.t.store.enrichments.uploadCandidates(destinationID: h.provider.destination.id, now: Date(),
+                                                       limit: 10_000).count
+        }
+        #expect(try pending() == count)
+
+        // One pass uploads many batches, but stops after `maxUploadRounds` of them.
+        let result = await h.coordinator.syncNow()
+        #expect(result == SyncPassResult(synced: 0, failed: 0, idle: true))   // silver never counts
+        #expect(try pending() == extra)
+
+        _ = await h.coordinator.syncNow()
+        #expect(try pending() == 0)
     }
 
     @Test func coordinatorCoalescesConcurrentCalls() async throws {
@@ -401,5 +461,34 @@ struct SettingsTests {
         settings.locationEnabled = true
         #expect(defaults.bool(forKey: "location_enabled"))
         #expect(AppSettings(defaults: defaults).locationEnabled)
+    }
+
+    @Test func enrichmentDefaultsOn() throws {
+        let suite = "hippo-defaults-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        for item in SettingsModel.enrichmentSwitches { #expect(settings.isEnrichmentEnabled(item.kind)) }
+    }
+
+    @Test func turningOnTriggersBackfill() async throws {
+        let calls = Mutex<[String]>([])
+        let h = try Harness(onEnrichmentEnabled: { kind in calls.withLock { $0.append(kind.rawValue) } })
+        defer { h.cleanup() }
+        await h.model.setEnrichment(.place, on: false)
+        #expect(calls.withLock { $0 }.isEmpty)
+        #expect(h.settings.isEnrichmentEnabled(.place) == false)
+        await h.model.setEnrichment(.place, on: true)
+        #expect(calls.withLock { $0 } == ["place"])
+        #expect(h.settings.isEnrichmentEnabled(.place))
+    }
+
+    @Test func switchCopyExact() {
+        #expect(SettingsModel.enrichmentSwitches.map(\.title) == [
+            "Link previews", "Place names", "Text in images", "Voice note transcripts",
+            "Dates, phone numbers and addresses", "App guesses"])
+        #expect(SettingsModel.enrichmentSwitches.map(\.kind) == [
+            .linkPreview, .place, .textRecognition, .transcript, .dataDetection, .sourceAppGuess])
+        #expect(SettingsModel.enrichmentFooter == "Link previews fetch the page title and picture from the website. Place names are looked up with Apple Maps. Everything else runs on this iPhone.")
     }
 }

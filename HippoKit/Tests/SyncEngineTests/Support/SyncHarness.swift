@@ -112,8 +112,20 @@ struct HookedAdapter: StorageAdapter {
     var hideFromInspect: @Sendable (String) -> Bool = { _ in false }
     var beforeUpload: @Sendable (String) throws -> Void = { _ in }
     var onCheckpoint: @Sendable (String) throws -> Void = { _ in }
+    var afterUpload: @Sendable (String) -> Void = { _ in }
+    var beforeDownload: @Sendable (String) throws -> Void = { _ in }
 
     var capabilities: StorageCapabilities { inner.capabilities }
+    func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
+        try await inner.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
+    }
+    func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
+        try await inner.listChanges(under: prefix, cursor: cursor)
+    }
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
+        try beforeDownload(relativePath)
+        return try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes)
+    }
     func validateDestination() async throws { try await inner.validateDestination() }
     func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }
     func inspectFile(relativePath: String) async throws -> RemoteFileInfo? {
@@ -127,11 +139,13 @@ struct HookedAdapter: StorageAdapter {
                     saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt {
         try beforeUpload(relativePath)
         let hook = onCheckpoint
-        return try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
-                                          checkpoint: checkpoint, saveCheckpoint: { cp in
+        let receipt = try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
+                                                 checkpoint: checkpoint, saveCheckpoint: { cp in
             try hook(relativePath)
             try await saveCheckpoint(cp)
         })
+        afterUpload(relativePath)
+        return receipt
     }
 }
 
@@ -156,6 +170,15 @@ struct PausingAdapter: StorageAdapter {
     let release = Gate()
 
     var capabilities: StorageCapabilities { inner.capabilities }
+    func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
+        try await inner.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
+    }
+    func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
+        try await inner.listChanges(under: prefix, cursor: cursor)
+    }
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
+        try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes)
+    }
     func validateDestination() async throws { try await inner.validateDestination() }
     func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }
     func inspectFile(relativePath: String) async throws -> RemoteFileInfo? {

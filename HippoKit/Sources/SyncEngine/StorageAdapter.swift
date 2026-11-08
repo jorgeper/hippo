@@ -80,6 +80,23 @@ public struct UploadReceipt: Sendable, Equatable {
     }
 }
 
+public enum RemoteChange: Sendable, Equatable {
+    case upserted(RemoteFileInfo)
+    case deleted(relativePath: String)
+}
+
+public struct ChangePage: Sendable, Equatable {
+    public var changes: [RemoteChange]
+    public var cursor: String
+    public var hasMore: Bool
+
+    public init(changes: [RemoteChange], cursor: String, hasMore: Bool) {
+        self.changes = changes
+        self.cursor = cursor
+        self.hasMore = hasMore
+    }
+}
+
 public enum StorageError: Error, Sendable, Equatable {
     case offline
     case needsAuthentication
@@ -87,6 +104,7 @@ public enum StorageError: Error, Sendable, Equatable {
     case quotaExceeded
     case conflict(existing: RemoteFileInfo)
     case checkpointExpired
+    case cursorReset
     case transient(code: String)
     case permanent(code: String)
 }
@@ -103,4 +121,14 @@ public protocol StorageAdapter: Sendable {
     /// uses it to stop an upload whose lease was lost or whose job was cancelled).
     func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
                     saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt
+
+    /// Atomic overwrite. Throws `.permanent(code: "replace_not_allowed")` unless `relativePath` starts with `enrichments/`.
+    func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt
+    /// A nil cursor returns every file under `prefix` as `.upserted`; otherwise the changes since `cursor`.
+    /// An unknown or garbled cursor throws `.cursorReset`. Directories and hidden or temporary entries
+    /// (any path segment starting with `.`) are never reported.
+    func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage
+    /// Over `maxBytes` throws `.permanent(code: "too_large")` and leaves no file at `localURL`.
+    /// A missing file throws `.permanent(code: "not_found")`.
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo
 }

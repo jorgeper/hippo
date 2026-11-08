@@ -42,6 +42,62 @@ private final class Box: @unchecked Sendable {
         try await runAdapterContract(makeAdapter: { FilesystemAdapter(root: root) }, scratch: scratch)
     }
 
+    @Test func deletedFilesAreReported() async throws {
+        let root = try tempDir(), scratch = try tempDir()
+        let adapter = FilesystemAdapter(root: root)
+        let (url, integrity, _) = try write(scratch, "g.bin", bytes: 64)
+        let path = "enrichments/server/2026/11/07/gone/enrichment.json"
+        _ = try await adapter.uploadFile(localURL: url, relativePath: path, expected: integrity,
+                                         checkpoint: nil, saveCheckpoint: { _ in })
+        let first = try await adapter.listChanges(under: "enrichments/server/", cursor: nil)
+        #expect(first.changes.count == 1)
+        try FileManager.default.removeItem(at: root.appendingPathComponent(path))
+        let next = try await adapter.listChanges(under: "enrichments/server/", cursor: first.cursor)
+        #expect(next.changes == [.deleted(relativePath: path)])
+        let quiet = try await adapter.listChanges(under: "enrichments/server/", cursor: next.cursor)
+        #expect(quiet.changes.isEmpty)
+    }
+
+    @Test func consecutiveListsLeaveOneSnapshot() async throws {
+        let root = try tempDir(), scratch = try tempDir()
+        let adapter = FilesystemAdapter(root: root)
+        let (url, integrity, _) = try write(scratch, "p.bin", bytes: 32)
+        _ = try await adapter.uploadFile(localURL: url, relativePath: "enrichments/server/p.bin", expected: integrity,
+                                         checkpoint: nil, saveCheckpoint: { _ in })
+        let first = try await adapter.listChanges(under: "enrichments/server/", cursor: nil)
+        let second = try await adapter.listChanges(under: "enrichments/server/", cursor: first.cursor)
+        _ = try await adapter.listChanges(under: "enrichments/server/", cursor: second.cursor)
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".hippo-cursors").path)
+        #expect(files.count == 1)
+        await #expect(throws: StorageError.cursorReset) {
+            _ = try await adapter.listChanges(under: "enrichments/server/", cursor: first.cursor)
+        }
+    }
+
+    @Test func unreadableFileIsSkippedUntilReadable() async throws {
+        let root = try tempDir(), scratch = try tempDir()
+        let adapter = FilesystemAdapter(root: root)
+        let (u1, i1, _) = try write(scratch, "ok.bin", bytes: 20)
+        let (u2, i2, _) = try write(scratch, "locked.bin", bytes: 30)
+        let okPath = "enrichments/server/ok.bin", lockedPath = "enrichments/server/locked.bin"
+        _ = try await adapter.uploadFile(localURL: u1, relativePath: okPath, expected: i1, checkpoint: nil, saveCheckpoint: { _ in })
+        _ = try await adapter.uploadFile(localURL: u2, relativePath: lockedPath, expected: i2, checkpoint: nil, saveCheckpoint: { _ in })
+        let lockedURL = root.appendingPathComponent(lockedPath)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: lockedURL.path) }
+
+        let first = try await adapter.listChanges(under: "enrichments/server/", cursor: nil)
+        #expect(first.changes.count == 1)
+        guard case .upserted(let info)? = first.changes.first else { Issue.record("expected upsert"); return }
+        #expect(info.relativePath == okPath)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: lockedURL.path)
+        let second = try await adapter.listChanges(under: "enrichments/server/", cursor: first.cursor)
+        #expect(second.changes.count == 1)
+        guard case .upserted(let info2)? = second.changes.first else { Issue.record("expected upsert"); return }
+        #expect(info2.relativePath == lockedPath)
+    }
+
     @Test func faultWriteButThrowLeavesFileForInspection() async throws {
         let root = try tempDir(), scratch = try tempDir()
         let faults = FaultPlan()

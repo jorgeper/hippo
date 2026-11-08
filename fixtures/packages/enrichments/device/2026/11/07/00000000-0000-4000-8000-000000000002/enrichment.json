@@ -1,0 +1,45 @@
+{
+  "capture_id" : "00000000-0000-4000-8000-000000000002",
+  "facets" : {
+    "link_preview" : {
+      "data" : {
+        "items" : [
+          {
+            "site_name" : "example.com",
+            "thumbnail" : {
+              "byte_count" : 764,
+              "mime_type" : "image/jpeg",
+              "relative_path" : "assets/d43c48908fba8a77a4ee99f36093e3c9594c24389b8caf4e622bb6981f9a1768.jpg",
+              "sha256" : "d43c48908fba8a77a4ee99f36093e3c9594c24389b8caf4e622bb6981f9a1768"
+            },
+            "title" : "Example Domain",
+            "url" : "https://example.com/item"
+          }
+        ]
+      },
+      "generated_at" : "2026-11-07T18:00:00.000Z",
+      "provenance" : "link_fetch",
+      "status" : "ok",
+      "version" : 1
+    },
+    "source_app_guess" : {
+      "data" : {
+        "app" : "Safari",
+        "reason" : "uti:public.url"
+      },
+      "generated_at" : "2026-11-07T18:00:00.000Z",
+      "provenance" : "heuristic",
+      "status" : "ok",
+      "version" : 1
+    }
+  },
+  "generated_at" : "2026-11-07T18:00:00.000Z",
+  "layer" : "device",
+  "package_digest" : "dcb65caedf824a4442f61c2aba5495f3cf04eeac0a84af3796fa8491fae4c04f",
+  "producer" : {
+    "build" : "1",
+    "name" : "hippo-fixtures",
+    "version" : "1"
+  },
+  "schema_version" : 1
+}

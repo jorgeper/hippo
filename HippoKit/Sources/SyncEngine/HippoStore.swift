@@ -30,6 +30,10 @@ public final class HippoStore: Sendable {
     public let index: CaptureIndex
     public let jobs: JobStore
     public let destinations: DestinationStore
+    /// Local silver and gold documents, their search text, silver upload rows and gold cursors.
+    public let enrichments: EnrichmentStore
+    /// Silver enrichment work per (capture, kind).
+    public let enrichmentTasks: EnrichmentTaskStore
     private let db: Database
     private let writer: PackageWriter
     private let leaseWaitLimit: Duration
@@ -41,6 +45,8 @@ public final class HippoStore: Sendable {
         index = CaptureIndex(db: db)
         jobs = JobStore(db: db)
         destinations = DestinationStore(db: db)
+        enrichments = EnrichmentStore(db: db, layout: layout)
+        enrichmentTasks = EnrichmentTaskStore(db: db)
         writer = PackageWriter(layout: layout, producer: producer)
     }
 
@@ -59,9 +65,19 @@ public final class HippoStore: Sendable {
                           leaseWaitLimit: leaseWaitLimit)
     }
 
-    /// Startup recovery (spec §4).
+    /// Startup recovery (spec §4), then the enrichment steps (design §6.2, §9): enrichment staging
+    /// leftovers are removed, and so are enrichment directories with no indexed capture, unless some item
+    /// of the package recovery failed (that capture's package may still exist). Then the index's search
+    /// text and `device_revision` are re-synced with the enrichment files. Enrichment failures are only logged.
     public func recover() throws -> RecoveryReport {
-        try Reconciler(layout: layout, index: index, jobs: jobs, destinations: destinations).run()
+        let report = try Reconciler(layout: layout, index: index, jobs: jobs, destinations: destinations).run()
+        do { _ = try enrichments.sweep(removingOrphans: report.failed == 0) } catch {
+            Self.log.error("\("recover_enrichment_sweep_failed", privacy: .public)")
+        }
+        do { _ = try enrichments.reconcileIndex() } catch {
+            Self.log.error("\("recover_enrichment_reindex_failed", privacy: .public)")
+        }
+        return report
     }
 
     /// Commits the draft, then indexes it and enqueues it for the active destination. Once the commit
@@ -92,10 +108,26 @@ public final class HippoStore: Sendable {
                    owner: owner)
     }
 
+    /// Uploads silver enrichment to the active destination after packages have synced, with the default
+    /// retry policy and clock.
+    public func makeEnrichmentUploader(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> EnrichmentUploader {
+        EnrichmentUploader(layout: layout, destinations: destinations, enrichments: enrichments,
+                           adapterFor: adapterFor)
+    }
+
+    /// Pulls gold enrichment from the active destination's `enrichments/server/` tree, with the default clock.
+    public func makeGoldPuller(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> GoldPuller {
+        GoldPuller(layout: layout, index: index, destinations: destinations, enrichments: enrichments,
+                   adapterFor: adapterFor)
+    }
+
     /// Deletes the capture from this phone (spec §11): cancels its uploads, waits up to 10 s for a
     /// worker holding an active upload lease to let go, then removes the package and the index row
-    /// (its jobs, receipts and checkpoints cascade). Remote copies, complete or partial, are never
-    /// touched. A worker still mid-file after the wait loses its lease with the job row and stops.
+    /// (its jobs, receipts and checkpoints cascade), then its local silver and gold (their rows cascade
+    /// too). Remote copies, complete or partial, are never touched. A worker still mid-file after the
+    /// wait loses its lease with the job row and stops.
     /// Deleting an unknown capture does nothing.
     ///
     /// Crash-safe (ruling R31): the package is first renamed out of `captures/` to
@@ -134,6 +166,10 @@ public final class HippoStore: Sendable {
         }
         try index.remove(captureID: captureID)
         removed = true
+        // Without the index row these are orphans, and the next recover() sweeps whatever is left.
+        do { try enrichments.removeAll(captureID: captureID) } catch {
+            Self.log.error("\("delete_enrichment_cleanup_failed", privacy: .public)")
+        }
         // The capture is already deleted from the user's point of view. Another process's recover()
         // may be sweeping the directory at the same time, and the next recover() finishes it anyway.
         do { try Self.removeIfPresent(staged) } catch { Self.log.error("\("delete_cleanup_failed", privacy: .public)") }
