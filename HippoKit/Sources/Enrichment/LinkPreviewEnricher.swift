@@ -33,11 +33,15 @@ public struct LinkPreviewEnricher: Enricher {
     public var inputs: Set<FacetKind> { [] }
 
     private let http: any HTTPFetching
+    private let redirects: any RedirectResolving
     private let metadata: any LinkMetadataFetching
     private let tempDirectory: URL
 
-    public init(http: any HTTPFetching, metadata: any LinkMetadataFetching, tempDirectory: URL) {
-        self.http = http; self.metadata = metadata; self.tempDirectory = tempDirectory
+    /// `redirects` vets a link's redirect chain before `metadata` (which follows redirects with no hook)
+    /// is called, so a shortener or click tracker never leads it to a link the policy never fetches.
+    public init(http: any HTTPFetching, redirects: any RedirectResolving, metadata: any LinkMetadataFetching,
+                tempDirectory: URL) {
+        self.http = http; self.redirects = redirects; self.metadata = metadata; self.tempDirectory = tempDirectory
     }
 
     public func applies(to m: CaptureMetadata) -> Bool { !m.urls.isEmpty }
@@ -87,11 +91,18 @@ public struct LinkPreviewEnricher: Enricher {
                     items.append(LinkPreviewItem(url: captured.url, title: parsed.title, siteName: "YouTube",
                                                  channel: parsed.channel, thumbnail: thumb))
                 case .fetch:
-                    let md = try await metadata.metadata(for: url, timeout: Self.timeout)
-                    if let final = md.finalURL, case .skip = LinkFetchPolicy.decide(final) { continue }
+                    // A redirect into a never-fetch link counts as a never-fetch link: not attempted, not fetched.
+                    guard case .final(let target) = try await redirects.resolve(url, timeout: Self.timeout),
+                          !Self.skips(target) else {
+                        attempted -= 1
+                        continue
+                    }
+                    let md = try await metadata.metadata(for: target, timeout: Self.timeout)
+                    // LinkPresentation can still redirect on its own (a page or script redirect).
+                    if let final = md.finalURL, Self.skips(final) { continue }
                     var thumb: AssetRef?
                     if let data = md.imageData, let jpeg = try? ThumbnailEncoder.jpeg(from: data) { thumb = try store(jpeg) }
-                    let site = Self.clean(md.siteName) ?? Self.siteName(from: url)
+                    let site = Self.clean(md.siteName) ?? Self.siteName(from: target)
                     if Self.clean(md.title) == nil && Self.clean(md.summary) == nil && thumb == nil { continue }
                     allOEmbed = false
                     items.append(LinkPreviewItem(url: captured.url, title: Self.clean(md.title), siteName: site,
@@ -118,6 +129,11 @@ public struct LinkPreviewEnricher: Enricher {
         }
         return EnricherOutput(status: .ok, data: try .payload(LinkPreviewData(items: items)),
                               provenance: allOEmbed ? "oembed" : "link_presentation", newAssets: assets)
+    }
+
+    private static func skips(_ url: URL) -> Bool {
+        if case .skip = LinkFetchPolicy.decide(url) { return true }
+        return false
     }
 
     private static func clean(_ s: String?) -> String? {

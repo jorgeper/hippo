@@ -129,7 +129,8 @@ enum EnrichmentScheduling {
         let network = NetworkStatus.shared
         let settings = LocationService.settings
         let enrichers: [any Enricher] = [
-            LinkPreviewEnricher(http: URLSessionHTTPFetcher(), metadata: LinkPresentationFetcher(),
+            LinkPreviewEnricher(http: URLSessionHTTPFetcher(), redirects: URLSessionRedirectResolver(),
+                                metadata: LinkPresentationFetcher(),
                                 tempDirectory: staging),
             PlaceEnricher(lookup: MapKitPlaceLookup()),
             TextRecognitionEnricher(),

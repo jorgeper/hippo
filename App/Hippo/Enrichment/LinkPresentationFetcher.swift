@@ -78,15 +78,14 @@ struct LinkPresentationFetcher: LinkMetadataFetching {
 
     // MARK: Errors
 
-    /// Same rule as `URLSessionHTTPFetcher`: only "no network" defers; DNS, connection failures, timeouts
-    /// and everything else are transient (they count an attempt).
+    /// Same rule as `URLSessionHTTPFetcher`: only "no network" defers; DNS, connection failures, lost
+    /// connections, timeouts and everything else are transient (they count an attempt).
     private static func map(_ error: Error?) -> Error {
         guard let error else { return EnrichmentError.transient(code: "link_failed") }
         if error is CancellationError { return error }
         if let urlError = underlyingURLError(error) {
             switch urlError.code {
-            case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff,
-                 .callIsActive:
+            case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive:
                 return EnrichmentError.deferred(code: "offline", retryAfter: 60)
             case .cancelled:
                 return CancellationError()

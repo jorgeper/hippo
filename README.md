@@ -77,7 +77,7 @@ Local paths are inside the App Group container. Each directory holds `enrichment
 
 - Link previews run with a 15 s timeout, for the first 5 links per capture:
   - A YouTube link sends the video URL to `www.youtube.com/oembed`, not to the watch page. The thumbnail is downloaded from the host that response names (normally `i.ytimg.com`).
-  - Any other link is fetched from the linked site through LinkPresentation, which may also load that page's image.
+  - Any other link first gets a `HEAD` request (or, if the site rejects `HEAD`, a one-byte `GET`) to follow its redirects. Then the page is fetched from where they lead through LinkPresentation, which may also load that page's image.
 - Place names send coordinates to Apple Maps. The place line shows city and region; "near <Name>" appears only for an accurate fix.
 - Everything else (text in images, transcripts, found dates and addresses, app guesses) runs on the iPhone.
 
@@ -94,7 +94,7 @@ These links are recorded as empty and never requested (YouTube oEmbed excepted):
 - URLs with a query key `token`, `code`, `key`, `sig`, `signature`, `auth`, `otp` or `magic`;
 - URLs whose path contains `unsubscribe`, `login`, `verify`, `reset` or `confirm`.
 
-The URL a redirect ends at is checked against the same rules, and the result is discarded if it breaks one.
+Redirects are followed one hop at a time before LinkPresentation is called, and each hop is checked against the same rules. A link that redirects to one of these is recorded as empty, and that hop is never requested. LinkPresentation is given only the checked final URL. One gap remains: a page that redirects again while LinkPresentation loads it (a `GET`-only redirect, or one made by the page's script) is not checked until afterwards, and then the preview is discarded.
 
 ### Server and Dropbox
 
