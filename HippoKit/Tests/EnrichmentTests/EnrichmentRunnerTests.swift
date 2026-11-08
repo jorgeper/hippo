@@ -341,18 +341,99 @@ private let t0 = RunnerHarness.t0
         #expect(slow.invocations == 2)
     }
 
-    @Test func passFinishedIsPostedOnTheMainActor() async throws {
+    @Test func passFinishedIsPostedOnTheMainActorWithTheRunner() async throws {
         let h = try RunnerHarness(); defer { h.cleanup() }
         let runner = h.runner([FakeEnricher(kind: .sourceAppGuess)])
-        let posted = Box(false)
-        let observer = NotificationCenter.default.addObserver(forName: EnrichmentRunner.passFinished, object: nil,
+        // Other suites post the same name in parallel, so only this runner's posts are counted.
+        let posts = Box<[Bool]>([])
+        let observer = NotificationCenter.default.addObserver(forName: EnrichmentRunner.passFinished, object: runner,
                                                               queue: nil) { _ in
-            posted.value = Thread.isMainThread
+            posts.value.append(Thread.isMainThread)
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         _ = await runner.runPending()
-        #expect(posted.value)
+        #expect(posts.value == [true])
+        _ = await runner.runPending()
+        #expect(posts.value == [true, true])
         #expect(EnrichmentRunner.passFinished.rawValue == "HippoEnrichmentPassFinished")
+    }
+
+    @Test func unreadableDocumentRebuiltOnFailureRefillsOtherKinds() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let id = try await h.note("hi")
+        let guess = FakeEnricher(kind: .sourceAppGuess, fallback: FakeEnricher.ok(.string("notes")))
+        let transcript = FakeEnricher(kind: .transcript, steps: [.output(FakeEnricher.ok(.string("words"))),
+                                                                 .error(.permanent(code: "too_long"))])
+        let runner = h.runner([guess, transcript])
+        try await runner.schedule()
+        #expect(await runner.runPending().ran == 2)
+        #expect(try h.task(id, .sourceAppGuess)?.status == "ok")
+
+        // The device document becomes unreadable; then the transcript reruns and fails for good.
+        let json = h.store.layout.enrichmentDirectory(.device, captureID: id)
+            .appendingPathComponent(EnrichmentPaths.documentName)
+        try Data("{not json".utf8).write(to: json)
+        try h.store.enrichmentTasks.resetToPending(captureID: id, kind: .transcript, now: t0)
+        h.disabled.value = [.sourceAppGuess]
+        #expect(await runner.runPending() == EnrichmentPassResult(ran: 1, failed: 1, idle: false))
+
+        // The rebuilt document holds only the failed facet, so the other kind is pending again ...
+        #expect(try h.deviceDoc(id)?.facets.keys.sorted() == ["transcript"])
+        #expect(try h.task(id, .transcript)?.status == "failed")
+        #expect(try h.task(id, .sourceAppGuess)?.status == "pending")
+        // ... and the next pass refills it.
+        h.disabled.value = []
+        #expect(await runner.runPending().ran == 1)
+        #expect(try h.deviceDoc(id)?[.sourceAppGuess]?.data == .string("notes"))
+        #expect(try h.deviceDoc(id)?[.transcript]?.status == .failed)
+    }
+
+    @Test func queuedPassReturnsAtOnceWhenCancelled() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        _ = try await h.note("hi")
+        let slow = FakeEnricher(kind: .transcript, steps: [.custom({ _ in
+            try await Task.sleep(for: .seconds(30))
+            return FakeEnricher.ok(.string("late"))
+        })])
+        let runner = h.runner([slow])
+        try await runner.schedule()
+        let finishedFirst = Box(false)
+        let first = Task {
+            let r = await runner.runPending()
+            finishedFirst.value = true
+            return r
+        }
+        while slow.invocations == 0 { try await Task.sleep(for: .milliseconds(5)) }
+
+        let queued = Task { await runner.runPending() }
+        try await Task.sleep(for: .milliseconds(50))  // let it queue behind the running pass
+        queued.cancel()
+        #expect(await queued.value == EnrichmentPassResult(ran: 0, failed: 0, idle: true))
+        #expect(!finishedFirst.value)
+
+        first.cancel()
+        _ = await first.value
+        #expect(slow.invocations == 1)
+        // The runner is still usable: a new pass runs the (untouched) task.
+        slow.enqueue(.output(FakeEnricher.ok(.string("now"))))
+        #expect(await runner.runPending().ran == 1)
+    }
+
+    @Test func outputWithAFailureStatusIsAPermanentFailure() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let id = try await h.note("hi")
+        let fake = FakeEnricher(kind: .sourceAppGuess, steps: [.output(EnricherOutput(
+            status: .failed, data: .string("odd"), provenance: "fake", newAssets: [:]))])
+        let runner = h.runner([fake])
+        try await runner.schedule()
+        #expect(await runner.runPending() == EnrichmentPassResult(ran: 1, failed: 1, idle: false))
+        let task = try #require(try h.task(id, .sourceAppGuess))
+        #expect(task.status == "failed")
+        #expect(task.lastErrorCode == "invalid_status")
+        let facet = try #require(try h.deviceDoc(id)?[.sourceAppGuess])
+        #expect(facet.status == .failed)
+        #expect(facet.data == nil)
+        #expect(facet.provenance == "invalid_status")
     }
 }
 
