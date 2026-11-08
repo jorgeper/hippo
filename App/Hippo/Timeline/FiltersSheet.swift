@@ -42,8 +42,8 @@ struct FiltersSheet: View {
                     .pickerStyle(.inline)
                     .labelsHidden()
                     if case .custom = filters.date {
-                        DatePicker("From", selection: customFrom, displayedComponents: .date)
-                        DatePicker("To", selection: customThrough, displayedComponents: .date)
+                        DatePicker("From", selection: customFrom, in: ...customThrough.wrappedValue, displayedComponents: .date)
+                        DatePicker("To", selection: customThrough, in: customFrom.wrappedValue..., displayedComponents: .date)
                     }
                 }
                 Section("Type") {

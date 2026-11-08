@@ -65,7 +65,13 @@ public final class TimelineModel {
     }
 
     /// Waits for a reload started by changing `filter`. Tests use it.
-    func settle() async { await reloadTask?.value }
+    func settle() async {
+        while let pending = debounceTask {
+            await pending.value
+            if debounceTask == pending { break }
+        }
+        await reloadTask?.value
+    }
 
     /// Reloads the first page with the current filter.
     public func reload() async {

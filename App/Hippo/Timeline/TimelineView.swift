@@ -30,19 +30,14 @@ struct TimelineView: View {
     var body: some View {
         content
             .navigationTitle("Captures")
-            .searchable(text: searchText, placement: .navigationBarDrawer, prompt: "Search captures")
+            .searchable(text: searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search captures")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(value: Destination.settings) { Image(systemName: "gearshape") }
                         .accessibilityLabel("Settings")
                 }
-                ToolbarItemGroup(placement: .bottomBar) {
-                    Button { presented = .note } label: { Label("Note", systemImage: "square.and.pencil") }
-                    Spacer()
-                    Button { presented = .record } label: { Label("Record", systemImage: "record.circle") }
-                        .tint(.red)
-                }
             }
+            .safeAreaInset(edge: .bottom) { bottomBar }
             .navigationDestination(for: Destination.self) { destination in
                 switch destination {
                 case .detail(let id): Text("Capture \(id)").navigationTitle("Capture")
@@ -70,6 +65,22 @@ struct TimelineView: View {
             }
     }
 
+    private var bottomBar: some View {
+        HStack {
+            Button { presented = .note } label: { Label("Note", systemImage: "square.and.pencil") }
+                .buttonStyle(.bordered)
+            Spacer()
+            Button { presented = .record } label: { Label("Record", systemImage: "record.circle") }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+        }
+        .labelStyle(.titleAndIcon)
+        .controlSize(.large)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
     private var searchText: Binding<String> {
         Binding(get: { model.filter.search }, set: { model.searchChanged($0) })
     }
@@ -84,7 +95,7 @@ struct TimelineView: View {
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-            ForEach(model.sections, id: \.header) { section in
+            ForEach(Array(model.sections.enumerated()), id: \.offset) { _, section in
                 Section(section.header) {
                     ForEach(section.rows) { row in
                         NavigationLink(value: Destination.detail(row.id)) {

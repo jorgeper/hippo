@@ -176,7 +176,7 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
         model.searchChanged("c")
         model.searchChanged("ca")
         #expect(model.reloadCount == 0)
-        try await Task.sleep(for: .milliseconds(500))
+        await model.settle()
         #expect(model.reloadCount == 1)
         #expect(model.filter.search == "ca")
     }
