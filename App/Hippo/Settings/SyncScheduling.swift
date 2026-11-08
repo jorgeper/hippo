@@ -46,8 +46,10 @@ enum SyncScheduling {
         let log = environment.store.log
         log.append(LogEvent(event: .bgTask, phase: "start"))
         let completion = CompleteOnce(task)
+        // The end event is written inside the once-guard, before `setTaskCompleted`, while the
+        // background assertion still holds.
         let finish: @Sendable (Bool) -> Void = { success in
-            if completion.finish(success: success) { log.append(LogEvent(event: .bgTask, on: success, phase: "end")) }
+            completion.finish(success: success) { log.append(LogEvent(event: .bgTask, on: success, phase: "end")) }
         }
         // On expiry, stop at once and report incomplete when the pass has returned or after the grace.
         task.expirationHandler = {
@@ -79,12 +81,13 @@ enum SyncScheduling {
         init(_ task: BGProcessingTask) { self.task = task }
         var expired: Bool { expiredFlag.withLock { $0 } }
         func markExpired() { expiredFlag.withLock { $0 = true } }
-        /// True when this call completed the task.
-        @discardableResult
-        func finish(success: Bool) -> Bool {
+        /// On the first call only: runs `beforeCompleting`, then completes the task.
+        func finish(success: Bool, beforeCompleting: () -> Void = {}) {
             let first = completed.withLock { done in defer { done = true }; return !done }
-            if first { task.setTaskCompleted(success: success) }
-            return first
+            if first {
+                beforeCompleting()
+                task.setTaskCompleted(success: success)
+            }
         }
     }
 

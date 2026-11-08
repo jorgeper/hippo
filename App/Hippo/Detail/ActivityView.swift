@@ -1,6 +1,7 @@
 import SwiftUI
 import HippoPresentation
 import Enrichment
+import SyncEngine
 
 /// One capture's log lines, oldest first. Developer mode only.
 struct ActivityView: View {
@@ -31,6 +32,9 @@ struct ActivityView: View {
         }
         .task { await model.load() }
         .onReceive(NotificationCenter.default.publisher(for: EnrichmentRunner.taskFinished)) { _ in
+            Task { await model.load() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.passFinished)) { _ in
             Task { await model.load() }
         }
     }
