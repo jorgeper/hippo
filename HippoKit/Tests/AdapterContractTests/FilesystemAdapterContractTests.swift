@@ -58,6 +58,22 @@ private final class Box: @unchecked Sendable {
         #expect(quiet.changes.isEmpty)
     }
 
+    @Test func consecutiveListsLeaveOneSnapshot() async throws {
+        let root = try tempDir(), scratch = try tempDir()
+        let adapter = FilesystemAdapter(root: root)
+        let (url, integrity, _) = try write(scratch, "p.bin", bytes: 32)
+        _ = try await adapter.uploadFile(localURL: url, relativePath: "enrichments/server/p.bin", expected: integrity,
+                                         checkpoint: nil, saveCheckpoint: { _ in })
+        let first = try await adapter.listChanges(under: "enrichments/server/", cursor: nil)
+        let second = try await adapter.listChanges(under: "enrichments/server/", cursor: first.cursor)
+        _ = try await adapter.listChanges(under: "enrichments/server/", cursor: second.cursor)
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".hippo-cursors").path)
+        #expect(files.count == 1)
+        await #expect(throws: StorageError.cursorReset) {
+            _ = try await adapter.listChanges(under: "enrichments/server/", cursor: first.cursor)
+        }
+    }
+
     @Test func faultWriteButThrowLeavesFileForInspection() async throws {
         let root = try tempDir(), scratch = try tempDir()
         let faults = FaultPlan()

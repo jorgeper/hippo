@@ -176,7 +176,7 @@ public struct FilesystemAdapter: StorageAdapter {
     private struct Snapshot: Codable {
         var prefix: String
         var files: [String: Entry]
-        struct Entry: Codable, Equatable { var size: Int64; var mtime: Double }
+        struct Entry: Codable, Equatable { var size: Int64; var sha256: String }
     }
 
     private var cursorDirectory: URL { root.appendingPathComponent(".hippo-cursors") }
@@ -198,23 +198,31 @@ public struct FilesystemAdapter: StorageAdapter {
         }
 
         let current = Snapshot(prefix: prefix, files: try scan(prefix: prefix))
-        let id = UUID().uuidString.lowercased()
-        do {
-            try FileManager.default.createDirectory(at: cursorDirectory, withIntermediateDirectories: true)
-            try JSONEncoder().encode(current).write(to: cursorDirectory.appendingPathComponent("\(id).json"), options: .atomic)
-        } catch {
-            throw StorageError.transient(code: "cursor_write_failed")
-        }
 
         var changes: [RemoteChange] = []
         for path in current.files.keys.sorted() where previous?.files[path] != current.files[path] {
-            if let info = try info(path) { changes.append(.upserted(info)) }
+            if let entry = current.files[path] {
+                changes.append(.upserted(RemoteFileInfo(relativePath: path, byteCount: entry.size,
+                                                        providerHash: ProviderHash(algorithm: "sha256", value: entry.sha256))))
+            }
         }
         if let previous {
             for path in previous.files.keys.sorted() where current.files[path] == nil {
                 changes.append(.deleted(relativePath: path))
             }
         }
+
+        let id = UUID().uuidString.lowercased()
+        let newURL = cursorDirectory.appendingPathComponent("\(id).json")
+        do {
+            try FileManager.default.createDirectory(at: cursorDirectory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(current).write(to: newURL, options: .atomic)
+        } catch {
+            try? FileManager.default.removeItem(at: newURL)
+            throw StorageError.transient(code: "cursor_write_failed")
+        }
+        // The superseded snapshot is no longer needed; a caller that retries the old cursor gets cursorReset.
+        if let cursor { try? FileManager.default.removeItem(at: cursorDirectory.appendingPathComponent("\(cursor).json")) }
         return ChangePage(changes: changes, cursor: id, hasMore: false)
     }
 
@@ -223,18 +231,18 @@ public struct FilesystemAdapter: StorageAdapter {
         let dirPart = prefix.contains("/") ? String(prefix[..<prefix.lastIndex(of: "/")!]) : ""
         let start = dirPart.isEmpty ? root : try resolve(dirPart)
         var result: [String: Snapshot.Entry] = [:]
-        guard let walker = fm.enumerator(at: start, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+        guard let walker = fm.enumerator(at: start, includingPropertiesForKeys: [.isDirectoryKey],
                                          options: [.skipsHiddenFiles]) else { return result }
         let basePath = root.resolvingSymlinksInPath().path
         for case let url as URL in walker {
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
             if values?.isDirectory == true { continue }
             let full = url.resolvingSymlinksInPath().path
             guard full.hasPrefix(basePath + "/") else { continue }
             let rel = String(full.dropFirst(basePath.count + 1))
             guard rel.hasPrefix(prefix), !rel.split(separator: "/").contains(where: { $0.hasPrefix(".") }) else { continue }
-            result[rel] = Snapshot.Entry(size: Int64(values?.fileSize ?? 0),
-                                         mtime: values?.contentModificationDate?.timeIntervalSince1970 ?? 0)
+            guard let digest = try? StreamingHasher.digest(of: url) else { throw StorageError.transient(code: "read_failed") }
+            result[rel] = Snapshot.Entry(size: digest.byteCount, sha256: digest.sha256)
         }
         return result
     }

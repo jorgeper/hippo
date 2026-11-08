@@ -184,6 +184,12 @@ private func runReplaceListDownloadContract(adapter: any StorageAdapter, scratch
     let quiet = try await adapter.listChanges(under: "enrichments/server/", cursor: delta.cursor)
     #expect(quiet.changes.isEmpty)
 
+    // A same-size replace with different bytes is still a change.
+    let (s3b, s3bInt) = try makeFile(scratch, "s3b.bin", bytes: 120, seed: 99)
+    _ = try await adapter.replaceFile(localURL: s3b, relativePath: p3, expected: s3bInt)
+    let sameSize = try await adapter.listChanges(under: "enrichments/server/", cursor: quiet.cursor)
+    #expect(sameSize.changes.map(\.upsertedPath) == [p3])
+
     do {
         _ = try await adapter.listChanges(under: "enrichments/server/", cursor: "garbage")
         Issue.record("expected cursorReset")
