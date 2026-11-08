@@ -27,7 +27,7 @@ public final class TimelineModel {
             guard !suppressFilterReload, filter != oldValue else { return }
             debounceTask?.cancel()
             reloadTask?.cancel()
-            reloadTask = Task { await reload() }
+            reloadTask = Task { await reload(resettingDepth: true) }
         }
     }
 
@@ -73,15 +73,18 @@ public final class TimelineModel {
         await reloadTask?.value
     }
 
-    /// Reloads the first page with the current filter.
-    public func reload() async {
+    /// Reloads with the current filter, keeping as many rows loaded as the list already shows so a
+    /// refresh (foreground, finished sync pass) does not throw away the reader's scroll position.
+    /// A filter or search change passes `resettingDepth` and starts again from the first page.
+    public func reload(resettingDepth: Bool = false) async {
         generation += 1
         let mine = generation
         isLoadingMore = false
         let captured = currentFilter()
+        let limit = resettingDepth ? pageSize : max(pageSize, items.count)
         let page: Page?
         do {
-            page = try await Self.loadPage(store: store, filter: captured, after: nil, limit: pageSize, locale: locale)
+            page = try await Self.loadPage(store: store, filter: captured, after: nil, limit: limit, locale: locale)
         } catch {
             Self.log.error("\("reload_failed", privacy: .public)")
             page = nil
@@ -127,6 +130,7 @@ public final class TimelineModel {
             loadFailed = true
             return
         }
+        loadFailed = false
         let known = Set(items.map(\.row.id))
         items += page.items.filter { !known.contains($0.row.id) }
         reachedEnd = page.reachedEnd
@@ -142,7 +146,7 @@ public final class TimelineModel {
         let delay = debounce
         debounceTask = Task {
             do { try await Task.sleep(for: delay) } catch { return }
-            await reload()
+            await reload(resettingDepth: true)
         }
     }
 

@@ -216,4 +216,39 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
         await model.reload()
         #expect(model.loadFailed && model.sections.isEmpty && model.isEmpty)
     }
+
+    @Test @MainActor func reloadKeepsLoadedDepthButFilterChangeResetsIt() async throws {
+        let t = try TestStore(); defer { t.cleanup() }
+        for i in 0..<70 { try await t.note("n\(i)", at: Date(timeIntervalSince1970: 1_794_000_000 + Double(i * 60))) }
+        let model = TimelineModel(store: t.store, pageSize: 20, now: { now }, calendar: calendar, locale: locale)
+        await model.reload()
+        for _ in 0..<3 {
+            guard let last = model.sections.last?.rows.last else { break }
+            await model.rowAppeared(id: last.id)
+        }
+        #expect(model.sections.flatMap(\.rows).count == 70)
+
+        await model.reload()
+        #expect(model.sections.flatMap(\.rows).count == 70)
+
+        model.filter.sheet.sort = .oldestFirst
+        await model.settle()
+        #expect(model.sections.flatMap(\.rows).count == 20)
+    }
+
+    @Test @MainActor func loadFailedClearsAfterALaterSuccessfulPage() async throws {
+        let t = try TestStore(); defer { t.cleanup() }
+        for i in 0..<30 { try await t.note("n\(i)", at: Date(timeIntervalSince1970: 1_794_000_000 + Double(i * 60))) }
+        let model = TimelineModel(store: t.store, pageSize: 20, now: { now }, calendar: calendar, locale: locale)
+        await model.reload()
+        let last = try #require(model.sections.last?.rows.last)
+        let other = try Database(url: t.store.layout.databaseURL)
+        try other.execute("ALTER TABLE captures RENAME TO captures_gone")
+        await model.rowAppeared(id: last.id)
+        #expect(model.loadFailed)
+        try other.execute("ALTER TABLE captures_gone RENAME TO captures")
+        await model.rowAppeared(id: last.id)
+        #expect(!model.loadFailed)
+        #expect(model.sections.flatMap(\.rows).count == 30)
+    }
 }
