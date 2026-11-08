@@ -27,11 +27,15 @@ enum SyncScheduling {
         await BackgroundActivity.run(name: name, onExpire: stopper(coordinator)) { await coordinator.syncNow() }
     }
 
-    /// Call from `App.init`, before launch finishes.
-    static func registerBackgroundTask(_ environment: AppEnvironment) {
-        guard let coordinator = environment.coordinator else { return }
+    /// Call from `App.init`, before launch finishes. The handler is registered even when the store
+    /// failed to open (`environment` is nil); a task that arrives then completes as unsuccessful.
+    static func registerBackgroundTask(_ environment: AppEnvironment?) {
         let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
             guard let task = task as? BGProcessingTask else { return }
+            guard let environment, let coordinator = environment.coordinator else {
+                task.setTaskCompleted(success: false)
+                return
+            }
             handle(task, environment: environment, coordinator: coordinator)
         }
         if !registered { log.error("\("bg_register_failed", privacy: .public)") }
@@ -101,8 +105,6 @@ enum SyncScheduling {
 private struct SyncSchedulingModifier: ViewModifier {
     let environment: AppEnvironment
     @Environment(\.scenePhase) private var scenePhase
-    /// The first activation is the launch itself, which launch recovery covers with its own pass.
-    @State private var launchActivationSeen = false
 
     func body(content: Content) -> some View {
         content.onChange(of: scenePhase) { _, phase in
@@ -110,7 +112,7 @@ private struct SyncSchedulingModifier: ViewModifier {
             case .background:
                 enteredBackground()
             case .active:
-                guard launchActivationSeen else { launchActivationSeen = true; return }
+                // Every activation syncs; the coordinator coalesces overlapping calls.
                 if let coordinator = environment.coordinator {
                     Task { await SyncScheduling.runPass(coordinator, name: "foreground-sync") }
                 }

@@ -81,10 +81,10 @@ final class SystemAudioRecorder: NSObject, AudioRecording, AVAudioRecorderDelega
 
     nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
         guard !flag else { return }
-        MainActor.assumeIsolated { onInterruption?() }
+        Task { @MainActor [weak self] in self?.onInterruption?() }
     }
 
     nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
-        MainActor.assumeIsolated { onInterruption?() }
+        Task { @MainActor [weak self] in self?.onInterruption?() }
     }
 }

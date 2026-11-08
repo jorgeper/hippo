@@ -13,6 +13,8 @@ struct HippoApp: App {
         if case .success(let environment) = startup {
             SyncScheduling.registerBackgroundTask(environment)
             Self.startLaunchRecovery(environment)
+        } else {
+            SyncScheduling.registerBackgroundTask(nil)
         }
     }
 
