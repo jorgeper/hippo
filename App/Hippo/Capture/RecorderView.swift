@@ -39,7 +39,8 @@ struct RecorderView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        if case .recording = model.state { confirmingDiscard = true } else { model.discard(); dismiss() }
+                        // Recording, stopped and failed-with-a-file all hold audio the user would lose.
+                        if isRecording || model.hasPendingRecording { confirmingDiscard = true } else { model.discard(); dismiss() }
                     }
                     .disabled(model.state == .saving)
                 }
@@ -67,6 +68,10 @@ struct RecorderView: View {
                 }
             }
         }
+    }
+
+    private var isRecording: Bool {
+        if case .recording = model.state { true } else { false }
     }
 
     private var isBusy: Bool {
