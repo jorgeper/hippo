@@ -34,7 +34,37 @@ struct LogLineTests {
     }
 
     @Test func unknownCombinationFallsBack() {
-        #expect(line(LogEvent(event: .goldSkipped, outcome: .skipped, code: "stale")).text == "gold.skipped · skipped · stale")
+        #expect(line(LogEvent(event: .bgTask, outcome: .skipped, code: "stale")).text == "bg.task · skipped · stale")
+        #expect(line(LogEvent(event: .goldSkipped, code: "stale")).text == "Server results skipped · stale")
+    }
+
+    @Test func everyKnownEventHasPlainWords() {
+        for name in LogEventName.allCases {
+            let phases = name == .bgTask ? ["start", "end", "expired"] : ["start", "end"]
+            for phase in phases {
+                for outcome in [LogOutcome.ok, .empty, .failed, .skipped] {
+                    let e = LogEvent(event: name, kind: "link_preview", outcome: outcome, code: "x", attempt: 2, count: 3, ms: 900,
+                                     trigger: "manual", dest: "dropbox", on: true, phase: phase, retryAt: now)
+                    #expect(!line(e).text.contains(name.rawValue), "\(name) \(phase) \(outcome)")
+                }
+            }
+        }
+    }
+
+    @Test func settingsChangedUsesDisplayNames() {
+        #expect(line(LogEvent(event: .settingsChanged, kind: "link_preview", on: true)).text == "Link preview turned on")
+        #expect(line(LogEvent(event: .settingsChanged, kind: "location", on: false)).text == "Save location turned off")
+        #expect(line(LogEvent(event: .settingsChanged, kind: "layer_stripes", on: true)).text
+                == "Show where details came from turned on")
+        #expect(line(LogEvent(event: .settingsChanged, kind: "developer_mode", on: true)).text == "Developer mode turned on")
+        #expect(line(LogEvent(event: .settingsChanged, kind: "odd_thing", on: true)).text == "odd_thing turned on")
+    }
+
+    @Test func clockIgnoresTwelveHourLocale() {
+        var e = LogEvent(event: .appLaunch)
+        e.t = now
+        let l = LogLine.make(e, id: 0, now: now, zone: utc, locale: Locale(identifier: "en_US"))
+        #expect(l.time == "14:02:11")
     }
 
     @Test func timeShowsDateOnlyWhenNotToday() {
