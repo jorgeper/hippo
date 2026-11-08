@@ -39,12 +39,15 @@ public final class HippoStore: Sendable {
     private let db: Database
     private let writer: PackageWriter
     private let leaseWaitLimit: Duration
+    /// The clock `delete` checks upload leases against. Replaced only by tests.
+    private let now: @Sendable () -> Date
 
     private init(layout: StoreLayout, db: Database, producer: Producer, process: LogProcess,
-                 leaseWaitLimit: Duration) {
+                 leaseWaitLimit: Duration, now: @escaping @Sendable () -> Date) {
         self.layout = layout
         self.db = db
         self.leaseWaitLimit = leaseWaitLimit
+        self.now = now
         index = CaptureIndex(db: db)
         jobs = JobStore(db: db)
         destinations = DestinationStore(db: db)
@@ -60,15 +63,15 @@ public final class HippoStore: Sendable {
         try open(root: root, producer: producer, process: process, leaseWaitLimit: defaultLeaseWaitLimit)
     }
 
-    /// `leaseWaitLimit` is shortened only by tests.
+    /// `leaseWaitLimit` is shortened, and `now` (the clock `delete` checks leases against) replaced, only by tests.
     static func open(root: URL, producer: Producer, process: LogProcess = .app,
-                     leaseWaitLimit: Duration) throws -> HippoStore {
+                     leaseWaitLimit: Duration, now: @escaping @Sendable () -> Date = Date.init) throws -> HippoStore {
         let layout = StoreLayout(root: root)
         for dir in [root, layout.stagingDir, layout.capturesDir] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return HippoStore(layout: layout, db: try Database(url: layout.databaseURL), producer: producer,
-                          process: process, leaseWaitLimit: leaseWaitLimit)
+                          process: process, leaseWaitLimit: leaseWaitLimit, now: now)
     }
 
     /// Startup recovery (spec §4), then the enrichment steps (design §6.2, §9): enrichment staging
@@ -177,10 +180,10 @@ public final class HippoStore: Sendable {
         var removed = false
         // If deletion fails before the row is gone, the capture stays and its uploads must resume.
         defer { if !removed { try? jobs.clearCancel(captureID: captureID) } }
-        let hadActiveUpload = try jobs.activeLeaseExists(captureID: captureID, now: Date())
+        let hadActiveUpload = try jobs.activeLeaseExists(captureID: captureID, now: now())
         if hadActiveUpload {
             let deadline = ContinuousClock.now + leaseWaitLimit
-            while ContinuousClock.now < deadline, try jobs.activeLeaseExists(captureID: captureID, now: Date()) {
+            while ContinuousClock.now < deadline, try jobs.activeLeaseExists(captureID: captureID, now: now()) {
                 // Deletion was confirmed by the user: if this task is cancelled, stop waiting and finish it.
                 do { try await Task.sleep(for: Self.leasePollInterval) } catch { break }
             }
