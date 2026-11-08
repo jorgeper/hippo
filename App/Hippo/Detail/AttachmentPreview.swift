@@ -14,7 +14,7 @@ struct AttachmentPreview: View {
         case .image(let url): ImagePreview(url: url)
         case .video(let url): VideoPreview(url: url)
         case .audio(let url): AudioPreview(url: url)
-        case .pdf(let url): fileCard(url: url, symbol: "doc.richtext", previewable: true)
+        case .pdf(let url): fileCard(url: url, symbol: "doc.richtext", previewable: true, name: nil)
         case .text(let body):
             Text(body)
                 .textSelection(.enabled)
@@ -34,16 +34,17 @@ struct AttachmentPreview: View {
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
-        case .file(let url, let previewable): fileCard(url: url, symbol: "doc", previewable: previewable)
+        case .file(let url, let previewable, let name):
+            fileCard(url: url, symbol: "doc", previewable: previewable, name: name)
         case .none: EmptyView()
         }
     }
 
-    @ViewBuilder private func fileCard(url: URL, symbol: String, previewable: Bool) -> some View {
+    @ViewBuilder private func fileCard(url: URL, symbol: String, previewable: Bool, name: String?) -> some View {
         let card = HStack(spacing: 12) {
             Image(systemName: symbol).font(.title).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text(url.lastPathComponent).font(.headline).lineLimit(2)
+                Text(name ?? url.lastPathComponent).font(.headline).lineLimit(2)
                 if previewable { Text("Tap to open").font(.footnote).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 0)

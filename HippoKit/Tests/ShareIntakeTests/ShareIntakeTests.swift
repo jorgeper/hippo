@@ -71,6 +71,20 @@ import HippoTestSupport
         #expect(result.draft.location == nil)
     }
 
+    @Test func progressReportsEachProviderInOrder() async throws {
+        let bytes = try MediaMaker.imageData(width: 4, height: 4)
+        let providers: [any ItemProviding] = [
+            FakeProvider(types: ["public.jpeg"], suggestedName: "a.jpg", fileBytes: bytes),
+            FakeProvider(types: ["public.url"], url: URL(string: "https://example.com/a")),
+            FakeProvider(types: ["public.jpeg"], suggestedName: "b.jpg", fileBytes: bytes),
+        ]
+        let calls = Mutex<[[Int]]>([])
+
+        _ = await prepare(providers, progress: { done, total in calls.withLock { $0.append([done, total]) } })
+
+        #expect(calls.withLock { $0 } == [[0, 3], [1, 3], [2, 3], [3, 3]])
+    }
+
     @Test func fileTypesUseFileCopyOnly() async throws {
         let provider = FakeProvider(types: ["public.jpeg", "public.file-url", "public.url", "public.utf8-plain-text"],
                                     fileBytes: Data([1, 2, 3]), url: URL(string: "https://example.com")!, text: "hi")

@@ -21,6 +21,7 @@ public enum PreviewKind: Equatable, Sendable {
     case text(String)
     case link(URL)
     /// `previewable` is false for `public.html` and anything conforming to it: offered through Share only.
-    case file(URL, previewable: Bool)
+    /// `name` is the original filename from the metadata; the stored file is named by its attachment ID.
+    case file(URL, previewable: Bool, name: String?)
     case none
 }

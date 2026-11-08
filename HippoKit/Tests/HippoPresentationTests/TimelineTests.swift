@@ -155,6 +155,18 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
         #expect(!model.isEmpty)
     }
 
+    @Test @MainActor func dayHeaderUsesTheRecordedZoneNotTheViewingZone() async throws {
+        let t = try TestStore(); defer { t.cleanup() }
+        let tokyo = TimeZone(identifier: "Asia/Tokyo")!
+        // 00:30 on Nov 7 in Tokyo is 07:30 on Nov 6 in Los Angeles, where the calendar is set.
+        let captured = iso("2026-11-06T15:30:00Z")
+        try await t.note("late night in Tokyo", at: captured, zone: tokyo)
+        let model = TimelineModel(store: t.store, now: { now }, calendar: calendar, locale: locale)
+        await model.reload()
+        #expect(model.sections.map(\.header) == ["TODAY · SAT NOV 7"])
+        #expect(model.sections.first?.rows.map(\.title) == ["late night in Tokyo"])
+    }
+
     @Test @MainActor func paginationLoadsAllRowsWithoutDuplicates() async throws {
         let t = try TestStore(); defer { t.cleanup() }
         for i in 0..<120 { try await t.note("n\(i)", at: Date(timeIntervalSince1970: 1_794_000_000 + Double(i * 60))) }

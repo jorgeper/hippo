@@ -49,14 +49,15 @@ public struct CaptureDetail: Equatable, Sendable {
                                 noteBody: String?) -> PreviewKind {
         if m.captureMethod == .typedNote, let noteBody, !noteBody.isEmpty { return .text(noteBody) }
         if let (a, url) = files.first {
-            if a.mimeType?.lowercased() == "text/html" { return .file(url, previewable: false) }
-            guard let type = UTType(a.uti) else { return .file(url, previewable: true) }
-            if type.conforms(to: .html) || a.mimeType?.lowercased() == "text/html" { return .file(url, previewable: false) }
+            let name = nonEmpty(a.originalFilename)
+            if a.mimeType?.lowercased() == "text/html" { return .file(url, previewable: false, name: name) }
+            guard let type = UTType(a.uti) else { return .file(url, previewable: true, name: name) }
+            if type.conforms(to: .html) || a.mimeType?.lowercased() == "text/html" { return .file(url, previewable: false, name: name) }
             if type.conforms(to: .image) { return .image(url) }
             if type.conforms(to: .movie) || type.conforms(to: .video) { return .video(url) }
             if type.conforms(to: .audio) { return .audio(url) }
             if type.conforms(to: .pdf) { return .pdf(url) }
-            return .file(url, previewable: true)
+            return .file(url, previewable: true, name: name)
         }
         if let link = links.first { return .link(link) }
         return .none

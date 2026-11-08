@@ -60,8 +60,8 @@ public final class SyncWorker: Sendable {
         while claimed < maxJobs, !Task.isCancelled {
             let next: UploadJob?
             do {
-                next = try jobs.claimNext(owner: leaseOwner, now: now(), lease: Self.lease, reclaimDelay: {
-                    RetryPolicy().delay(attempt: $0, retryAfter: nil, random: { Double.random(in: 0...1) })
+                next = try jobs.claimNext(owner: leaseOwner, now: now(), lease: Self.lease, reclaimDelay: { [policy, random] in
+                    policy.delay(attempt: $0, retryAfter: nil, random: random)
                 })
             } catch {
                 // A claim that fails is not "nothing to do".

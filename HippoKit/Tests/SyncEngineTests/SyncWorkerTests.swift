@@ -418,6 +418,31 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(h.faults.operations.isEmpty)
     }
 
+    @Test func reclaimBackoffUsesTheWorkersPolicyAndRandomSource() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        let job = try h.job(pkg)
+        // Two earlier lease expiries; the worker's claim is the third and parks the job with a backoff.
+        try h.db.execute("""
+            UPDATE jobs SET state = 'uploading', attempt_count = 2, lease_owner = 'ghost', lease_expires_at_ms = ?
+            WHERE job_id = ?
+            """, [.int(Int64(t0.timeIntervalSince1970 * 1000) - 1), .text(job.jobID)])
+        let adapter = h.adapter
+        let clock = h.clock
+        let worker = SyncWorker(layout: h.layout, jobs: h.jobs, destinations: h.destinations, index: h.index,
+                                adapterFor: { _ in adapter }, owner: "w", policy: RetryPolicy(base: 1000, cap: 1000),
+                                now: { clock.now }, random: { 0.5 })
+
+        _ = await worker.runOnce()
+
+        let parked = try h.job(pkg)
+        #expect(parked.state == .retryableFailure)
+        // 0.5 * min(1000, 1000 * 2^2) = 500 s; the default policy would give 0.5 * 120 = 60 s.
+        let retryAt = try #require(try h.db.query("SELECT next_attempt_at_ms FROM jobs WHERE job_id = ?",
+                                                  [.text(job.jobID)])[0].int("next_attempt_at_ms"))
+        #expect(retryAt == Int64(t0.timeIntervalSince1970 * 1000) + 500_000)
+    }
+
     @Test func syncedJobIsNotReclaimed() async throws {
         let h = try SyncHarness(); defer { h.cleanup() }
         let pkg = try await h.capture()

@@ -171,8 +171,11 @@ struct SyncCase: Sendable {
 
     @Test func htmlIsNotPreviewable() {
         let url = pkg.appendingPathComponent("content/a1.bin")
-        #expect(make(meta(attachments: [att(uti: "public.html")])).preview == .file(url, previewable: false))
-        #expect(make(meta(attachments: [att(uti: "com.example.unknown")])).preview == .file(url, previewable: true))
+        #expect(make(meta(attachments: [att(uti: "public.html")])).preview == .file(url, previewable: false, name: "a.jpg"))
+        #expect(make(meta(attachments: [att(uti: "com.example.unknown")])).preview
+                == .file(url, previewable: true, name: "a.jpg"))
+        #expect(make(meta(attachments: [att(uti: "com.example.unknown", name: nil)])).preview
+                == .file(url, previewable: true, name: nil))
     }
 
     @Test func previewKindsByType() {
@@ -227,7 +230,7 @@ struct SyncCase: Sendable {
     @Test func htmlMimeTypeIsNotPreviewable() {
         let url = pkg.appendingPathComponent("content/a1.bin")
         #expect(make(meta(attachments: [att(uti: "com.example.unknown", mime: "text/html")])).preview
-                == .file(url, previewable: false))
+                == .file(url, previewable: false, name: "a.jpg"))
     }
 
     @Test func failedLoadKeepsDetailAndSetsFlag() async throws {
