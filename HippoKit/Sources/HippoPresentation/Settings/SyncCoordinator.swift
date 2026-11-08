@@ -23,6 +23,8 @@ public actor SyncCoordinator {
     private let worker: SyncWorker
     private let uploader: EnrichmentUploader
     private let puller: GoldPuller
+    private let logUploader: LogUploader
+    private let settings: AppSettings
     private let appVersion: String
 
     /// The current pass: running, or about to run once the pass it follows has finished.
@@ -43,24 +45,29 @@ public actor SyncCoordinator {
     /// True while a pass is running or a follow-up is waiting.
     public var isBusy: Bool { running != nil || pending != nil }
 
-    public init(store: HippoStore, registry: ProviderRegistry, ownerPrefix: String, appVersion: String) {
+    public init(store: HippoStore, registry: ProviderRegistry, ownerPrefix: String, appVersion: String,
+                settings: AppSettings) {
         self.store = store
+        self.settings = settings
         self.appVersion = appVersion
         worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix)
         uploader = store.makeEnrichmentUploader(adapterFor: { try registry.adapter(for: $0) })
         puller = store.makeGoldPuller(adapterFor: { try registry.adapter(for: $0) })
+        logUploader = store.makeLogUploader(installID: settings.installID, adapterFor: { try registry.adapter(for: $0) })
     }
 
     /// Runs a pass, or joins the follow-up pass when one is already running, and returns that pass's
     /// result. A pass cancelled by `stop()` returns what it had done so far.
-    public func syncNow() async -> SyncPassResult {
+    /// `trigger` says why (a fixed string, e.g. `manual`); it lands on the pass's `sync.pass` events. A call
+    /// that joins a pass already waiting shares that pass's trigger.
+    public func syncNow(trigger: String = "manual") async -> SyncPassResult {
         callsReceived += 1
         if let pending { return await pending.value }
         let generation = generation
         if let running {
             let followUp = Task {
                 _ = await running.value
-                return await self.promotePending(generation)
+                return await self.promotePending(generation, trigger: trigger)
             }
             pending = followUp
             return await followUp.value
@@ -68,7 +75,7 @@ public actor SyncCoordinator {
         let previous = stopped
         let pass = Task {
             _ = await previous?.value
-            return await self.run(generation)
+            return await self.run(generation, trigger: trigger)
         }
         running = pass
         return await pass.value
@@ -98,19 +105,22 @@ public actor SyncCoordinator {
         handles.withLock { $0 = current }
     }
 
-    private func promotePending(_ generation: Int) async -> SyncPassResult {
+    private func promotePending(_ generation: Int, trigger: String) async -> SyncPassResult {
         guard generation == self.generation else { return Self.nothingDone }
         running = pending
         pending = nil
-        return await run(generation)
+        return await run(generation, trigger: trigger)
     }
 
     /// Runs a pass, then follow-up passes while the previous one ended with work left. The chain ends
     /// on `stop()`, after `maxFollowUps` follow-ups, or when a pass uploaded nothing (every round
     /// failed), so a persistent failure cannot hot-loop.
-    private func run(_ generation: Int) async -> SyncPassResult {
+    private func run(_ generation: Int, trigger: String) async -> SyncPassResult {
         guard generation == self.generation else { return Self.nothingDone }
         isRunning = true
+        // With nowhere to upload, the pass syncs nothing, so it isn't recorded as a sync.
+        let hadDestination = (try? store.destinations.active()) != nil
+        store.log.append(LogEvent(event: .syncPass, trigger: trigger, phase: "start"))
         var total = Self.nothingDone
         var followUps = 0
         while true {
@@ -124,6 +134,10 @@ public actor SyncCoordinator {
             followUps += 1
         }
         isRunning = false
+        let cancelled = Task.isCancelled || generation != self.generation
+        if !cancelled, hadDestination { settings.recordSync(at: Date(), failed: total.failed > 0) }
+        let endCode = Task.isCancelled || generation != self.generation ? "cancelled" : total.failed > 0 ? "failed" : "ok"
+        store.log.append(LogEvent(event: .syncPass, code: endCode, count: total.synced, trigger: trigger, phase: "end"))
         if generation == self.generation { running = nil }
         return total
     }
@@ -150,6 +164,9 @@ public actor SyncCoordinator {
         }
         // Gold pulls never change the pass result or the follow-up decision either.
         if !Task.isCancelled { _ = await puller.pull() }
+        // Log uploads are not events and never change the pass result.
+        if !Task.isCancelled { _ = await logUploader.upload() }
+        store.log.prune()
         do {
             try store.writeDiagnostics(appVersion: appVersion)
         } catch {

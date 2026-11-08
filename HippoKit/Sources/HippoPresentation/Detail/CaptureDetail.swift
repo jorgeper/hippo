@@ -6,7 +6,8 @@ import LocalRepository
 public struct TitledText: Equatable, Sendable {
     public let title: String
     public let text: String
-    public init(title: String, text: String) { self.title = title; self.text = text }
+    public let layer: Layer
+    public init(title: String, text: String, layer: Layer = .silver) { self.title = title; self.text = text; self.layer = layer }
 }
 
 public enum FoundAction: Equatable, Sendable {
@@ -38,13 +39,21 @@ public struct CaptureDetail: Equatable, Sendable {
     public var found: [FoundItem]
     public var summary: String?
     public var tags: [String]
-    public var fromServerNote: String?
+    public var foundLayer: Layer
+    public var summaryLayer: Layer
+    public var tagsLayer: Layer
+    /// Detail's Status section: bronze save line, one line per enrichment step, the server arrival. Sync rows are `sync`.
+    public var status: [StatusLine]
+    /// Where a result will appear and isn't there yet.
+    public var pending: [FacetKind: PendingLine]
 
     /// `now` is accepted for symmetry with the timeline; nothing here is relative to it, because
     /// ages are measured against the capture time. `calendar.timeZone` is the current zone.
     public static func make(metadata m: CaptureMetadata, packageURL: URL, noteBody: String?, jobs: [UploadJob],
-                            enrichment: ResolvedEnrichment, destination: (String) -> Destination?, now: Date, locale: Locale,
-                            calendar: Calendar) -> CaptureDetail {
+                            enrichment: ResolvedEnrichment, tasks: [EnrichmentTask] = [],
+                            isEnabled: (FacetKind) -> Bool = { _ in true }, isOnline: Bool = true,
+                            goldArrivedAt: Date? = nil, destination: (String) -> Destination?, now: Date,
+                            locale: Locale, calendar: Calendar) -> CaptureDetail {
         let files: [(Attachment, URL)] = m.attachments.compactMap { a in
             guard (try? PackagePath.validateRelative(a.relativePath)) != nil else { return nil }
             return (a, packageURL.appendingPathComponent(a.relativePath))
@@ -53,22 +62,44 @@ public struct CaptureDetail: Equatable, Sendable {
         let links = urls.compactMap { URL(string: $0.url) }
         let sync = jobs.isEmpty ? [SyncRow.unassigned]
             : jobs.map { SyncRow.make(job: $0, destinationName: destination($0.destinationID)?.displayName) }
+        let steps = EnrichmentProgress.steps(tasks, isEnabled: isEnabled, isOnline: isOnline, now: now)
+        let savedZone = TimeZone(identifier: m.timezoneIdentifier) ?? TimeZone(secondsFromGMT: m.utcOffsetSeconds) ?? .gmt
         return CaptureDetail(
             preview: preview(metadata: m, files: files, links: links, noteBody: noteBody),
             comment: nonEmpty(m.userNote), sharedTitle: nonEmpty(m.sharedTitle), sharedText: nonEmpty(m.sharedText),
             links: links,
             captured: capturedRows(m, enrichment: enrichment, locale: locale, calendar: calendar),
             attachments: m.attachments.enumerated().map {
-                attachmentRows($1, number: $0 + 1, place: enrichment.places[$1.attachmentID], locale: locale)
+                attachmentRows($1, number: $0 + 1, place: enrichment.places[$1.attachmentID],
+                               placeFromServer: enrichment.fromServer.places.contains($1.attachmentID), locale: locale)
             },
             sync: sync,
             exportURLs: files.map(\.1),
             linkCards: urls.compactMap { enrichment.links[$0.url] },
-            transcripts: titled(m, enrichment.transcripts.mapValues(\.text)),
-            recognizedText: titled(m, enrichment.recognizedText),
+            transcripts: titled(m, enrichment.transcripts.mapValues(\.text), gold: enrichment.fromServer.transcripts),
+            recognizedText: titled(m, enrichment.recognizedText, gold: enrichment.fromServer.recognizedText),
             found: enrichment.detections.map { foundItem($0, metadata: m, noteBody: noteBody) },
             summary: nonEmpty(enrichment.summary), tags: enrichment.tags,
-            fromServerNote: enrichment.usesServer ? "Some details come from your server." : nil)
+            foundLayer: enrichment.fromServer.detections ? .gold : .silver,
+            summaryLayer: enrichment.fromServer.summary ? .gold : .silver,
+            tagsLayer: enrichment.fromServer.tags ? .gold : .silver,
+            status: StatusLine.lines(saved: m.capturedAt, steps: steps, goldKinds: goldKinds(enrichment),
+                                     goldArrivedAt: goldArrivedAt, locale: locale, zone: savedZone),
+            pending: steps.reduce(into: [:]) { out, step in
+                if let line = EnrichmentProgress.pendingLine(step.key, step.value) { out[step.key] = line }
+            })
+    }
+
+    /// Kinds whose shown result came from the server.
+    private static func goldKinds(_ e: ResolvedEnrichment) -> Set<FacetKind> {
+        var kinds: Set<FacetKind> = []
+        if e.links.values.contains(where: \.fromServer) { kinds.insert(.linkPreview) }
+        if !e.fromServer.places.isEmpty { kinds.insert(.place) }
+        if !e.fromServer.transcripts.isEmpty { kinds.insert(.transcript) }
+        if !e.fromServer.recognizedText.isEmpty { kinds.insert(.textRecognition) }
+        if e.fromServer.detections { kinds.insert(.dataDetection) }
+        if e.fromServer.sourceApp { kinds.insert(.sourceAppGuess) }
+        return kinds
     }
 
     private static func nonEmpty(_ s: String?) -> String? {
@@ -78,10 +109,11 @@ public struct CaptureDetail: Equatable, Sendable {
 
     // MARK: Enrichment
 
-    private static func titled(_ m: CaptureMetadata, _ texts: [String: String]) -> [TitledText] {
+    private static func titled(_ m: CaptureMetadata, _ texts: [String: String],
+                               gold: Set<String>) -> [TitledText] {
         m.attachments.enumerated().compactMap { i, a in
             guard let text = nonEmpty(texts[a.attachmentID]) else { return nil }
-            return TitledText(title: "Attachment \(i + 1)", text: text)
+            return TitledText(title: "Attachment \(i + 1)", text: text, layer: gold.contains(a.attachmentID) ? .gold : .silver)
         }
     }
 
@@ -166,7 +198,8 @@ public struct CaptureDetail: Equatable, Sendable {
         }
         if let how { rows.append(DetailRow(label: "How", value: how)) }
         if let app = nonEmpty(enrichment.sourceAppGuess) {
-            rows.append(DetailRow(label: "Source", value: "Probably from \(app)"))
+            rows.append(DetailRow(label: "Source", value: "Probably from \(app)",
+                                layer: enrichment.fromServer.sourceApp ? .gold : .silver))
         }
         if let l = m.captureLocation {
             var value = DetailFormat.coordinates(latitude: l.latitude, longitude: l.longitude)
@@ -176,7 +209,8 @@ public struct CaptureDetail: Equatable, Sendable {
             let age = m.capturedAt.timeIntervalSince(l.observedAt)
             if age >= 60 { value += " · \(DetailFormat.age(age)) before saving" }
             if let line = enrichment.places["capture"].flatMap(PlaceText.line) {
-                rows.append(DetailRow(label: "Where", value: line))
+                rows.append(DetailRow(label: "Where", value: line,
+                                      layer: enrichment.fromServer.places.contains("capture") ? .gold : .silver))
                 rows.append(DetailRow(label: "Coordinates", value: value))
             } else {
                 rows.append(DetailRow(label: "Where", value: value))
@@ -187,7 +221,8 @@ public struct CaptureDetail: Equatable, Sendable {
 
     // MARK: Attachments
 
-    private static func attachmentRows(_ a: Attachment, number: Int, place: PlaceItem?, locale: Locale) -> [DetailRow] {
+    private static func attachmentRows(_ a: Attachment, number: Int, place: PlaceItem?, placeFromServer: Bool,
+                                       locale: Locale) -> [DetailRow] {
         var rows: [DetailRow] = []
         rows.append(DetailRow(label: "Name", value: nonEmpty(a.originalFilename) ?? "Attachment \(number)"))
         rows.append(DetailRow(label: "Type", value: nonEmpty(a.mimeType) ?? a.uti))
@@ -205,7 +240,7 @@ public struct CaptureDetail: Equatable, Sendable {
             rows.append(DetailRow(label: "Photo location",
                                   value: DetailFormat.coordinates(latitude: l.latitude, longitude: l.longitude)))
         }
-        if let place, let area = PlaceText.area(place) { rows.append(DetailRow(label: "Taken in", value: area)) }
+        if let place, let area = PlaceText.area(place) { rows.append(DetailRow(label: "Taken in", value: area, layer: placeFromServer ? .gold : .silver)) }
         return rows
     }
 

@@ -19,11 +19,13 @@ public final class EnrichmentUploader: Sendable {
     private let policy: RetryPolicy
     private let now: @Sendable () -> Date
     private let random: @Sendable () -> Double
+    private let log: ActivityLog?
 
     public init(layout: StoreLayout, destinations: DestinationStore, enrichments: EnrichmentStore,
                 adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
                 policy: RetryPolicy = .init(), now: @escaping @Sendable () -> Date = Date.init,
-                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) {
+                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }, log: ActivityLog? = nil) {
+        self.log = log
         self.layout = layout
         self.destinations = destinations
         self.enrichments = enrichments
@@ -78,6 +80,7 @@ public final class EnrichmentUploader: Sendable {
             try await upload(c, destination: destination)
             try enrichments.markUploaded(captureID: c.captureID, destinationID: destination.id,
                                          revision: c.revision, now: now())
+            log?.append(LogEvent(event: .silverUploaded, captureID: c.captureID, dest: destination.providerKind))
             return .uploaded
         } catch is CancellationError {
             return .stopped
@@ -170,6 +173,8 @@ public final class EnrichmentUploader: Sendable {
             try enrichments.markUploadFailed(captureID: c.captureID, destinationID: destination.id,
                                              revision: c.revision, code: failure.code, blocked: failure.blocked,
                                              nextAttemptAt: next, now: now())
+            log?.append(LogEvent(event: .silverUploadFailed, captureID: c.captureID, code: failure.code,
+                                 dest: destination.providerKind))
             return .failed
         } catch {
             Self.log.error("\("enrichment_upload_record_failed", privacy: .public)")

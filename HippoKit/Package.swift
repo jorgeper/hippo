@@ -32,7 +32,7 @@ let package = Package(
         .testTarget(name: "HippoPresentationTests", dependencies: ["HippoPresentation", "CaptureCore", "LocalRepository",
                                                                    "SyncEngine", "FilesystemAdapter", "HippoTestSupport", "ShareIntake"]),
         .testTarget(name: "EnrichmentTests", dependencies: ["Enrichment", "CaptureCore", "LocalRepository", "SyncEngine",
-                                                            "HippoTestSupport"]),
+                                                            "FilesystemAdapter", "HippoPresentation", "HippoTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )

@@ -3,6 +3,7 @@ import BackgroundTasks
 import os
 import HippoPresentation
 import SyncEngine
+import LocalRepository
 
 /// When uploads run. Launch recovery, in-app captures, Retry and pull-to-refresh each call `runPass`
 /// themselves; this file owns the rest: coming to the foreground, going to the background, and the
@@ -23,8 +24,8 @@ enum SyncScheduling {
     }
 
     @discardableResult
-    static func runPass(_ coordinator: SyncCoordinator, name: String) async -> SyncPassResult {
-        await BackgroundActivity.run(name: name, onExpire: stopper(coordinator)) { await coordinator.syncNow() }
+    static func runPass(_ coordinator: SyncCoordinator, name: String, trigger: String) async -> SyncPassResult {
+        await BackgroundActivity.run(name: name, onExpire: stopper(coordinator)) { await coordinator.syncNow(trigger: trigger) }
     }
 
     /// Call from `App.init`, before launch finishes. The handler is registered even when the store
@@ -42,11 +43,18 @@ enum SyncScheduling {
     }
 
     private static func handle(_ task: BGProcessingTask, environment: AppEnvironment, coordinator: SyncCoordinator) {
+        let log = environment.store.log
+        log.append(LogEvent(event: .bgTask, phase: "start"))
         let completion = CompleteOnce(task)
-        let finish: @Sendable (Bool) -> Void = { completion.finish(success: $0) }
+        // The end event is written inside the once-guard, before `setTaskCompleted`, while the
+        // background assertion still holds.
+        let finish: @Sendable (Bool) -> Void = { success in
+            completion.finish(success: success) { log.append(LogEvent(event: .bgTask, on: success, phase: "end")) }
+        }
         // On expiry, stop at once and report incomplete when the pass has returned or after the grace.
         task.expirationHandler = {
             completion.markExpired()
+            log.append(LogEvent(event: .bgTask, phase: "expired"))
             coordinator.requestStop()
             EnrichmentScheduling.cancel()
             Task {
@@ -55,7 +63,7 @@ enum SyncScheduling {
             }
         }
         Task {
-            await runPass(coordinator, name: "background-sync")
+            await runPass(coordinator, name: "background-sync", trigger: "bg")
             if !completion.expired { await EnrichmentScheduling.run(environment, reason: "background") }
             // After expiry the task may already be completed and the assertion ended; the next
             // background entry resubmits, so skip the unprotected SQLite read here.
@@ -73,9 +81,13 @@ enum SyncScheduling {
         init(_ task: BGProcessingTask) { self.task = task }
         var expired: Bool { expiredFlag.withLock { $0 } }
         func markExpired() { expiredFlag.withLock { $0 = true } }
-        func finish(success: Bool) {
+        /// On the first call only: runs `beforeCompleting`, then completes the task.
+        func finish(success: Bool, beforeCompleting: () -> Void = {}) {
             let first = completed.withLock { done in defer { done = true }; return !done }
-            if first { task.setTaskCompleted(success: success) }
+            if first {
+                beforeCompleting()
+                task.setTaskCompleted(success: success)
+            }
         }
     }
 
@@ -109,7 +121,7 @@ enum SyncScheduling {
     /// Syncs once launch recovery has registered the packages on disk.
     static func syncAfterLaunchRecovery(_ environment: AppEnvironment) async {
         guard let coordinator = environment.coordinator else { return }
-        await runPass(coordinator, name: "launch-sync")
+        await runPass(coordinator, name: "launch-sync", trigger: "launch")
     }
 }
 
@@ -125,7 +137,7 @@ private struct SyncSchedulingModifier: ViewModifier {
             case .active:
                 // Every activation syncs; the coordinator coalesces overlapping calls.
                 if let coordinator = environment.coordinator {
-                    Task { await SyncScheduling.runPass(coordinator, name: "foreground-sync") }
+                    Task { await SyncScheduling.runPass(coordinator, name: "foreground-sync", trigger: "activation") }
                 }
                 // Picks up anything pending, including captures saved by the Share Extension.
                 Task { await EnrichmentScheduling.run(environment, reason: "foreground") }

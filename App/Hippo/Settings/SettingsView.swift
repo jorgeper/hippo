@@ -10,6 +10,7 @@ struct SettingsView: View {
     private let registry: ProviderRegistry
     private let coordinator: SyncCoordinator
     private let store: HippoStore
+    @State private var logModel: GlobalLogModel
 
     @State private var confirmingSignOut = false
     @State private var confirmingUpload = false
@@ -18,6 +19,7 @@ struct SettingsView: View {
     @State private var locationDenied = false
     /// Local mirror of the stored switches so a toggle moves at once.
     @State private var enrichmentOn: [FacetKind: Bool] = [:]
+    @State private var stripesOn = LocationService.settings.showsLayerStripes
     #if DEBUG
     @State private var sampleMessage: String?
     #endif
@@ -30,10 +32,12 @@ struct SettingsView: View {
         self.registry = registry
         self.store = store
         self.coordinator = coordinator
+        _logModel = State(initialValue: GlobalLogModel(store: store))
         _model = State(initialValue: SettingsModel(
             store: store, registry: registry, coordinator: coordinator, settings: LocationService.settings,
             requestLocationPermission: { await LocationService.shared.requestPermission() },
-            onEnrichmentEnabled: onEnrichmentEnabled))
+            onEnrichmentEnabled: onEnrichmentEnabled,
+            isOnline: { EnrichmentScheduling.isOnline }))
     }
 
     var body: some View {
@@ -44,6 +48,7 @@ struct SettingsView: View {
             enrichmentSection
             onThisPhoneSection
             aboutSection
+            DeveloperSection(model: model, logModel: logModel)
         }
         .navigationTitle("Settings")
         .task {
@@ -129,7 +134,7 @@ struct SettingsView: View {
     // MARK: Sync
 
     @ViewBuilder private var syncSection: some View {
-        Section("Sync") {
+        Section {
             HStack {
                 Text(model.summary)
                 if busy {
@@ -149,6 +154,10 @@ struct SettingsView: View {
                         }
                     }
             }
+        } header: {
+            Text("Sync")
+        } footer: {
+            if let summary = model.statusSummary { Text(summary) }
         }
     }
 
@@ -196,10 +205,16 @@ struct SettingsView: View {
                         }
                     }))
             }
+            Toggle("Show where details came from", isOn: Binding(
+                get: { stripesOn },
+                set: { value in
+                    stripesOn = value
+                    model.setShowsLayerStripes(value)
+                }))
         } header: {
             Text("Enrichment")
         } footer: {
-            Text(SettingsModel.enrichmentFooter)
+            Text("\(SettingsModel.enrichmentFooter) \(SettingsModel.layerStripesFooter)")
         }
     }
 
@@ -211,7 +226,7 @@ struct SettingsView: View {
         Task {
             let wrote = await DevFolderProvider.writeSampleGold(store: store)
             sampleMessage = wrote ? nil : "Sync this capture first."
-            if wrote { await SyncScheduling.runPass(coordinator, name: "debug-gold-sample") }
+            if wrote { await SyncScheduling.runPass(coordinator, name: "debug-gold-sample", trigger: "manual") }
         }
     }
     #endif

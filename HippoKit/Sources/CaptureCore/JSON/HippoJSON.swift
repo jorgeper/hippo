@@ -17,7 +17,7 @@ public enum HippoJSON {
 
     /// RFC 3339 UTC with exactly three fractional digits, rounded to the nearest millisecond.
     /// (`ISO8601FormatStyle` truncates the binary fraction, so e.g. a parsed `.123` can re-encode as `.122`.)
-    static func timestamp(_ date: Date) -> String {
+    public static func timestamp(_ date: Date) -> String {
         let ms = (date.timeIntervalSince1970 * 1000).rounded()
         let seconds = (ms / 1000).rounded(.down)
         let millis = Int(ms - seconds * 1000)

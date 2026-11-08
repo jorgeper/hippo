@@ -144,7 +144,15 @@ private func runReplaceListDownloadContract(adapter: any StorageAdapter, scratch
     #expect(replaced.byteCount == r2Int.byteCount)
     #expect(try await adapter.verify(remote: replaced, localURL: r2, expected: r2Int) != nil)
 
-    // Replace is refused outside enrichments/.
+    // Replace is also allowed under logs/.
+    let logPath = "logs/abc/2026-11-08.jsonl"
+    _ = try await adapter.replaceFile(localURL: r1, relativePath: logPath, expected: r1Int)
+    _ = try await adapter.replaceFile(localURL: r2, relativePath: logPath, expected: r2Int)
+    let logInfo = try #require(try await adapter.inspectFile(relativePath: logPath))
+    #expect(logInfo.byteCount == r2Int.byteCount)
+    #expect(try await adapter.verify(remote: logInfo, localURL: r2, expected: r2Int) != nil)
+
+    // Replace is refused outside enrichments/ and logs/.
     do {
         _ = try await adapter.replaceFile(localURL: r1, relativePath: "captures/2026/11/07/abc/x.bin", expected: r1Int)
         Issue.record("expected replace_not_allowed")

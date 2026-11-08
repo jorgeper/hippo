@@ -99,7 +99,17 @@ Redirects are followed one hop at a time before LinkPresentation is called, and 
 
 ### Server and Dropbox
 
-The server that produces gold is not built yet. The phone already pulls and shows gold from the Developer folder. The Dropbox adapter (Plan 3) must implement `replaceFile` (overwrite, under `enrichments/` only), `listChanges` and `downloadFile`, as `FilesystemAdapter` does.
+The server that produces gold is not built yet. The phone already pulls and shows gold from the Developer folder. The Dropbox adapter (Plan 3) must implement `replaceFile` (overwrite, under `enrichments/` and `logs/` only), `listChanges` and `downloadFile`, as `FilesystemAdapter` does.
+
+## Seeing what enrichment did
+
+- **Stripes.** In Detail, each enriched element has a stripe showing where it came from: bronze for captured, silver for done on this iPhone, gold for from your server. The preview card has none. Settings, Enrichment, "Show where details came from" turns them off (on by default).
+- **Spinner and clock.** A spinner on a timeline row means it is being processed. A clock means it is waiting: offline, throttled, waiting for the speech model, or waiting to retry.
+- **Status.** Detail has a Status section with one line per step. The Settings Sync footer sums up: "being processed", "waiting for a connection", "waiting to retry", "couldn't be processed".
+- **Developer mode.** Settings, Developer (off by default, also in release builds) adds Log (everything, newest first, with Clear log) and, in Detail, Activity (one capture, oldest first). Both have a Copy button, to paste into a Claude session.
+- **Log files.** The phone writes `Library/Application Support/Hippo/logs/YYYY-MM-DD.jsonl` (UTC days, with `.1`, `.2` segments after Clear). It keeps 30 days, 2 MB per segment. After each sync pass the files are uploaded to `logs/<install-id>/` in the destination, and the phone never deletes them there. Logs contain no capture content. The format is in [`docs/log-format.md`](docs/log-format.md).
+- Until Dropbox (Plan 3) exists, the only destination is the DEBUG-only Developer folder, so release builds keep logs but have nowhere to upload them.
+- Relative dates such as "tomorrow" are read against the day the capture was made.
 
 ## HippoKit
 

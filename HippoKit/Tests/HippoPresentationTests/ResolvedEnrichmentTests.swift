@@ -149,6 +149,52 @@ private func det(_ t: String) -> Detection { Detection(type: "phone", text: t, v
         #expect(f.transcripts["a1"]?.text == "s1" && f.recognizedText["a1"] == "s1" && !f.usesServer)
     }
 
+    @Test func serverOriginPerItem() throws {
+        func t(_ id: String, _ text: String) -> TranscriptItem { TranscriptItem(attachmentID: id, text: text, locale: "en_US", segments: []) }
+        let r = try docs(silver: [.transcript: (.ok, TranscriptData(items: [t("A", "s"), t("B", "s")])),
+                                  .summary: (.ok, SummaryData(text: "s"))],
+                         gold: [.transcript: (.ok, TranscriptData(items: [t("A", "g")])),
+                                .place: (.ok, PlaceData(items: [PlaceItem(target: "capture", locality: "Tacoma")])),
+                                .summary: (.ok, SummaryData(text: ""))])
+        #expect(r.fromServer.transcripts == ["A"])
+        #expect(r.fromServer.places == ["capture"])
+        #expect(!r.fromServer.summary)
+    }
+
+    // M2: every gold flag, so neutralising any one of them fails a test.
+    @Test func serverOriginEveryField() throws {
+        func rt(_ id: String, _ text: String) -> RecognizedText { RecognizedText(attachmentID: id, text: text, languages: ["en"]) }
+        let silver: [FacetKind: (FacetStatus, any Encodable)] = [
+            .textRecognition: (.ok, TextRecognitionData(items: [rt("A", "s"), rt("B", "s")])),
+            .dataDetection: (.ok, DataDetectionData(items: [det("1")])),
+            .sourceAppGuess: (.ok, SourceAppGuessData(app: "Notes", reason: "r")),
+            .summary: (.ok, SummaryData(text: "s")),
+            .tags: (.ok, TagsData(values: ["s"]))]
+        let r = try docs(silver: silver, gold: [
+            .textRecognition: (.ok, TextRecognitionData(items: [rt("A", "g")])),
+            .dataDetection: (.ok, DataDetectionData(items: [det("2")])),
+            .sourceAppGuess: (.ok, SourceAppGuessData(app: "Safari", reason: "r")),
+            .summary: (.ok, SummaryData(text: "g")),
+            .tags: (.ok, TagsData(values: ["g"]))])
+        #expect(r.fromServer == ServerOrigin(recognizedText: ["A"], detections: true, sourceApp: true, summary: true,
+                                             tags: true))
+        #expect(r.recognizedText == ["A": "g", "B": "s"])
+
+        let silverOnly = try docs(silver: silver, gold: [:])
+        #expect(silverOnly.fromServer == ServerOrigin())
+    }
+
+    // M2: a mixed place (silver locality, gold nearby) shows both and is marked as from the server.
+    @Test func mixedPlaceKeepsSilverFieldsAndMarksGold() throws {
+        let gold = NearbyPlace(name: "Pike Place Market", distanceMeters: 40)
+        let r = try docs(silver: [.place: (.ok, PlaceData(items: [PlaceItem(target: "capture", locality: "Seattle"),
+                                                                  PlaceItem(target: "a1", locality: "Tacoma")]))],
+                         gold: [.place: (.ok, PlaceData(items: [PlaceItem(target: "capture", nearby: gold)]))])
+        #expect(r.places["capture"] == PlaceItem(target: "capture", locality: "Seattle", nearby: gold))
+        #expect(r.places["a1"] == PlaceItem(target: "a1", locality: "Tacoma"))
+        #expect(r.fromServer.places == ["capture"])
+    }
+
     @Test func silverOnlyAndNonOkSilver() throws {
         let only = ResolvedEnrichment.make(device: try enrichmentDoc(.device, facets: [
             .summary: (.ok, SummaryData(text: "s"))]), server: nil, assetURL: assetURL)

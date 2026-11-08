@@ -24,7 +24,7 @@ private struct Harness {
     let model: SettingsModel
 
     init(faults: FaultPlan = FaultPlan(), adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil,
-         permission: @escaping () async -> Bool = { true },
+         permission: @escaping () async -> Bool = { true }, online: Bool = true,
          onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) throws {
         t = try TestStore()
         remote = t.base.appendingPathComponent("Remote", isDirectory: true)
@@ -32,11 +32,13 @@ private struct Harness {
         remoteB = t.base.appendingPathComponent("RemoteB", isDirectory: true)
         providerB = FakeStorageProvider(root: remoteB, id: "dev-b", kind: "filesystem-b")
         let registry = ProviderRegistry([provider, providerB])
-        coordinator = SyncCoordinator(store: t.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0")
         suite = "hippo-settings-\(UUID().uuidString)"
         settings = AppSettings(defaults: UserDefaults(suiteName: suite)!)
+        coordinator = SyncCoordinator(store: t.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0",
+                                      settings: settings)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
-                              requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled)
+                              requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled,
+                              isOnline: { online }, now: { Date(timeIntervalSince1970: 1_800_000_000) }, locale: Locale(identifier: "en_US"))
     }
 
     func cleanup() {
@@ -64,6 +66,54 @@ private struct Harness {
 
 @MainActor
 struct SettingsTests {
+    @Test func switchChangeIsLogged() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        await h.model.setEnrichment(.transcript, on: false)
+        await h.model.setLocationEnabled(true)
+        let events = h.t.store.log.globalEvents(limit: 10, before: nil).filter { $0.event == .settingsChanged }.reversed()
+        #expect(events.map(\.kind) == ["transcript", "location"])
+        #expect(events.map(\.on) == [false, true])
+    }
+
+    @Test func layerStripesSwitchIsStoredAndLogged() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        #expect(h.model.showsLayerStripes)
+        h.model.setShowsLayerStripes(false)
+        #expect(!h.model.showsLayerStripes)
+        #expect(!h.settings.showsLayerStripes)
+        h.model.setShowsLayerStripes(true)
+        let events = h.t.store.log.globalEvents(limit: 10, before: nil).filter { $0.event == .settingsChanged }.reversed()
+        #expect(events.map(\.kind) == ["layer_stripes", "layer_stripes"])
+        #expect(events.map(\.on) == [false, true])
+    }
+
+    @Test func developerModeToggleIsLogged() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        #expect(!h.model.developerMode)
+        h.model.setDeveloperMode(true)
+        #expect(h.model.developerMode)
+        #expect(h.settings.developerMode)
+        h.model.setDeveloperMode(false)
+        #expect(!h.settings.developerMode)
+        let events = h.t.store.log.globalEvents(limit: 10, before: nil).filter { $0.event == .settingsChanged }.reversed()
+        #expect(events.map(\.kind) == ["developer_mode", "developer_mode"])
+        #expect(events.map(\.on) == [true, false])
+    }
+
+    @Test func syncPassIsLoggedWithTrigger() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        _ = await h.coordinator.syncNow(trigger: "launch")
+        let passes = h.t.store.log.globalEvents(limit: 10, before: nil).filter { $0.event == .syncPass }.reversed()
+        #expect(passes.map(\.phase) == ["start", "end"])
+        #expect(passes.allSatisfy { $0.trigger == "launch" })
+        #expect(passes.last?.code == "ok")
+        #expect(passes.last?.count == 0)
+    }
+
     @Test func registryUnknownKindIsProviderUnavailable() async throws {
         let h = try Harness()
         defer { h.cleanup() }
@@ -80,12 +130,76 @@ struct SettingsTests {
         _ = try h.t.store.destinations.connect(dropbox)
         let p = try await h.t.note("hello", at: start)
         let coordinator = SyncCoordinator(store: h.t.store, registry: ProviderRegistry([]), ownerPrefix: "test",
-                                          appVersion: "0.1.0")
+                                          appVersion: "0.1.0",
+                                          settings: AppSettings(defaults: UserDefaults(suiteName: "hippo-x-\(UUID().uuidString)")!))
         let result = await coordinator.syncNow()
         #expect(result.failed == 1)
         let job = try #require(try h.t.store.jobs.jobs(captureID: p.metadata.captureID).first)
         #expect(job.state == .blocked)
         #expect(job.lastErrorCode == "permanent:provider_unavailable")
+    }
+
+    @Test func statusSummaryCounts() async throws {
+        let h = try Harness(online: false); defer { h.cleanup() }
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        var ids: [String] = []
+        for n in 0..<5 { ids.append(try await h.t.note("n\(n)", at: at.addingTimeInterval(Double(n))).metadata.captureID) }
+        let tasks = h.t.store.enrichmentTasks
+        for id in ids.prefix(2) { try tasks.set(captureID: id, kind: .dataDetection, version: 1, status: "pending", now: at) }
+        // Offline: a due network row with no stored code or retry time.
+        try tasks.set(captureID: ids[2], kind: .linkPreview, version: 1, status: "pending", now: at)
+        // Deferred for another reason.
+        try tasks.set(captureID: ids[3], kind: .place, version: 1, status: "pending", now: at)
+        try tasks.recordAttempt(captureID: ids[3], kind: .place, status: "pending", errorCode: "throttled",
+                                nextAttemptAt: at.addingTimeInterval(300), incrementAttempts: true, now: at)
+        try tasks.set(captureID: ids[4], kind: .transcript, version: 1, status: "failed", now: at)
+        h.settings.recordSync(at: at.addingTimeInterval(-120), failed: false)
+        await h.model.refresh()
+        #expect(h.model.statusSummary == "Last sync 2 minutes ago · 2 being processed · 1 waiting for a connection · 1 waiting to retry · 1 couldn't be processed")
+        h.settings.recordSync(at: at.addingTimeInterval(-120), failed: true)
+        await h.model.refresh()
+        #expect(h.model.statusSummary?.hasPrefix("Last sync 2 minutes ago · didn't finish · 2 being processed") == true)
+    }
+
+    @Test func statusSummaryNeverAndZeroCountsOmitted() async throws {
+        let h = try Harness(); defer { h.cleanup() }
+        await h.model.refresh()
+        #expect(h.model.statusSummary == "Last sync never")
+    }
+
+    @Test func installIDIsStable() throws {
+        let h = try Harness(); defer { h.cleanup() }
+        let a = h.settings.installID, b = h.settings.installID
+        #expect(a == b)
+        #expect(a == a.lowercased())
+        #expect(UUID(uuidString: a) != nil)
+    }
+
+    @Test func defaultsForNewSettings() throws {
+        let h = try Harness(); defer { h.cleanup() }
+        #expect(h.settings.showsLayerStripes)
+        #expect(!h.settings.developerMode)
+        #expect(h.settings.lastSync == nil)
+    }
+
+    @Test func syncUploadsLogsAndRecordsLastSync() async throws {
+        let h = try Harness(); defer { h.cleanup() }
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        _ = await h.coordinator.syncNow()
+        var isDir: ObjCBool = false
+        let dir = h.remote.appendingPathComponent("logs/\(h.settings.installID)").path
+        #expect(FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) && isDir.boolValue)
+        let last = try #require(h.settings.lastSync)
+        #expect(!last.failed)
+    }
+
+    // M9: a pass with no active destination synced nothing, so it must not read as "Last sync just now".
+    @Test func syncWithoutDestinationDoesNotRecordLastSync() async throws {
+        let h = try Harness(); defer { h.cleanup() }
+        _ = await h.coordinator.syncNow()
+        #expect(h.settings.lastSync == nil)
+        await h.model.refresh()
+        #expect(h.model.statusSummary == "Last sync never")
     }
 
     @Test func connectBindsUnassignedAndSyncs() async throws {

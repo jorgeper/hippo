@@ -1,6 +1,7 @@
 import SwiftUI
 import EventKit
 import EventKitUI
+import CaptureCore
 import HippoPresentation
 
 /// A local image file shown decoded off the main thread. Decorative: hidden from accessibility.
@@ -30,6 +31,7 @@ struct FileThumbnail: View {
 /// Link cards, summary and tags, found items and recognised text for one capture.
 struct EnrichmentSections: View {
     let detail: CaptureDetail
+    let showsStripes: Bool
     @Environment(\.openURL) private var openURL
     @State private var calendarDraft: CalendarDraft?
 
@@ -40,36 +42,54 @@ struct EnrichmentSections: View {
     }
 
     var body: some View {
-        if !detail.linkCards.isEmpty {
+        if !detail.linkCards.isEmpty || detail.pending[.linkPreview] != nil {
             Section("Link previews") {
-                ForEach(detail.linkCards, id: \.url) { card in linkCard(card) }
+                ForEach(detail.linkCards, id: \.url) { card in
+                    linkCard(card).layerStripe(card.fromServer ? .gold : .silver, shown: showsStripes)
+                }
+                pending(.linkPreview)
             }
         }
         if let summary = detail.summary {
-            Section("Summary") { Text(summary).textSelection(.enabled) }
+            Section("Summary") {
+                Text(summary).textSelection(.enabled).layerStripe(detail.summaryLayer, shown: showsStripes)
+            }
         }
         if !detail.tags.isEmpty {
             Section("Tags") {
                 Text(detail.tags.map { "#\($0)" }.joined(separator: "  ")).textSelection(.enabled)
+                    .layerStripe(detail.tagsLayer, shown: showsStripes)
             }
         }
-        if !detail.found.isEmpty {
+        if !detail.found.isEmpty || detail.pending[.dataDetection] != nil {
             Section("Found in this capture") {
-                ForEach(Array(detail.found.enumerated()), id: \.offset) { _, item in found(item) }
+                ForEach(Array(detail.found.enumerated()), id: \.offset) { _, item in
+                    found(item).layerStripe(detail.foundLayer, shown: showsStripes)
+                }
+                pending(.dataDetection)
             }
             .sheet(item: $calendarDraft) { draft in
                 CalendarEventEditor(title: draft.title, start: draft.start).ignoresSafeArea()
             }
         }
-        if !detail.transcripts.isEmpty {
+        if !detail.transcripts.isEmpty || detail.pending[.transcript] != nil {
             Section("Transcript") {
-                ForEach(detail.transcripts, id: \.title) { disclosure($0) }
+                ForEach(detail.transcripts, id: \.title) { disclosure($0).layerStripe($0.layer, shown: showsStripes) }
+                pending(.transcript)
             }
         }
-        if !detail.recognizedText.isEmpty {
+        if !detail.recognizedText.isEmpty || detail.pending[.textRecognition] != nil {
             Section("Text in image") {
-                ForEach(detail.recognizedText, id: \.title) { disclosure($0) }
+                ForEach(detail.recognizedText, id: \.title) { disclosure($0).layerStripe($0.layer, shown: showsStripes) }
+                pending(.textRecognition)
             }
+        }
+    }
+
+    /// The pending line for `kind`, in the spot where its result will appear. Silver: added on this iPhone.
+    @ViewBuilder private func pending(_ kind: FacetKind) -> some View {
+        if let line = detail.pending[kind] {
+            PendingLineView(line: line).layerStripe(.silver, shown: showsStripes)
         }
     }
 

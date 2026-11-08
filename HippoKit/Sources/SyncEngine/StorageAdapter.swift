@@ -122,7 +122,8 @@ public protocol StorageAdapter: Sendable {
     func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
                     saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt
 
-    /// Atomic overwrite. Throws `.permanent(code: "replace_not_allowed")` unless `relativePath` starts with `enrichments/`.
+    /// Atomic overwrite. Throws `.permanent(code: "replace_not_allowed")` unless `relativePath` starts with
+    /// `enrichments/` or `logs/`. A provider's overwrite-capable upload (Plan 3) must allow both prefixes.
     func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt
     /// A nil cursor returns every file under `prefix` as `.upserted`; otherwise the changes since `cursor`.
     /// An unknown or garbled cursor throws `.cursorReset`. Directories and hidden or temporary entries

@@ -30,6 +30,11 @@ public actor EnrichmentRunner {
     public static let retryPolicy = RetryPolicy(base: 300, cap: 21_600)
     /// Posted on the main actor after each `runPending` pass, with the runner as the object.
     public static let passFinished = Notification.Name("HippoEnrichmentPassFinished")
+    /// Posted on the main actor after every processed task, whatever its outcome, with the runner as the object
+    /// and the task's capture ID in `userInfo[captureIDKey]`.
+    public static let taskFinished = Notification.Name("HippoEnrichmentTaskFinished")
+    /// The `taskFinished` userInfo key whose value (a `String`) is the processed task's capture ID.
+    public static let captureIDKey = "captureID"
 
     /// Fixed category strings only: never IDs, paths, URLs or content.
     private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "enrichment")
@@ -49,6 +54,7 @@ public actor EnrichmentRunner {
     private let policy: RetryPolicy
     private let now: @Sendable () -> Date
     private let random: @Sendable () -> Double
+    private let log: ActivityLog?
 
     private var passRunning = false
     /// Passes waiting for the running one to finish, in arrival order.
@@ -58,7 +64,8 @@ public actor EnrichmentRunner {
                 enrichers: [any Enricher], producer: EnrichmentProducer,
                 isEnabled: @escaping @Sendable (FacetKind) -> Bool, isOnline: @escaping @Sendable () -> Bool,
                 policy: RetryPolicy = EnrichmentRunner.retryPolicy, now: @escaping @Sendable () -> Date = Date.init,
-                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) {
+                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }, log: ActivityLog? = nil) {
+        self.log = log
         self.layout = layout
         self.index = index
         self.tasks = tasks
@@ -91,9 +98,15 @@ public actor EnrichmentRunner {
     public func schedule(limitPerKind: Int = 500) throws -> Int {
         var pending = 0
         for e in enrichers where isEnabled(e.kind) {
+            var queued = 0
             for id in try tasks.capturesNeeding(kind: e.kind, version: e.version, limit: limitPerKind) {
-                if try scheduleOne(captureID: id, e) { pending += 1 }
+                if try scheduleOne(captureID: id, e) {
+                    pending += 1
+                    queued += 1
+                    log?.append(LogEvent(event: .enrichQueued, captureID: id, kind: e.kind.rawValue))
+                }
             }
+            if queued > 0 { log?.append(LogEvent(event: .enrichScheduled, kind: e.kind.rawValue, count: queued)) }
         }
         return pending
     }
@@ -151,8 +164,10 @@ public actor EnrichmentRunner {
     /// it is cancelled while waiting (without posting `passFinished`, as no pass ran).
     public func runPending(maxTasks: Int = 50) async -> EnrichmentPassResult {
         guard await beginPass() else { return EnrichmentPassResult(ran: 0, failed: 0, idle: true) }
+        log?.append(LogEvent(event: .enrichPass, phase: "start"))
         var result = EnrichmentPassResult(ran: 0, failed: 0, idle: true)
         var claimed = 0
+        var cancelled = false
         passLoop: while claimed < maxTasks, !Task.isCancelled {
             let next: EnrichmentTask?
             do {
@@ -164,16 +179,25 @@ public actor EnrichmentRunner {
             guard let task = next, let enricher = byKind[task.kind] else { break }
             claimed += 1
             result.idle = false
-            switch await process(task, enricher) {
+            let outcome = await process(task, enricher)
+            await MainActor.run {
+                NotificationCenter.default.post(name: Self.taskFinished, object: self,
+                                                userInfo: [Self.captureIDKey: task.captureID])
+            }
+            switch outcome {
             case .ran(let failed):
                 result.ran += 1
                 if failed { result.failed += 1 }
             case .skipped:
                 break
             case .cancelled:
+                cancelled = true
                 break passLoop
             }
         }
+        let endCode = cancelled || Task.isCancelled ? "cancelled"
+            : claimed >= maxTasks ? "max_tasks" : claimed == 0 ? "idle" : "nothing_due"
+        log?.append(LogEvent(event: .enrichPass, code: endCode, count: result.ran, phase: "end"))
         endPass()
         await MainActor.run { NotificationCenter.default.post(name: Self.passFinished, object: self) }
         return result
@@ -240,6 +264,8 @@ public actor EnrichmentRunner {
         } catch {
             Self.log.error("\("enrichment_metadata_unreadable", privacy: .public)")
             record(task, status: "failed", code: "metadata_unreadable", nextAttemptAt: nil, countsAttempt: true)
+            log?.append(LogEvent(event: .enrichFailed, captureID: id, kind: task.kind.rawValue,
+                                 code: "metadata_unreadable", attempt: task.attemptCount + 1))
             return .ran(failed: true)
         }
         // Validating a package hashes every file, so only typed notes (small) are loaded for their body.
@@ -254,6 +280,9 @@ public actor EnrichmentRunner {
         let input = EnricherInput(captureID: id, metadata: metadata, packageURL: packageURL, noteBody: noteBody,
                                   current: attempt.current)
         let output: EnricherOutput
+        log?.append(LogEvent(event: .enrichStarted, captureID: id, kind: task.kind.rawValue,
+                             attempt: task.attemptCount + 1))
+        let startedAt = ContinuousClock.now
         do {
             output = try await e.run(input)
         } catch {
@@ -273,6 +302,13 @@ public actor EnrichmentRunner {
         switch save(facet, attempt, newAssets: output.newAssets) {
         case .saved:
             record(task, status: output.status.rawValue, code: nil, nextAttemptAt: nil, countsAttempt: true)
+            let elapsed = ContinuousClock.now - startedAt
+            var items: Int?
+            if case .object(let fields)? = output.data, case .array(let list)? = fields["items"] { items = list.count }
+            log?.append(LogEvent(event: .enrichFinished, captureID: id, kind: task.kind.rawValue,
+                                 outcome: output.status == .ok ? .ok : .empty, count: items,
+                                 ms: max(0, Int(elapsed.components.seconds * 1000
+                                                + elapsed.components.attoseconds / 1_000_000_000_000_000))))
             return .ran(failed: false)
         case .gone:
             return .ran(failed: false)
@@ -285,8 +321,10 @@ public actor EnrichmentRunner {
     private func handle(_ error: Error, _ attempt: Attempt) -> Outcome {
         switch error as? EnrichmentError {
         case .deferred(let code, let retryAfter):
-            record(attempt.task, status: "pending", code: code,
-                   nextAttemptAt: now().addingTimeInterval(max(retryAfter, 0)), countsAttempt: false)
+            let retryAt = now().addingTimeInterval(max(retryAfter, 0))
+            record(attempt.task, status: "pending", code: code, nextAttemptAt: retryAt, countsAttempt: false)
+            log?.append(LogEvent(event: .enrichDeferred, captureID: attempt.captureID,
+                                 kind: attempt.task.kind.rawValue, code: code, retryAt: retryAt))
             return .ran(failed: false)
         case .permanent(let code):
             return fail(attempt, code: code)
@@ -304,6 +342,8 @@ public actor EnrichmentRunner {
         let delay = policy.delay(attempt: number, retryAfter: nil, random: random)
         record(attempt.task, status: "pending", code: code, nextAttemptAt: now().addingTimeInterval(delay),
                countsAttempt: true)
+        log?.append(LogEvent(event: .enrichRetrying, captureID: attempt.captureID, kind: attempt.task.kind.rawValue,
+                             code: code, attempt: number))
         return .ran(failed: true)
     }
 
@@ -313,6 +353,8 @@ public actor EnrichmentRunner {
                           data: nil)
         _ = save(facet, attempt, newAssets: [:])
         record(attempt.task, status: "failed", code: code, nextAttemptAt: nil, countsAttempt: true)
+        log?.append(LogEvent(event: .enrichFailed, captureID: attempt.captureID, kind: attempt.task.kind.rawValue,
+                             code: code, attempt: attempt.task.attemptCount + 1))
         return .ran(failed: true)
     }
 

@@ -16,13 +16,14 @@ private struct StoreHarness {
     let store: HippoStore
     let faults = FaultPlan()
 
-    init(leaseWaitLimit: Duration = HippoStore.defaultLeaseWaitLimit) throws {
+    init(leaseWaitLimit: Duration = HippoStore.defaultLeaseWaitLimit,
+         now: @escaping @Sendable () -> Date = Date.init) throws {
         base = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-store-\(UUID().uuidString)")
         root = base.appendingPathComponent("Library/Application Support/Hippo")
         remote = base.appendingPathComponent("remote")
         try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
         store = try HippoStore.open(root: root, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"),
-                                    leaseWaitLimit: leaseWaitLimit)
+                                    leaseWaitLimit: leaseWaitLimit, now: now)
     }
 
     func cleanup() { try? FileManager.default.removeItem(at: base) }
@@ -131,19 +132,27 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(try t.store.recover().registered == 0)
     }
 
-    // Acceptance 12. The worker stalls mid-file and never answers the cancel: its lease (taken on a
-    // clock running behind) expires 2 s after its last renewal, deletion proceeds, and the worker
-    // then finds its job row gone and aborts silently.
+    // Acceptance 12. The worker stalls mid-file and never answers the cancel: deletion sees its lease
+    // live, then sees it expire while waiting, proceeds, and the worker then finds its job row gone and
+    // aborts silently. Both clocks are fixed, so how long the test task takes to reach `delete` (under
+    // a loaded parallel run) can't change the outcome.
     @Test func deleteDuringActiveUploadCancelsAndNeverTouchesRemote() async throws {
-        let t = try StoreHarness(); defer { t.cleanup() }
+        // Deletion's first lease check reads t0 (the lease is live); every later check reads a time past
+        // the lease, as if the stalled worker's lease ran out while deletion waited.
+        let storeClock = TestClock(t0)
+        let t = try StoreHarness(now: {
+            let now = storeClock.now
+            storeClock.set(t0.addingTimeInterval(SyncWorker.lease + 1))
+            return now
+        })
+        defer { t.cleanup() }
         _ = try t.store.destinations.connect(t.destination)
         let pkg = try await t.store.capture(t.blobDraft(bytes: 3 * FilesystemAdapter.chunkSize))
         let id = pkg.metadata.captureID
         let adapter = PausingAdapter(inner: t.adapter, path: pkg.attachmentPath)
         let s = t.store
         let worker = SyncWorker(layout: s.layout, jobs: s.jobs, destinations: s.destinations, index: s.index,
-                                adapterFor: { _ in adapter }, owner: "stalled-worker",
-                                now: { Date().addingTimeInterval(2 - SyncWorker.lease) })
+                                adapterFor: { _ in adapter }, owner: "stalled-worker", now: { t0 })
         // Opening `paused` on exit too means a worker that never reaches the file fails the test, not hangs it.
         let run = Task { let r = await worker.runOnce(); adapter.paused.open(); return r }
         await adapter.paused.wait()
@@ -600,4 +609,39 @@ private func enrichmentDocument(_ pkg: CommittedPackage, _ layer: EnrichmentLaye
                               packageDigest: digest, producer: EnrichmentProducer(name: "t", version: "1", build: "1"),
                               generatedAt: Date(timeIntervalSince1970: 1_800_000_000),
                               facets: [FacetKind.summary.rawValue: facet])
+}
+
+@Suite struct HippoStoreLogTests {
+    @Test func captureLogsSaved() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.urlDraft())
+        let events = t.store.log.events(captureID: pkg.metadata.captureID.description, from: Date().addingTimeInterval(-86_400))
+        #expect(events.map(\.event) == [.captureSaved])
+        #expect(events.first?.trigger == "share_extension")
+        #expect(events.first?.proc == .app)
+
+        let share = try HippoStore.open(root: t.root, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"),
+                                        process: .share)
+        let pkg2 = try await share.capture(t.urlDraft("https://example.com/b"))
+        #expect(share.log.events(captureID: pkg2.metadata.captureID.description, from: Date().addingTimeInterval(-86_400)).first?.proc == .share)
+    }
+
+    @Test func deleteLogsDeleted() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.urlDraft())
+        let id = pkg.metadata.captureID
+        _ = try await t.store.delete(captureID: id)
+        let events = t.store.log.events(captureID: id, from: Date().addingTimeInterval(-86_400))
+        #expect(events.map(\.event) == [.captureSaved, .captureDeleted])
+    }
+
+    @Test func failedCommitLogsGlobalSaveFailed() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let empty = CaptureDraft(captureID: UUID(), startedAt: Date(), timeZone: TimeZone(identifier: "UTC")!,
+                                 method: .shareExtension)
+        await #expect(throws: CaptureError.emptyCapture) { try await t.store.capture(empty) }
+        let globals = t.store.log.globalEvents(limit: 10, before: nil)
+        #expect(globals.map(\.event) == [.captureSaveFailed])
+        #expect(globals.first?.code == "empty_capture")
+    }
 }

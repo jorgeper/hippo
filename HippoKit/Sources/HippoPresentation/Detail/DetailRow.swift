@@ -4,10 +4,12 @@ import Foundation
 public struct DetailRow: Equatable, Sendable {
     public var label: String
     public var value: String
+    public var layer: Layer
 
-    public init(label: String, value: String) {
+    public init(label: String, value: String, layer: Layer = .bronze) {
         self.label = label
         self.value = value
+        self.layer = layer
     }
 }
 

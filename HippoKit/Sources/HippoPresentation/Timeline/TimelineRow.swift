@@ -20,6 +20,8 @@ public struct TimelineRow: Identifiable, Equatable, Sendable {
     public var extraCount: Int
     /// A file URL for a link's preview picture, when one has been fetched.
     public var thumbnailURL: URL?
+    /// Enrichment activity: a spinner while working, a clock while only waiting.
+    public var progress: RowProgress = .none
 
     /// `metadata` nil means the summary alone is used.
     public static func make(_ s: CaptureSummary, metadata: CaptureMetadata?, enrichment: ResolvedEnrichment?,

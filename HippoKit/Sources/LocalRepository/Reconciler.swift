@@ -81,14 +81,33 @@ public final class Reconciler: Sendable {
 
     // MARK: Staging
 
+    /// A log upload copies one file and uploads it; ten minutes is far beyond any live one.
+    static let logSnapshotMaxAge: TimeInterval = 600
+
     /// Deletes every `staging/<id>` whose lock is free, and lock files with no directory. A lock held
     /// by a live writer (a package writer, or a gold pull's `staging/gold-<uuid>`) means "skip".
-    /// `staging/enrichments/` is not a package: `EnrichmentStore.sweep()` owns it.
+    /// `staging/enrichments/` is not a package: `EnrichmentStore.sweep()` owns it. A log upload's
+    /// `staging/log-<uuid>.jsonl` snapshot is removed too once it is older than `logSnapshotMaxAge`: recovery
+    /// can run alongside the launch's first sync pass, so a fresh one may belong to a live upload; an old one
+    /// was left by an app killed mid-upload.
     private func removeAbandonedStaging(into report: inout RecoveryReport) {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: layout.stagingDir.path) else { return }
         for name in names.sorted() where name != layout.enrichmentStagingDir.lastPathComponent {
             do {
+                if name.hasPrefix("log-"), name.hasSuffix(".jsonl") {
+                    let file = layout.stagingDir.appendingPathComponent(name)
+                    guard !Self.isDirectory(file) else { continue }
+                    let modified = (try? fm.attributesOfItem(atPath: file.path)[.modificationDate]) as? Date
+                    guard let modified, Date().timeIntervalSince(modified) > Self.logSnapshotMaxAge else { continue }
+                    do {
+                        try fm.removeItem(at: file)
+                        report.removedStaging += 1
+                    } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                        // Already gone.
+                    }
+                    continue
+                }
                 if name.hasSuffix(".lock") {
                     let dir = layout.stagingDir.appendingPathComponent(String(name.dropLast(5)))
                     if fm.fileExists(atPath: dir.path) { continue }  // handled with its directory

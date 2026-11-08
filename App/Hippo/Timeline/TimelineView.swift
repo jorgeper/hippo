@@ -1,5 +1,6 @@
 import SwiftUI
 import HippoPresentation
+import Enrichment
 
 struct TimelineView: View {
     let environment: AppEnvironment
@@ -9,6 +10,7 @@ struct TimelineView: View {
     @State private var thumbnailer: Thumbnailer
     @State private var showingFilters = false
     @State private var presented: Compose?
+    @State private var taskReload: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
 
     private enum Compose: String, Identifiable {
@@ -24,7 +26,10 @@ struct TimelineView: View {
     init(environment: AppEnvironment, path: Binding<NavigationPath>) {
         self.environment = environment
         _path = path
-        _model = State(initialValue: TimelineModel(store: environment.store))
+        _model = State(initialValue: TimelineModel(
+            store: environment.store,
+            isEnabled: { LocationService.settings.isEnrichmentEnabled($0) },
+            isOnline: { EnrichmentScheduling.isOnline }))
         let layout = environment.store.layout
         _thumbnailer = State(initialValue: Thumbnailer(layoutURL: { layout.packageURL(relativeDirectory: $0) }))
     }
@@ -82,6 +87,17 @@ struct TimelineView: View {
             .onReceive(NotificationCenter.default.publisher(for: TimelineModel.enrichmentChanged)) { _ in
                 Task { await model.reload() }
             }
+            // A task finishes every few seconds during a backfill: coalesce reloads to one per 500 ms.
+            .onReceive(NotificationCenter.default.publisher(for: EnrichmentRunner.taskFinished)) { _ in
+                guard taskReload == nil else { return }
+                taskReload = Task {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    if Task.isCancelled { return }
+                    taskReload = nil
+                    await model.reload()
+                }
+            }
+            .onDisappear { taskReload?.cancel(); taskReload = nil }
     }
 
     #if DEBUG
@@ -140,7 +156,7 @@ struct TimelineView: View {
         .listStyle(.insetGrouped)
         .refreshable {
             if let coordinator = environment.coordinator {
-                await SyncScheduling.runPass(coordinator, name: "timeline-sync")
+                await SyncScheduling.runPass(coordinator, name: "timeline-sync", trigger: "manual")
             }
             await model.reload()
         }

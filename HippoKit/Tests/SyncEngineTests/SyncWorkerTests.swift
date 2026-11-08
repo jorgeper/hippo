@@ -542,4 +542,21 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(try h.job(pkg).state == .blocked)
         #expect(await h.worker().runOnce().idle)
     }
+
+    @Test func logsPackageUploadedWithProviderKind() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let ok = try await h.capture()
+        #expect(await h.worker().runOnce().synced == 1)
+        let uploaded = try #require(h.log.events(captureID: ok.metadata.captureID, from: Date(timeIntervalSince1970: 0)).first)
+        #expect(uploaded.event == .packageUploaded)
+        #expect(uploaded.dest == "filesystem")
+
+        let bad = try await h.capture()
+        h.faults.failBeforeWrite(bad.attachmentPath, .transient(code: "server_500"))
+        #expect(await h.worker().runOnce().failed == 1)
+        let failed = try #require(h.log.events(captureID: bad.metadata.captureID, from: Date(timeIntervalSince1970: 0)).first)
+        #expect(failed.event == .packageUploadFailed)
+        #expect(failed.code == "transient:server_500")
+        #expect(failed.dest == "filesystem")
+    }
 }

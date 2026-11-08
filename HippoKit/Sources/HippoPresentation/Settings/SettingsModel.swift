@@ -20,9 +20,16 @@ public final class SettingsModel {
     /// Disk space used by the local store (database and capture packages).
     public private(set) var storageBytes: Int64 = 0
     public private(set) var locationEnabled: Bool
+    /// Whether stripes show where details came from.
+    public private(set) var showsLayerStripes: Bool
+    /// Whether Activity and the Log screen are shown.
+    public private(set) var developerMode: Bool
     /// True after a failed `refresh()`; cleared by the next successful one. A failed refresh keeps the
     /// previous values.
     public private(set) var loadFailed = false
+
+    /// "Last sync … · N being processed · …"; nil until the first `refresh()`.
+    public private(set) var statusSummary: String?
 
     /// One line for the Sync section.
     public var summary: String { Self.summary(counts: counts) }
@@ -31,13 +38,21 @@ public final class SettingsModel {
     @ObservationIgnored private let registry: ProviderRegistry
     @ObservationIgnored private let coordinator: SyncCoordinator
     @ObservationIgnored private let settings: AppSettings
+    @ObservationIgnored private let isOnline: @Sendable () -> Bool
+    @ObservationIgnored private let now: @Sendable () -> Date
+    @ObservationIgnored private let locale: Locale
     @ObservationIgnored private let requestLocationPermission: () async -> Bool
     @ObservationIgnored private let onEnrichmentEnabled: @Sendable (FacetKind) async -> Void
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "settings")
 
     public init(store: HippoStore, registry: ProviderRegistry, coordinator: SyncCoordinator, settings: AppSettings,
                 requestLocationPermission: @escaping () async -> Bool,
-                onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) {
+                onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in },
+                isOnline: @escaping @Sendable () -> Bool = { true },
+                now: @escaping @Sendable () -> Date = Date.init, locale: Locale = .current) {
+        self.isOnline = isOnline
+        self.now = now
+        self.locale = locale
         self.onEnrichmentEnabled = onEnrichmentEnabled
         self.store = store
         self.registry = registry
@@ -45,6 +60,8 @@ public final class SettingsModel {
         self.settings = settings
         self.requestLocationPermission = requestLocationPermission
         locationEnabled = settings.locationEnabled
+        showsLayerStripes = settings.showsLayerStripes
+        developerMode = settings.developerMode
     }
 
     public static let enrichmentSwitches: [EnrichmentSwitch] = [
@@ -57,12 +74,26 @@ public final class SettingsModel {
     ]
 
     public static let enrichmentFooter = "Link previews fetch the page title and picture from the website. Place names are looked up with Apple Maps. Everything else runs on this iPhone."
+    public static let layerStripesFooter = "Bronze: what you captured. Silver: added on this iPhone. Gold: added by your server."
+
+    public func setShowsLayerStripes(_ on: Bool) {
+        settings.showsLayerStripes = on
+        showsLayerStripes = on
+        store.log.append(LogEvent(event: .settingsChanged, kind: "layer_stripes", on: on))
+    }
+
+    public func setDeveloperMode(_ on: Bool) {
+        settings.developerMode = on
+        developerMode = on
+        store.log.append(LogEvent(event: .settingsChanged, kind: "developer_mode", on: on))
+    }
 
     public func isEnrichmentEnabled(_ kind: FacetKind) -> Bool { settings.isEnrichmentEnabled(kind) }
 
     /// Stores the switch. Turning a kind on backfills existing captures through `onEnrichmentEnabled`.
     public func setEnrichment(_ kind: FacetKind, on: Bool) async {
         settings.setEnrichmentEnabled(kind, on)
+        store.log.append(LogEvent(event: .settingsChanged, kind: kind.rawValue, on: on))
         if on { await onEnrichmentEnabled(kind) }
     }
 
@@ -78,6 +109,7 @@ public final class SettingsModel {
         var destination: Destination?
         var counts: [SyncBucket: Int]
         var bytes: Int64
+        var unfinished: [EnrichmentTask]
     }
 
     /// Re-reads the destination, sync counts, storage use and location preference.
@@ -87,7 +119,8 @@ public final class SettingsModel {
         let snapshot: Snapshot? = await Task.detached {
             do {
                 return Snapshot(destination: try store.destinations.active(), counts: try store.index.counts(),
-                                bytes: StorageUsage.bytes(under: store.layout.root))
+                                bytes: StorageUsage.bytes(under: store.layout.root),
+                                unfinished: (try? store.enrichmentTasks.unfinished()) ?? [])
             } catch {
                 Self.log.error("\("refresh_failed", privacy: .public)")
                 return nil
@@ -98,6 +131,44 @@ public final class SettingsModel {
         activeDestination = snapshot.destination
         counts = snapshot.counts
         storageBytes = snapshot.bytes
+        statusSummary = buildStatusSummary(unfinished: snapshot.unfinished)
+    }
+
+    private func buildStatusSummary(unfinished: [EnrichmentTask]) -> String {
+        let current = now()
+        let settings = settings
+        var working = 0, offline = 0, retry = 0, failed = 0
+        for (_, tasks) in Dictionary(grouping: unfinished, by: \.captureID) {
+            let steps = EnrichmentProgress.steps(tasks, isEnabled: { settings.isEnrichmentEnabled($0) },
+                                                 isOnline: isOnline(), now: current)
+            switch EnrichmentProgress.row(steps) {
+            case .working: working += 1
+            case .waiting:
+                let isOffline = steps.contains { key, state in
+                    if state == .waiting(code: "offline") { return true }
+                    if case .waitingForInput(let input) = state { return steps[input] == .waiting(code: "offline") }
+                    return false
+                }
+                if isOffline { offline += 1 } else { retry += 1 }
+            case .none: break
+            }
+            if steps.values.contains(where: { if case .failed = $0 { true } else { false } }) { failed += 1 }
+        }
+        var head = "Last sync never"
+        if let last = settings.lastSync {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.locale = locale
+            formatter.dateTimeStyle = .named
+            formatter.unitsStyle = .full
+            head = "Last sync \(formatter.localizedString(for: last.at, relativeTo: current))"
+            if last.failed { head += " · didn't finish" }
+        }
+        var parts = [head]
+        if working > 0 { parts.append("\(working) being processed") }
+        if offline > 0 { parts.append("\(offline) waiting for a connection") }
+        if retry > 0 { parts.append("\(retry) waiting to retry") }
+        if failed > 0 { parts.append("\(failed) couldn't be processed") }
+        return parts.joined(separator: " · ")
     }
 
     /// Signs in with `p`, makes it the active destination (binding every capture that has no upload
@@ -147,6 +218,7 @@ public final class SettingsModel {
         let enabled = on ? await requestLocationPermission() : false
         settings.locationEnabled = enabled
         locationEnabled = enabled
+        store.log.append(LogEvent(event: .settingsChanged, kind: "location", on: enabled))
     }
 
     private func syncThenRefresh() async {

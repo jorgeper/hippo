@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CaptureCore
+import MapKit
 @testable import Enrichment
 
 private final class FakeLookup: PlaceLookup, @unchecked Sendable {
@@ -113,5 +114,44 @@ private func items(_ out: EnricherOutput) throws -> [PlaceItem] {
         let out = try await PlaceEnricher(lookup: lookup).run(fixtureInput(meta(accuracy: -1)))
         #expect(try items(out).first?.nearby == nil)
         #expect(lookup.poiCalls == 0)
+    }
+}
+
+// M4: how the app's MapKit lookup records an error. Built from real MapKit errors, so the domain and code
+// constants are checked against MapKit itself.
+@Suite struct PlaceLookupErrorTests {
+    @Test func throttlingDefersAsThrottled() {
+        let mapped = PlaceLookupError.map(MKError(.loadingThrottled))
+        #expect(mapped as? EnrichmentError == .deferred(code: "throttled", retryAfter: 300))
+    }
+
+    @Test func noConnectionDefersAsOffline() {
+        let error = NSError(domain: MKErrorDomain, code: Int(MKError.Code.serverFailure.rawValue),
+                            userInfo: [NSUnderlyingErrorKey: URLError(.notConnectedToInternet) as NSError])
+        #expect(PlaceLookupError.map(error) as? EnrichmentError == .deferred(code: "offline", retryAfter: 60))
+    }
+
+    @Test func otherErrorsAreTransient() {
+        #expect(PlaceLookupError.map(MKError(.serverFailure)) as? EnrichmentError == .transient(code: "geocode_failed"))
+        #expect(PlaceLookupError.map(URLError(.timedOut)) as? EnrichmentError == .transient(code: "geocode_failed"))
+    }
+
+    @Test func cancellationStaysCancellation() {
+        #expect(PlaceLookupError.map(CancellationError()) is CancellationError)
+    }
+
+    @Test func notFoundIsRecognised() {
+        #expect(PlaceLookupError.isNotFound(MKError(.placemarkNotFound)))
+        #expect(!PlaceLookupError.isNotFound(MKError(.loadingThrottled)))
+    }
+
+    // The enricher passes the deferral through, so the task waits with code "throttled" and Detail says
+    // "Apple Maps is busy, will retry".
+    @Test func enricherDefersOnThrottling() async throws {
+        let lookup = FakeLookup()
+        lookup.areaError = PlaceLookupError.map(MKError(.loadingThrottled))
+        await #expect(throws: EnrichmentError.deferred(code: "throttled", retryAfter: 300)) {
+            _ = try await PlaceEnricher(lookup: lookup).run(fixtureInput(meta(accuracy: 500)))
+        }
     }
 }

@@ -1,10 +1,13 @@
 import SwiftUI
 import os
+import CaptureCore
 import HippoPresentation
+import Enrichment
 
 /// One capture's details: preview, comment, shared content, captured and attachment facts, sync state.
 struct CaptureDetailView: View {
     let environment: AppEnvironment
+    let captureID: String
     /// Called after the capture is deleted, before this screen pops, so the timeline reloads.
     let onDeleted: () -> Void
 
@@ -12,6 +15,9 @@ struct CaptureDetailView: View {
     @State private var confirmingDelete = false
     @State private var deleteFailed = false
     @State private var retrying = false
+    @State private var developerMode = LocationService.settings.developerMode
+    @State private var showsStripes = LocationService.settings.showsLayerStripes
+    @State private var taskReload: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -19,8 +25,12 @@ struct CaptureDetailView: View {
 
     init(environment: AppEnvironment, captureID: String, onDeleted: @escaping () -> Void) {
         self.environment = environment
+        self.captureID = captureID
         self.onDeleted = onDeleted
-        _model = State(initialValue: CaptureDetailModel(store: environment.store, captureID: captureID))
+        _model = State(initialValue: CaptureDetailModel(
+            store: environment.store, captureID: captureID,
+            isEnabled: { LocationService.settings.isEnrichmentEnabled($0) },
+            isOnline: { EnrichmentScheduling.isOnline }))
     }
 
     var body: some View {
@@ -39,6 +49,24 @@ struct CaptureDetailView: View {
             // A sync pass may have pulled gold for this capture, or changed its upload state.
             .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.passFinished)) { _ in
                 Task { await model.load() }
+            }
+            // A backfill finishes many tasks a second across all captures: reload only for this capture's
+            // tasks, at most once per 500 ms.
+            .onReceive(NotificationCenter.default.publisher(for: EnrichmentRunner.taskFinished)) { note in
+                guard note.userInfo?[EnrichmentRunner.captureIDKey] as? String == captureID,
+                      taskReload == nil else { return }
+                taskReload = Task {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    if Task.isCancelled { return }
+                    taskReload = nil
+                    await model.load()
+                }
+            }
+            .onDisappear { taskReload?.cancel(); taskReload = nil }
+            // The stripes switch lives in Settings; pick up a change on return.
+            .onAppear {
+                showsStripes = LocationService.settings.showsLayerStripes
+                developerMode = LocationService.settings.developerMode
             }
             .confirmationDialog(model.deletionPrompt?.title ?? "Delete from iPhone?", isPresented: $confirmingDelete,
                                 titleVisibility: .visible, presenting: model.deletionPrompt) { prompt in
@@ -64,14 +92,16 @@ struct CaptureDetailView: View {
                         .listRowSeparator(.hidden)
                 }
                 if let comment = detail.comment {
-                    Section("Your comment") { Text(comment).italic().textSelection(.enabled) }
+                    Section("Your comment") {
+                        Text(comment).italic().textSelection(.enabled).layerStripe(.bronze, shown: showsStripes)
+                    }
                 }
-                EnrichmentSections(detail: detail)
+                EnrichmentSections(detail: detail, showsStripes: showsStripes)
                 if let title = detail.sharedTitle {
-                    Section("Shared title") { sharedText(title) }
+                    Section("Shared title") { sharedText(title).layerStripe(.bronze, shown: showsStripes) }
                 }
                 if let text = detail.sharedText {
-                    Section("Shared text") { sharedText(text) }
+                    Section("Shared text") { sharedText(text).layerStripe(.bronze, shown: showsStripes) }
                 }
                 if !detail.links.isEmpty {
                     Section("Links") {
@@ -79,18 +109,19 @@ struct CaptureDetailView: View {
                             Button { openURL(link) } label: {
                                 Text(link.absoluteString).font(.callout).lineLimit(3)
                             }
+                            .layerStripe(.bronze, shown: showsStripes)
                         }
                     }
                 }
                 if !detail.captured.isEmpty {
                     Section {
-                        ForEach(detail.captured, id: \.label) { row($0) }
-                    } footer: {
-                        if let note = detail.fromServerNote { Text(note) }
+                        ForEach(detail.captured, id: \.label) { item in
+                            row(item)
+                            if item.label == "Where", let line = detail.pending[.place] {
+                                PendingLineView(line: line).layerStripe(.silver, shown: showsStripes)
+                            }
+                        }
                     }
-                }
-                if detail.captured.isEmpty, let note = detail.fromServerNote {
-                    Section { EmptyView() } footer: { Text(note) }
                 }
                 if !detail.attachments.isEmpty {
                     Section("Attachments") {
@@ -102,8 +133,14 @@ struct CaptureDetailView: View {
                         }
                     }
                 }
-                if !detail.sync.isEmpty {
-                    Section("Sync") { ForEach(Array(detail.sync.enumerated()), id: \.offset) { syncRow($1) } }
+                StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry)
+                if developerMode, let capturedAt = model.capturedAt {
+                    Section {
+                        NavigationLink("Activity") {
+                            ActivityView(environment: environment, captureID: captureID, capturedAt: capturedAt)
+                        }
+                        .accessibilityIdentifier("detail-activity")
+                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -135,34 +172,7 @@ struct CaptureDetailView: View {
         LabeledContent(row.label) {
             Text(row.value).multilineTextAlignment(.trailing).textSelection(.enabled)
         }
-    }
-
-    private func syncRow(_ row: SyncRow) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                if let name = row.destinationName {
-                    Text(name).font(.headline)
-                    Spacer()
-                }
-                Text(row.label.title).font(.subheadline).foregroundStyle(color(row.label))
-                if row.destinationName == nil { Spacer() }
-            }
-            if let message = row.message {
-                Text(message).font(.footnote).foregroundStyle(.secondary)
-            }
-            if row.canRetry {
-                Button("Retry") { retry() }.buttonStyle(.bordered).disabled(retrying)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func color(_ label: SyncLabel) -> Color {
-        switch label {
-        case .onIPhone: .secondary
-        case .synced: .green
-        case .needsAttention: .orange
-        }
+        .layerStripe(row.layer, shown: showsStripes)
     }
 
     private func menu(_ detail: CaptureDetail) -> some View {
@@ -186,7 +196,7 @@ struct CaptureDetailView: View {
             defer { retrying = false }
             await BackgroundActivity.run(name: "detail-retry", onExpire: coordinator.map(SyncScheduling.stopper)) {
                 await model.retry()
-                _ = await coordinator?.syncNow()
+                _ = await coordinator?.syncNow(trigger: "manual")
             }
             await model.load()
         }

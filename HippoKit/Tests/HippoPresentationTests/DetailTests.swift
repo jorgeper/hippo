@@ -82,7 +82,7 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         let facts = MediaFacts(embeddedCreatedAt: EmbeddedTimestamp(value: "2026-11-07T10:00:00-08:00", hasUTCOffset: true))
         let place = PlaceItem(target: "a1", locality: "Lisbon", country: "Portugal")
         let d = make(meta(attachments: [att(media: facts)]), enrichment: resolved(places: ["a1": place]))
-        #expect(d.attachments[0].last == DetailRow(label: "Taken in", value: "Lisbon, Portugal"))
+        #expect(d.attachments[0].last == DetailRow(label: "Taken in", value: "Lisbon, Portugal", layer: .silver))
     }
 
     @Test func detailSourceGuessRow() {
@@ -144,9 +144,67 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(d.linkCards.map(\.url) == [a])
     }
 
-    @Test func detailServerNote() {
-        #expect(make(meta(), enrichment: resolved(server: true)).fromServerNote == "Some details come from your server.")
-        #expect(make(meta()).fromServerNote == nil)
+    @Test func layersPerRow() {
+        let loc = CaptureLocation(latitude: 47.6, longitude: -122.3, horizontalAccuracyMeters: 10, observedAt: now, provenance: "t")
+        var e = resolved(places: ["capture": PlaceItem(target: "capture", locality: "Seattle")], guess: "Safari")
+        e.fromServer.places = ["capture"]
+        let d = make(meta(urls: ["https://example.com/x"], location: loc), enrichment: e)
+        let layers = Dictionary(uniqueKeysWithValues: d.captured.map { ($0.label, $0.layer) })
+        #expect(layers == ["When": .bronze, "How": .bronze, "Coordinates": .bronze, "Source": .silver, "Where": .gold])
+
+        let t = { (id: String, s: String) in TranscriptItem(attachmentID: id, text: s, locale: "en_US", segments: []) }
+        var e2 = resolved(transcripts: ["a1": t("a1", "x"), "a2": t("a2", "y")])
+        e2.fromServer.transcripts = ["a1"]
+        let a2 = CaptureCore.Attachment(attachmentID: "a2", relativePath: "content/a2.bin", originalFilename: "b", uti: "public.mpeg-4-audio",
+                                        mimeType: nil, byteCount: 1, sha256: "x", representationSource: "r", media: nil)
+        let d2 = make(meta(attachments: [att(), a2]), enrichment: e2)
+        #expect(d2.transcripts.map(\.layer) == [.gold, .silver])
+        #expect(d2.foundLayer == .silver && d2.summaryLayer == .silver && d2.tagsLayer == .silver)
+
+        var e3 = ResolvedEnrichment.empty
+        e3.fromServer = ServerOrigin(detections: true, summary: true, tags: true)
+        let d3 = make(meta(), enrichment: e3)
+        #expect(d3.foundLayer == .gold && d3.summaryLayer == .gold && d3.tagsLayer == .gold)
+    }
+
+    // M2: gold Source, "Taken in" and Text in image items carry the gold layer; silver ones stay silver.
+    @Test func goldLayersForSourceTakenInAndTextInImage() {
+        let a2 = CaptureCore.Attachment(attachmentID: "a2", relativePath: "content/a2.bin", originalFilename: "b.jpg",
+                                        uti: "public.jpeg", mimeType: "image/jpeg", byteCount: 1, sha256: "x",
+                                        representationSource: "r", media: nil)
+        var e = resolved(places: ["a1": PlaceItem(target: "a1", locality: "Seattle"),
+                                  "a2": PlaceItem(target: "a2", locality: "Tacoma")], guess: "Safari")
+        e.recognizedText = ["a1": "gold text", "a2": "silver text"]
+        e.fromServer = ServerOrigin(places: ["a1"], recognizedText: ["a1"], sourceApp: true)
+        let d = make(meta(attachments: [att(), a2]), enrichment: e)
+        #expect(d.captured.first { $0.label == "Source" }?.layer == .gold)
+        #expect(d.attachments.map { $0.first { $0.label == "Taken in" }?.layer } == [.gold, .silver])
+        #expect(d.recognizedText.map(\.layer) == [.gold, .silver])
+    }
+
+    // M2: a mixed place (silver locality, gold nearby) resolved from real documents: one gold Where row.
+    @Test func mixedPlaceWhereRowIsGold() throws {
+        let loc = CaptureLocation(latitude: 47.6, longitude: -122.3, horizontalAccuracyMeters: 10, observedAt: now, provenance: "t")
+        let e = ResolvedEnrichment.make(
+            device: try enrichmentDoc(.device, facets: [.place: (.ok, PlaceData(items: [
+                PlaceItem(target: "capture", locality: "Seattle")]))]),
+            server: try enrichmentDoc(.server, facets: [.place: (.ok, PlaceData(items: [
+                PlaceItem(target: "capture", nearby: NearbyPlace(name: "Pike Place Market", distanceMeters: 40))]))]),
+            assetURL: { _, a in URL(fileURLWithPath: "/assets/\(a.relativePath)") })
+        let rows = make(meta(location: loc), enrichment: e).captured
+        let place = try #require(rows.first { $0.label == "Where" })
+        #expect(place.value == "Seattle · near Pike Place Market")
+        #expect(place.layer == .gold)
+        #expect(rows.first { $0.label == "Coordinates" }?.layer == .bronze)
+    }
+
+    // M2: with a location but no place, Where shows the coordinates as captured (bronze), with no Coordinates row.
+    @Test func whereWithoutPlaceIsBronzeCoordinates() {
+        let loc = CaptureLocation(latitude: 47.6, longitude: -122.3, horizontalAccuracyMeters: 10, observedAt: now, provenance: "t")
+        let rows = make(meta(location: loc), enrichment: .empty).captured
+        #expect(rows.first { $0.label == "Where" }?.layer == .bronze)
+        #expect(rows.first { $0.label == "Where" }?.value.hasPrefix("47.6000, -122.3000") == true)
+        #expect(!rows.contains { $0.label == "Coordinates" })
     }
 
     @Test func detailTranscriptsTitled() {
@@ -360,5 +418,58 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         await model.retry()
         #expect(try t.store.jobs.jobs(captureID: id).first?.state == .pending)
         #expect(await model.detail?.sync.first?.message == "Waiting to upload")
+    }
+
+    // I1: a load that finishes after a newer one must not overwrite it (e.g. "Looking for dates…" coming
+    // back after detection has finished).
+    @MainActor @Test func supersededLoadIsDropped() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let p = try await t.note("lunch tomorrow", at: now)
+        let id = p.metadata.captureID
+        try t.store.enrichmentTasks.set(captureID: id, kind: .dataDetection, version: 3, status: "pending", now: now)
+        let model = CaptureDetailModel(store: t.store, captureID: id, now: { now }, calendar: calendar, locale: locale)
+        let gate = FirstCallGate()
+        model.beforeApply = { await gate.arrive() }
+
+        // The first load reads the pending task, then is held before it applies.
+        let first = Task { await model.load() }
+        await gate.firstArrived()
+        try t.store.enrichmentTasks.recordAttempt(captureID: id, kind: .dataDetection, status: "empty",
+                                                  errorCode: nil, nextAttemptAt: nil, incrementAttempts: true, now: now)
+        await model.load()
+        let newer = try #require(model.detail)
+        #expect(newer.status.contains { $0.text == "Dates, phone numbers and addresses: nothing found" })
+
+        await gate.release()
+        await first.value
+        #expect(model.detail == newer)
+        #expect(model.loadFailed == false)
+    }
+
+    // I1: a superseded load that failed must not flag a failure over a newer successful one.
+    @MainActor @Test func supersededFailedLoadDoesNotSetFlag() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let p = try await t.note("hi", at: now)
+        let id = p.metadata.captureID
+        let model = CaptureDetailModel(store: t.store, captureID: id, now: { now }, calendar: calendar, locale: locale)
+        let gate = FirstCallGate()
+        model.beforeApply = { await gate.arrive() }
+        let metadataURL = t.store.layout.packageURL(
+            relativeDirectory: try #require(try t.store.index.relativeDirectory(captureID: id)))
+            .appendingPathComponent("metadata.json")
+        let saved = try Data(contentsOf: metadataURL)
+        try FileManager.default.removeItem(at: metadataURL)
+
+        let first = Task { await model.load() }
+        await gate.firstArrived()
+        try saved.write(to: metadataURL)
+        await model.load()
+        #expect(model.detail != nil)
+        await gate.release()
+        await first.value
+        #expect(model.loadFailed == false)
+        #expect(model.detail != nil)
     }
 }

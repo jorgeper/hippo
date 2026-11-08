@@ -142,7 +142,7 @@ public struct FilesystemAdapter: StorageAdapter {
     public func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
         faults.record("replace \(relativePath)")
         let finalURL = try resolve(relativePath)
-        guard relativePath.hasPrefix("enrichments/") else { throw StorageError.permanent(code: "replace_not_allowed") }
+        guard relativePath.hasPrefix("enrichments/") || relativePath.hasPrefix("logs/") else { throw StorageError.permanent(code: "replace_not_allowed") }
         try Task.checkCancellation()
         let fm = FileManager.default
         let tempURL = root.appendingPathComponent(".tmp-\(UUID().uuidString.lowercased())")

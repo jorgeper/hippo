@@ -71,7 +71,7 @@ private struct Setup {
         let a: any StorageAdapter = adapter ?? h.adapter
         let clock = h.clock
         return GoldPuller(layout: h.layout, index: h.index, destinations: h.destinations, enrichments: enrichments,
-                          adapterFor: { _ in a }, softChangeLimit: softChangeLimit, now: { clock.now })
+                          adapterFor: { _ in a }, softChangeLimit: softChangeLimit, now: { clock.now }, log: h.log)
     }
 
     /// A server document referencing `count` distinct assets, each declared at `declaredBytes` (the real
@@ -194,6 +194,34 @@ private struct Setup {
         let s = try await Setup(); defer { s.h.cleanup() }
         try s.put(Data(count: 1_048_577), at: s.remoteDir() + "/enrichment.json")
         s.expectSkipped(await s.puller().pull(), code: "gold_too_large")
+    }
+
+    @Test func logsAppliedRemovedSkippedAndPull() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.putGold()
+        _ = await s.puller().pull()
+        try FileManager.default.removeItem(at: s.h.remote.appendingPathComponent(s.remoteDir() + "/enrichment.json"))
+        _ = await s.puller().pull()
+        try s.put(Data(count: 1_048_577), at: s.remoteDir() + "/enrichment.json")
+        _ = await s.puller().pull()
+
+        let mine = s.h.log.events(captureID: s.id, from: Date(timeIntervalSince1970: 0))
+        #expect(mine.map(\.event) == [.goldApplied, .goldRemoved, .goldSkipped])
+        #expect(mine[2].code == "gold_too_large")
+        let pulls = s.h.log.globalEvents(limit: 10, before: nil).filter { $0.event == .goldPull }
+        #expect(pulls.map(\.code) == ["gold_too_large", "ok", "ok"])
+        #expect(pulls.map(\.count) == [0, 0, 1])
+        #expect(pulls.allSatisfy { $0.on == false })
+    }
+
+    @Test func goldPullLogsCursorReset() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.putGold()
+        try s.enrichments.saveGoldCursor(destinationID: "dest-fs", cursor: "garbage", now: s.h.clock.now)
+        _ = await s.puller().pull()
+        let pull = try #require(s.h.log.globalEvents(limit: 10, before: nil).first { $0.event == .goldPull })
+        #expect(pull.on == true)
+        #expect(pull.count == 1)
     }
 
     @Test func goldWithMaxAssetsApplies() async throws {

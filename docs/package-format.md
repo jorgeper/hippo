@@ -108,3 +108,5 @@ Sync clients (Dropbox online-only, OneDrive Files On-Demand, iCloud) may show a 
 - Read the bytes (or request materialization where the provider supports it) and verify size and hash before trusting a file. Reading a placeholder may block, fail, or trigger a download.
 - Do not assume the marker arrives last, or that other files are local when it is.
 - Treat read failures and size/hash mismatches as pending first (step 4), not corrupt.
+
+The phone also keeps a content-free event log in `logs/` (locally, and per install on the destination); it is not part of any package. See `docs/log-format.md`.
