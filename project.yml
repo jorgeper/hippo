@@ -86,6 +86,16 @@ targets:
       properties:
         com.apple.security.application-groups: [group.com.jorgeper.hippo]
         keychain-access-groups: ["$(AppIdentifierPrefix)com.jorgeper.hippo.shared"]
+  HippoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [App/HippoUITests]
+    dependencies:
+      - target: Hippo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jorgeper.hippo.uitests
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   Hippo:
     build:
@@ -93,5 +103,8 @@ schemes:
         Hippo: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets: [HippoUITests]
     archive:
       config: Release

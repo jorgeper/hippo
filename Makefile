@@ -1,4 +1,4 @@
-.PHONY: generate test sim device diagnostics
+.PHONY: generate test uitest sim device diagnostics
 
 # Generate Hippo.xcodeproj from project.yml (not committed).
 generate:
@@ -19,3 +19,8 @@ device:
 # Print diagnostics.json from the app on a connected iPhone.
 diagnostics:
 	scripts/pull-diagnostics.sh
+
+# UI smoke tests in the iOS Simulator.
+uitest:
+	xcodegen generate
+	xcodebuild test -project Hippo.xcodeproj -scheme Hippo -destination 'platform=iOS Simulator,name=$(or $(HIPPO_SIM),iPhone 18 Pro)' -derivedDataPath build/DerivedData

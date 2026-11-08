@@ -42,6 +42,7 @@ struct NoteEditorView: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") { saving = true; Task { await save() } }.disabled(!canSave)
+                            .accessibilityIdentifier("note-save")
                     }
                 }
                 .confirmationDialog("Discard note?", isPresented: $confirmingDiscard, titleVisibility: .visible) {

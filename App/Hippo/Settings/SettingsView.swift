@@ -84,6 +84,7 @@ struct SettingsView: View {
                         perform("settings-connect") { try await model.connect(provider) }
                     }
                     .disabled(busy)
+                    .accessibilityIdentifier("settings-connect-\(provider.kind)")
                 }
             }
         } header: {

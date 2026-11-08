@@ -160,6 +160,7 @@ struct CaptureDetailView: View {
             Image(systemName: "ellipsis.circle")
         }
         .accessibilityLabel("More")
+        .accessibilityIdentifier("detail-menu")
     }
 
     private func retry() {

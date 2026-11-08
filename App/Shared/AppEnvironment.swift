@@ -59,6 +59,8 @@ struct AppEnvironment: Sendable {
         // UI tests launch the app with `-HippoResetStore YES` to start from an empty store.
         if processKind == .app, UserDefaults.standard.bool(forKey: "HippoResetStore") {
             try? fm.removeItem(at: storeRoot)
+            try? fm.removeItem(at: storeRoot.deletingLastPathComponent()
+                .appendingPathComponent("HippoDevRemote", isDirectory: true))
         }
         #endif
 

@@ -92,6 +92,7 @@ struct TimelineView: View {
         HStack {
             Button { presented = .note } label: { Label("Note", systemImage: "square.and.pencil") }
                 .buttonStyle(.bordered)
+                .accessibilityIdentifier("note-button")
             Spacer()
             Button { presented = .record } label: { Label("Record", systemImage: "record.circle") }
                 .buttonStyle(.borderedProminent)
