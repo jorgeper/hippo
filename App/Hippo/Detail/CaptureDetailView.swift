@@ -1,6 +1,8 @@
 import SwiftUI
 import os
+import CaptureCore
 import HippoPresentation
+import Enrichment
 
 /// One capture's details: preview, comment, shared content, captured and attachment facts, sync state.
 struct CaptureDetailView: View {
@@ -12,6 +14,7 @@ struct CaptureDetailView: View {
     @State private var confirmingDelete = false
     @State private var deleteFailed = false
     @State private var retrying = false
+    @State private var showsStripes = LocationService.settings.showsLayerStripes
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -20,7 +23,10 @@ struct CaptureDetailView: View {
     init(environment: AppEnvironment, captureID: String, onDeleted: @escaping () -> Void) {
         self.environment = environment
         self.onDeleted = onDeleted
-        _model = State(initialValue: CaptureDetailModel(store: environment.store, captureID: captureID))
+        _model = State(initialValue: CaptureDetailModel(
+            store: environment.store, captureID: captureID,
+            isEnabled: { LocationService.settings.isEnrichmentEnabled($0) },
+            isOnline: { EnrichmentScheduling.isOnline }))
     }
 
     var body: some View {
@@ -40,6 +46,11 @@ struct CaptureDetailView: View {
             .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.passFinished)) { _ in
                 Task { await model.load() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: EnrichmentRunner.taskFinished)) { _ in
+                Task { await model.load() }
+            }
+            // The stripes switch lives in Settings; pick up a change on return.
+            .onAppear { showsStripes = LocationService.settings.showsLayerStripes }
             .confirmationDialog(model.deletionPrompt?.title ?? "Delete from iPhone?", isPresented: $confirmingDelete,
                                 titleVisibility: .visible, presenting: model.deletionPrompt) { prompt in
                 Button(prompt.confirm, role: .destructive) { delete() }
@@ -62,16 +73,19 @@ struct CaptureDetailView: View {
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
+                        .layerStripe(.bronze, shown: showsStripes)
                 }
                 if let comment = detail.comment {
-                    Section("Your comment") { Text(comment).italic().textSelection(.enabled) }
+                    Section("Your comment") {
+                        Text(comment).italic().textSelection(.enabled).layerStripe(.bronze, shown: showsStripes)
+                    }
                 }
-                EnrichmentSections(detail: detail)
+                EnrichmentSections(detail: detail, showsStripes: showsStripes)
                 if let title = detail.sharedTitle {
-                    Section("Shared title") { sharedText(title) }
+                    Section("Shared title") { sharedText(title).layerStripe(.bronze, shown: showsStripes) }
                 }
                 if let text = detail.sharedText {
-                    Section("Shared text") { sharedText(text) }
+                    Section("Shared text") { sharedText(text).layerStripe(.bronze, shown: showsStripes) }
                 }
                 if !detail.links.isEmpty {
                     Section("Links") {
@@ -79,12 +93,18 @@ struct CaptureDetailView: View {
                             Button { openURL(link) } label: {
                                 Text(link.absoluteString).font(.callout).lineLimit(3)
                             }
+                            .layerStripe(.bronze, shown: showsStripes)
                         }
                     }
                 }
                 if !detail.captured.isEmpty {
                     Section {
-                        ForEach(detail.captured, id: \.label) { row($0) }
+                        ForEach(detail.captured, id: \.label) { item in
+                            row(item)
+                            if item.label == "Where", let line = detail.pending[.place] {
+                                PendingLineView(line: line).layerStripe(.silver, shown: showsStripes)
+                            }
+                        }
                     }
                 }
                 if !detail.attachments.isEmpty {
@@ -97,9 +117,7 @@ struct CaptureDetailView: View {
                         }
                     }
                 }
-                if !detail.sync.isEmpty {
-                    Section("Sync") { ForEach(Array(detail.sync.enumerated()), id: \.offset) { syncRow($1) } }
-                }
+                StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry)
             }
             .listStyle(.insetGrouped)
             .contentMargins(.top, detail.preview == .none ? 16 : 0, for: .scrollContent)
@@ -130,34 +148,7 @@ struct CaptureDetailView: View {
         LabeledContent(row.label) {
             Text(row.value).multilineTextAlignment(.trailing).textSelection(.enabled)
         }
-    }
-
-    private func syncRow(_ row: SyncRow) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                if let name = row.destinationName {
-                    Text(name).font(.headline)
-                    Spacer()
-                }
-                Text(row.label.title).font(.subheadline).foregroundStyle(color(row.label))
-                if row.destinationName == nil { Spacer() }
-            }
-            if let message = row.message {
-                Text(message).font(.footnote).foregroundStyle(.secondary)
-            }
-            if row.canRetry {
-                Button("Retry") { retry() }.buttonStyle(.bordered).disabled(retrying)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func color(_ label: SyncLabel) -> Color {
-        switch label {
-        case .onIPhone: .secondary
-        case .synced: .green
-        case .needsAttention: .orange
-        }
+        .layerStripe(row.layer, shown: showsStripes)
     }
 
     private func menu(_ detail: CaptureDetail) -> some View {

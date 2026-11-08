@@ -76,6 +76,19 @@ struct SettingsTests {
         #expect(events.map(\.on) == [false, true])
     }
 
+    @Test func layerStripesSwitchIsStoredAndLogged() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        #expect(h.model.showsLayerStripes)
+        h.model.setShowsLayerStripes(false)
+        #expect(!h.model.showsLayerStripes)
+        #expect(!h.settings.showsLayerStripes)
+        h.model.setShowsLayerStripes(true)
+        let events = h.t.store.log.globalEvents(limit: 10, before: nil).filter { $0.event == .settingsChanged }.reversed()
+        #expect(events.map(\.kind) == ["layer_stripes", "layer_stripes"])
+        #expect(events.map(\.on) == [false, true])
+    }
+
     @Test func syncPassIsLoggedWithTrigger() async throws {
         let h = try Harness()
         defer { h.cleanup() }

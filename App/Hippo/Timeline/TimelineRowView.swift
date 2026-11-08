@@ -31,14 +31,29 @@ struct TimelineRowView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
-                SyncBadge(label: row.sync)
+                HStack(spacing: 8) {
+                    SyncBadge(label: row.sync)
+                    switch row.progress {
+                    case .working: ProgressView().controlSize(.mini)
+                    case .waiting: Image(systemName: "clock").font(.caption2).foregroundStyle(.secondary)
+                    case .none: EmptyView()
+                    }
+                }
             }
             Spacer(minLength: 0)
             trailing
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(row.title), \(row.time), \(row.sync.title)")
+        .accessibilityLabel("\(row.title), \(row.time), \(row.sync.title)\(progressSuffix)")
+    }
+
+    private var progressSuffix: String {
+        switch row.progress {
+        case .working: ", processing"
+        case .waiting: ", waiting"
+        case .none: ""
+        }
     }
 
     @ViewBuilder private var trailing: some View {

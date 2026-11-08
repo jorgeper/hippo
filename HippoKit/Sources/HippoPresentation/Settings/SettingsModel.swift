@@ -20,6 +20,8 @@ public final class SettingsModel {
     /// Disk space used by the local store (database and capture packages).
     public private(set) var storageBytes: Int64 = 0
     public private(set) var locationEnabled: Bool
+    /// Whether stripes show where details came from.
+    public private(set) var showsLayerStripes: Bool
     /// True after a failed `refresh()`; cleared by the next successful one. A failed refresh keeps the
     /// previous values.
     public private(set) var loadFailed = false
@@ -56,6 +58,7 @@ public final class SettingsModel {
         self.settings = settings
         self.requestLocationPermission = requestLocationPermission
         locationEnabled = settings.locationEnabled
+        showsLayerStripes = settings.showsLayerStripes
     }
 
     public static let enrichmentSwitches: [EnrichmentSwitch] = [
@@ -68,6 +71,13 @@ public final class SettingsModel {
     ]
 
     public static let enrichmentFooter = "Link previews fetch the page title and picture from the website. Place names are looked up with Apple Maps. Everything else runs on this iPhone."
+    public static let layerStripesFooter = "Bronze: what you captured. Silver: added on this iPhone. Gold: added by your server."
+
+    public func setShowsLayerStripes(_ on: Bool) {
+        settings.showsLayerStripes = on
+        showsLayerStripes = on
+        store.log.append(LogEvent(event: .settingsChanged, kind: "layer_stripes", on: on))
+    }
 
     public func isEnrichmentEnabled(_ kind: FacetKind) -> Bool { settings.isEnrichmentEnabled(kind) }
 

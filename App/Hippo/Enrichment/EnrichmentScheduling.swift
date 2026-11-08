@@ -22,6 +22,9 @@ enum EnrichmentScheduling {
     nonisolated static let kinds: [FacetKind] = [.linkPreview, .place, .textRecognition, .transcript,
                                                  .dataDetection, .sourceAppGuess]
 
+    /// Whether the device has a usable network path, from the shared monitor. Readable from any thread.
+    nonisolated static var isOnline: Bool { NetworkStatus.shared.isOnline }
+
     private static var runner: EnrichmentRunner?
     /// At most this many `runPending` rounds per pass; leftover work waits for the next trigger.
     nonisolated static let maxRoundsPerPass = 20
@@ -126,7 +129,6 @@ enum EnrichmentScheduling {
         if let runner { return runner }
         let store = env.store
         let staging = store.layout.enrichmentStagingDir
-        let network = NetworkStatus.shared
         let settings = LocationService.settings
         let enrichers: [any Enricher] = [
             LinkPreviewEnricher(http: URLSessionHTTPFetcher(), redirects: URLSessionRedirectResolver(),
@@ -145,7 +147,7 @@ enum EnrichmentScheduling {
             producer: EnrichmentProducer(name: "hippo-ios", version: env.producer.appVersion,
                                          build: env.producer.build),
             isEnabled: { settings.isEnrichmentEnabled($0) },
-            isOnline: { network.isOnline }, log: store.log)
+            isOnline: { EnrichmentScheduling.isOnline }, log: store.log)
         runner = made
         return made
     }

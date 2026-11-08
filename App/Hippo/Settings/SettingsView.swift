@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var locationDenied = false
     /// Local mirror of the stored switches so a toggle moves at once.
     @State private var enrichmentOn: [FacetKind: Bool] = [:]
+    @State private var stripesOn = LocationService.settings.showsLayerStripes
     #if DEBUG
     @State private var sampleMessage: String?
     #endif
@@ -33,7 +34,8 @@ struct SettingsView: View {
         _model = State(initialValue: SettingsModel(
             store: store, registry: registry, coordinator: coordinator, settings: LocationService.settings,
             requestLocationPermission: { await LocationService.shared.requestPermission() },
-            onEnrichmentEnabled: onEnrichmentEnabled))
+            onEnrichmentEnabled: onEnrichmentEnabled,
+            isOnline: { EnrichmentScheduling.isOnline }))
     }
 
     var body: some View {
@@ -129,7 +131,7 @@ struct SettingsView: View {
     // MARK: Sync
 
     @ViewBuilder private var syncSection: some View {
-        Section("Sync") {
+        Section {
             HStack {
                 Text(model.summary)
                 if busy {
@@ -149,6 +151,10 @@ struct SettingsView: View {
                         }
                     }
             }
+        } header: {
+            Text("Sync")
+        } footer: {
+            if let summary = model.statusSummary { Text(summary) }
         }
     }
 
@@ -196,10 +202,16 @@ struct SettingsView: View {
                         }
                     }))
             }
+            Toggle("Show where details came from", isOn: Binding(
+                get: { stripesOn },
+                set: { value in
+                    stripesOn = value
+                    model.setShowsLayerStripes(value)
+                }))
         } header: {
             Text("Enrichment")
         } footer: {
-            Text(SettingsModel.enrichmentFooter)
+            Text("\(SettingsModel.enrichmentFooter) \(SettingsModel.layerStripesFooter)")
         }
     }
 
