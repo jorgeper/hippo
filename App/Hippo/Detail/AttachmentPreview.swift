@@ -68,15 +68,18 @@ private struct QuickLookItem: Identifiable {
     var id: String { url.absoluteString }
 }
 
-/// Playback must sound with the ring/silent switch off. The recorder owns `.playAndRecord` while it is
-/// active, so that category is left alone.
+/// Playback must sound with the ring/silent switch off, so it uses `.playback`. The session is active only
+/// while something plays, so other apps' audio is interrupted no longer than necessary. Playback and
+/// recording never overlap: detail players pause when the screen goes away.
 @MainActor private enum PlaybackSession {
     static func activate() {
         let session = AVAudioSession.sharedInstance()
-        if session.category != .playAndRecord {
-            try? session.setCategory(.playback, mode: .default)
-        }
+        try? session.setCategory(.playback, mode: .default)
         try? session.setActive(true)
+    }
+
+    static func deactivate() {
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
 
@@ -93,8 +96,14 @@ private struct QuickLookItem: Identifiable {
         self.player = player
         observation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
             let status = player.timeControlStatus
-            Task { @MainActor in self?.playing = status != .paused }
+            Task { @MainActor in self?.statusChanged(playing: status != .paused) }
         }
+    }
+
+    private func statusChanged(playing now: Bool) {
+        guard now != playing else { return }
+        playing = now
+        if now { PlaybackSession.activate() } else { PlaybackSession.deactivate() }
     }
 
     func loadDuration() async {
@@ -109,7 +118,11 @@ private struct QuickLookItem: Identifiable {
     }
 
     func rewind() { player?.seek(to: .zero) }
-    func pause() { player?.pause() }
+    func pause() {
+        player?.pause()
+        if playing { playing = false }
+        PlaybackSession.deactivate()
+    }
 }
 
 private struct ImagePreview: View {
@@ -167,7 +180,7 @@ private struct VideoPreview: View {
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .onAppear { model.prepare(url: url); PlaybackSession.activate() }
+        .onAppear { model.prepare(url: url) }
         .onDisappear { model.pause() }
     }
 }

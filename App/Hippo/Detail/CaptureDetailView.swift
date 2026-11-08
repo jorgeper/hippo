@@ -92,7 +92,7 @@ struct CaptureDetailView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .contentMargins(.top, 0, for: .scrollContent)
+            .contentMargins(.top, detail.preview == .none ? 16 : 0, for: .scrollContent)
         } else if model.loadFailed {
             ContentUnavailableView {
                 Label("Couldn't load this capture", systemImage: "exclamationmark.triangle")
