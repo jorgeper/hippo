@@ -59,6 +59,7 @@ struct CaptureDetailView: View {
                 if let comment = detail.comment {
                     Section("Your comment") { Text(comment).italic().textSelection(.enabled) }
                 }
+                EnrichmentSections(detail: detail)
                 if let title = detail.sharedTitle {
                     Section("Shared title") { sharedText(title) }
                 }
@@ -75,7 +76,14 @@ struct CaptureDetailView: View {
                     }
                 }
                 if !detail.captured.isEmpty {
-                    Section("Captured") { ForEach(detail.captured, id: \.label) { row($0) } }
+                    Section {
+                        ForEach(detail.captured, id: \.label) { row($0) }
+                    } footer: {
+                        if let note = detail.fromServerNote { Text(note) }
+                    }
+                }
+                if detail.captured.isEmpty, let note = detail.fromServerNote {
+                    Section { EmptyView() } footer: { Text(note) }
                 }
                 if !detail.attachments.isEmpty {
                     Section("Attachments") {

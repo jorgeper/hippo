@@ -79,6 +79,9 @@ struct TimelineView: View {
             .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.passFinished)) { _ in
                 Task { await model.reload() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: TimelineModel.enrichmentChanged)) { _ in
+                Task { await model.reload() }
+            }
     }
 
     #if DEBUG

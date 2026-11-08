@@ -57,7 +57,8 @@ struct TimelineRowView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-        case .link: kindSymbol("link")
+        case .link:
+            if let url = row.thumbnailURL { FileThumbnail(url: url, side: 44) } else { kindSymbol("link") }
         case .note: kindSymbol("note.text")
         case .voice: kindSymbol("waveform")
         case .file: kindSymbol("doc")

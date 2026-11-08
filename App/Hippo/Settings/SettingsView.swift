@@ -9,12 +9,18 @@ struct SettingsView: View {
     @State private var model: SettingsModel
     private let registry: ProviderRegistry
     private let coordinator: SyncCoordinator
+    private let store: HippoStore
 
     @State private var confirmingSignOut = false
     @State private var confirmingUpload = false
     @State private var failed = false
     @State private var busy = false
     @State private var locationDenied = false
+    /// Local mirror of the stored switches so a toggle moves at once.
+    @State private var enrichmentOn: [FacetKind: Bool] = [:]
+    #if DEBUG
+    @State private var sampleMessage: String?
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
 
@@ -22,6 +28,7 @@ struct SettingsView: View {
     init(store: HippoStore, registry: ProviderRegistry, coordinator: SyncCoordinator,
          onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) {
         self.registry = registry
+        self.store = store
         self.coordinator = coordinator
         _model = State(initialValue: SettingsModel(
             store: store, registry: registry, coordinator: coordinator, settings: LocationService.settings,
@@ -34,6 +41,7 @@ struct SettingsView: View {
             storageSection
             syncSection
             locationSection
+            enrichmentSection
             onThisPhoneSection
             aboutSection
         }
@@ -79,6 +87,12 @@ struct SettingsView: View {
                                         isPresented: $confirmingSignOut, titleVisibility: .visible) {
                         Button("Sign out", role: .destructive) { perform("settings-sign-out") { try await model.signOut() } }
                     }
+            #if DEBUG
+                if destination.providerKind == "filesystem" {
+                    Button("Write sample server enrichment") { writeSampleGold() }
+                        .disabled(busy)
+                }
+            #endif
             } else if registry.providers.isEmpty {
                 Text("No storage providers are available in this build yet.")
                     .foregroundStyle(.secondary)
@@ -97,6 +111,9 @@ struct SettingsView: View {
             if usesDeveloperFolder {
                 Text("Developer · debug builds only. Uploads stay on this iPhone.")
             }
+            #if DEBUG
+            if let sampleMessage { Text(sampleMessage) }
+            #endif
         }
     }
 
@@ -162,6 +179,39 @@ struct SettingsView: View {
             }
         }
     }
+
+    // MARK: Enrichment
+
+    @ViewBuilder private var enrichmentSection: some View {
+        Section {
+            ForEach(SettingsModel.enrichmentSwitches) { item in
+                Toggle(item.title, isOn: Binding(
+                    get: { enrichmentOn[item.kind] ?? model.isEnrichmentEnabled(item.kind) },
+                    set: { value in
+                        enrichmentOn[item.kind] = value
+                        let model = model
+                        Task { await model.setEnrichment(item.kind, on: value) }
+                    }))
+            }
+        } header: {
+            Text("Enrichment")
+        } footer: {
+            Text(SettingsModel.enrichmentFooter)
+        }
+    }
+
+    #if DEBUG
+    /// Writes a small server-layer enrichment for the newest capture into the developer folder, then
+    /// syncs so the gold pull picks it up. Needs that capture to have synced there first.
+    private func writeSampleGold() {
+        let store = store, coordinator = coordinator
+        Task {
+            let wrote = await DevFolderProvider.writeSampleGold(store: store)
+            sampleMessage = wrote ? nil : "Sync this capture first."
+            if wrote { await SyncScheduling.runPass(coordinator, name: "debug-gold-sample") }
+        }
+    }
+    #endif
 
     /// A denied iOS permission shows as off: the stored preference is cleared to match.
     private func reconcileLocation() async {
