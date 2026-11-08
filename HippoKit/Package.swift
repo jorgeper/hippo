@@ -28,7 +28,7 @@ let package = Package(
         .testTarget(name: "AdapterContractTests", dependencies: ["FilesystemAdapter", "SyncEngine", "CaptureCore"]),
         .testTarget(name: "ShareIntakeTests", dependencies: ["ShareIntake", "CaptureCore", "HippoTestSupport"]),
         .testTarget(name: "HippoPresentationTests", dependencies: ["HippoPresentation", "CaptureCore", "LocalRepository",
-                                                                   "SyncEngine"]),
+                                                                   "SyncEngine", "FilesystemAdapter"]),
     ],
     swiftLanguageModes: [.v6]
 )
