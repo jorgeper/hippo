@@ -74,6 +74,30 @@ private final class Box: @unchecked Sendable {
         }
     }
 
+    @Test func unreadableFileIsSkippedUntilReadable() async throws {
+        let root = try tempDir(), scratch = try tempDir()
+        let adapter = FilesystemAdapter(root: root)
+        let (u1, i1, _) = try write(scratch, "ok.bin", bytes: 20)
+        let (u2, i2, _) = try write(scratch, "locked.bin", bytes: 30)
+        let okPath = "enrichments/server/ok.bin", lockedPath = "enrichments/server/locked.bin"
+        _ = try await adapter.uploadFile(localURL: u1, relativePath: okPath, expected: i1, checkpoint: nil, saveCheckpoint: { _ in })
+        _ = try await adapter.uploadFile(localURL: u2, relativePath: lockedPath, expected: i2, checkpoint: nil, saveCheckpoint: { _ in })
+        let lockedURL = root.appendingPathComponent(lockedPath)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: lockedURL.path) }
+
+        let first = try await adapter.listChanges(under: "enrichments/server/", cursor: nil)
+        #expect(first.changes.count == 1)
+        guard case .upserted(let info)? = first.changes.first else { Issue.record("expected upsert"); return }
+        #expect(info.relativePath == okPath)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: lockedURL.path)
+        let second = try await adapter.listChanges(under: "enrichments/server/", cursor: first.cursor)
+        #expect(second.changes.count == 1)
+        guard case .upserted(let info2)? = second.changes.first else { Issue.record("expected upsert"); return }
+        #expect(info2.relativePath == lockedPath)
+    }
+
     @Test func faultWriteButThrowLeavesFileForInspection() async throws {
         let root = try tempDir(), scratch = try tempDir()
         let faults = FaultPlan()

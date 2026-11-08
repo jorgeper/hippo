@@ -197,7 +197,12 @@ public struct FilesystemAdapter: StorageAdapter {
             previous = snap
         }
 
-        let current = Snapshot(prefix: prefix, files: try scan(prefix: prefix))
+        let (scanned, unreadable) = try scan(prefix: prefix)
+        var currentFiles = scanned
+        // An unreadable entry is neither reported nor treated as deleted: keep its previous entry (if any)
+        // so it surfaces as a change once it is readable again.
+        for path in unreadable { if let old = previous?.files[path] { currentFiles[path] = old } }
+        let current = Snapshot(prefix: prefix, files: currentFiles)
 
         var changes: [RemoteChange] = []
         for path in current.files.keys.sorted() where previous?.files[path] != current.files[path] {
@@ -226,25 +231,25 @@ public struct FilesystemAdapter: StorageAdapter {
         return ChangePage(changes: changes, cursor: id, hasMore: false)
     }
 
-    private func scan(prefix: String) throws -> [String: Snapshot.Entry] {
+    private func scan(prefix: String) throws -> (files: [String: Snapshot.Entry], unreadable: Set<String>) {
         let fm = FileManager.default
         let dirPart = prefix.contains("/") ? String(prefix[..<prefix.lastIndex(of: "/")!]) : ""
         let start = dirPart.isEmpty ? root : try resolve(dirPart)
         var result: [String: Snapshot.Entry] = [:]
+        var unreadable: Set<String> = []
         guard let walker = fm.enumerator(at: start, includingPropertiesForKeys: [.isDirectoryKey],
-                                         options: [.skipsHiddenFiles]) else { return result }
+                                         options: [.skipsHiddenFiles]) else { return (result, unreadable) }
         let basePath = root.resolvingSymlinksInPath().path
         for case let url as URL in walker {
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
-            if values?.isDirectory == true { continue }
+            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey]), values.isDirectory != true else { continue }
             let full = url.resolvingSymlinksInPath().path
             guard full.hasPrefix(basePath + "/") else { continue }
             let rel = String(full.dropFirst(basePath.count + 1))
             guard rel.hasPrefix(prefix), !rel.split(separator: "/").contains(where: { $0.hasPrefix(".") }) else { continue }
-            guard let digest = try? StreamingHasher.digest(of: url) else { throw StorageError.transient(code: "read_failed") }
+            guard let digest = try? StreamingHasher.digest(of: url) else { unreadable.insert(rel); continue }
             result[rel] = Snapshot.Entry(size: digest.byteCount, sha256: digest.sha256)
         }
-        return result
+        return (result, unreadable)
     }
 
     public func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
