@@ -43,6 +43,10 @@ public final class EnrichmentStore: Sendable {
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
             return nil
         }
+        return try Self.decode(data, layer, captureID: captureID)
+    }
+
+    private static func decode(_ data: Data, _ layer: EnrichmentLayer, captureID: String) throws -> EnrichmentDocument {
         let doc = try EnrichmentJSON.decode(data)
         guard doc.captureID == captureID, doc.layer == layer else { throw EnrichmentStoreError.mismatchedDocument }
         return doc
@@ -131,10 +135,12 @@ public final class EnrichmentStore: Sendable {
         }
     }
 
-    /// Removes everything in `staging/enrichments/` and every `enrichments/<layer>/<id>` whose capture
-    /// isn't indexed. Returns how many entries were removed. An entry that can't be removed is skipped
-    /// (and logged); the next sweep tries again.
-    public func sweep() throws -> Int {
+    /// Removes everything in `staging/enrichments/` and, when `removingOrphans` is true, every
+    /// `enrichments/<layer>/<id>` whose capture isn't indexed. Pass false when recovery could not register
+    /// every package: an unindexed capture may then still exist, and its gold could not be pulled again.
+    /// Returns how many entries were removed. An entry that can't be removed is skipped (and logged);
+    /// the next sweep tries again.
+    public func sweep(removingOrphans: Bool = true) throws -> Int {
         try lock.withLock {
             var removed = 0
             func remove(_ url: URL) {
@@ -150,6 +156,7 @@ public final class EnrichmentStore: Sendable {
             for name in Self.contents(of: layout.enrichmentStagingDir) {
                 remove(layout.enrichmentStagingDir.appendingPathComponent(name))
             }
+            guard removingOrphans else { return removed }
             let indexed = Set(try db.query("SELECT capture_id FROM captures").compactMap { $0.string("capture_id") })
             for layer in [EnrichmentLayer.device, .server] {
                 let dir = layout.enrichmentsDir.appendingPathComponent(layer.rawValue, isDirectory: true)
@@ -158,6 +165,56 @@ public final class EnrichmentStore: Sendable {
                 }
             }
             return removed
+        }
+    }
+
+    /// Brings each indexed capture's search text and `device_revision` back in line with the files on
+    /// disk. `write` and `removeLayer` change the files before the database, so a crash or a failed
+    /// transaction in between leaves the index describing the old files; re-registering a capture also
+    /// resets its text. A capture is repaired when its device `enrichment.json` hashes to something other
+    /// than `device_revision` (including a file that is gone), when its text is empty but documents
+    /// exist, or when it has text but no documents. Returns how many captures were changed. A capture
+    /// that can't be repaired is skipped (and logged).
+    ///
+    /// Known limit: a gold-only change whose index update was lost, on a capture whose text is not
+    /// empty, is not detected; the next write for that capture repairs it.
+    public func reconcileIndex() throws -> Int {
+        try lock.withLock {
+            var texts: [String: String] = [:]
+            for row in try db.query("SELECT capture_id, enrichment FROM captures_fts") {
+                if let id = row.string("capture_id") { texts[id] = row.string("enrichment") ?? "" }
+            }
+            let onDevice = Set(Self.contents(of: layout.enrichmentsDir.appendingPathComponent(EnrichmentLayer.device.rawValue)))
+            let onServer = Set(Self.contents(of: layout.enrichmentsDir.appendingPathComponent(EnrichmentLayer.server.rawValue)))
+            var repaired = 0
+            for row in try db.query("SELECT capture_id, device_revision FROM captures") {
+                guard let id = row.string("capture_id") else { continue }
+                let storedRevision = row.string("device_revision")
+                let storedText = texts[id] ?? ""
+                let hasFiles = onDevice.contains(id) || onServer.contains(id)
+                guard hasFiles || storedRevision != nil || !storedText.isEmpty else { continue }
+
+                let deviceURL = layout.enrichmentDirectory(.device, captureID: id)
+                    .appendingPathComponent(EnrichmentPaths.documentName)
+                let deviceBytes = onDevice.contains(id) ? try? Data(contentsOf: deviceURL) : nil
+                let deviceHash = deviceBytes.map { Self.hex(SHA256.hash(data: $0)) }
+                // `device_revision` is only ever set from bytes that decoded, so a matching hash means
+                // the device file is the one the index describes.
+                if deviceHash == storedRevision, storedText.isEmpty != hasFiles { continue }
+
+                let device = deviceBytes.flatMap { try? Self.decode($0, .device, captureID: id) }
+                let server = onServer.contains(id) ? try? document(.server, captureID: id) : nil
+                let revision = device == nil ? nil : deviceHash
+                let text = EnrichmentSearchText.make(device: device, server: server)
+                guard revision != storedRevision || text != storedText else { continue }
+                do {
+                    try updateIndex(captureID: id, text: text, deviceRevision: .some(revision))
+                    repaired += 1
+                } catch {
+                    Self.log.error("\("enrichment_reconcile_item_failed", privacy: .public)")
+                }
+            }
+            return repaired
         }
     }
 

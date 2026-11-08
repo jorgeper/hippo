@@ -227,6 +227,21 @@ private struct EnrichmentHarness {
         #expect(try t.store.sweep() == 0)
     }
 
+    @Test func sweepCanKeepOrphans() throws {
+        let t = try EnrichmentHarness(); defer { t.cleanup() }
+        let fm = FileManager.default
+        let leftover = t.h.layout.enrichmentStagingDir.appendingPathComponent("x", isDirectory: true)
+        try fm.createDirectory(at: leftover, withIntermediateDirectories: true)
+        let orphan = t.h.layout.enrichmentDirectory(.server, captureID: UUID().uuidString.lowercased())
+        try fm.createDirectory(at: orphan, withIntermediateDirectories: true)
+
+        #expect(try t.store.sweep(removingOrphans: false) == 1)
+        #expect(!fm.fileExists(atPath: leftover.path))
+        #expect(fm.fileExists(atPath: orphan.path))
+        #expect(try t.store.sweep() == 1)
+        #expect(!fm.fileExists(atPath: orphan.path))
+    }
+
     @Test func removeAllRemovesBothLayers() async throws {
         let t = try EnrichmentHarness(); defer { t.cleanup() }
         let pkg = try await t.h.add(note: "Plain")

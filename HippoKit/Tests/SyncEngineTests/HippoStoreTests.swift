@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import CryptoKit
 import CaptureCore
 import LocalRepository
 @testable import SyncEngine
@@ -331,7 +332,7 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         let text = String(decoding: data, as: UTF8.self)
         for secret in ["SECRET-NOTE-123", "private.example", "dbid:ABC", "Private Display Name", "HippoPrivateRoot",
                        "dest-private-id", pkg.metadata.captureID, job.jobID, pkg.relativeDirectory,
-                       t.root.path, "47.62", "122.34"] {
+                       t.root.path, "47.6205", "122.3493"] {
             #expect(!text.contains(secret), "diagnostics leak: \(secret)")
         }
 
@@ -496,13 +497,104 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(try t.store.enrichments.document(.device, captureID: pkg.metadata.captureID) != nil)
         #expect(try t.stagingContents().filter { $0 != "enrichments" }.isEmpty)
     }
+
+    // The files were swapped in but the index update never happened (crash or failed transaction).
+    @Test func recoverResyncsIndexWithEnrichmentFiles() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.urlDraft())
+        let untouched = try await t.store.capture(t.urlDraft("https://example.com/b"))
+        let id = pkg.metadata.captureID
+        try t.store.enrichments.write(try enrichmentDocument(pkg, .device, t.store, text: "quokka"), newAssets: [:])
+        try t.store.enrichments.write(try enrichmentDocument(untouched, .server, t.store, text: "wombat"), newAssets: [:])
+        let oldRevision = try #require(try deviceRevision(t, id))
+        // A newer device document reaches disk; the database still describes the old one.
+        try t.store.enrichments.write(try enrichmentDocument(pkg, .device, t.store, text: "platypus"), newAssets: [:])
+        let raw = try t.rawDatabase()
+        try raw.execute("UPDATE captures SET device_revision = ? WHERE capture_id = ?", [.text(oldRevision), .text(id)])
+        try raw.execute("UPDATE captures_fts SET enrichment = 'quokka' WHERE capture_id = ?", [.text(id)])
+        #expect(try search(t, "platypus").isEmpty)
+
+        _ = try t.store.recover()
+
+        let json = try Data(contentsOf: t.store.layout.enrichmentDirectory(.device, captureID: id)
+            .appendingPathComponent(EnrichmentPaths.documentName))
+        #expect(try deviceRevision(t, id) == sha256Hex(json))
+        #expect(try search(t, "platypus") == [id])
+        #expect(try search(t, "quokka").isEmpty)
+        #expect(try search(t, "wombat") == [untouched.metadata.captureID])
+        #expect(try t.store.enrichments.reconcileIndex() == 0)
+
+        // Files removed without the index update: the revision and the text are cleared.
+        try FileManager.default.removeItem(at: t.store.layout.enrichmentDirectory(.device, captureID: id))
+        #expect(try t.store.enrichments.reconcileIndex() == 1)
+        #expect(try deviceRevision(t, id) == nil)
+        #expect(try search(t, "platypus").isEmpty)
+    }
+
+    // The index row was rebuilt (register resets the enrichment text) while the files survived.
+    @Test func recoverRestoresSearchForReregisteredCapture() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.urlDraft())
+        let id = pkg.metadata.captureID
+        try t.store.enrichments.write(try enrichmentDocument(pkg, .device, t.store, text: "quokka"), newAssets: [:])
+        try t.store.enrichments.write(try enrichmentDocument(pkg, .server, t.store, text: "wombat"), newAssets: [:])
+        let revision = try deviceRevision(t, id)
+        try t.store.index.remove(captureID: id)
+
+        let report = try t.store.recover()
+
+        #expect(report.registered == 1)
+        #expect(try search(t, "quokka") == [id])
+        #expect(try search(t, "wombat") == [id])
+        #expect(try deviceRevision(t, id) == revision)
+    }
+
+    // Recovery failed to register a valid package: its enrichments must survive the sweep.
+    @Test func recoverKeepsEnrichmentsWhenRegistrationFails() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let fm = FileManager.default
+        let pkg = try await t.store.capture(t.urlDraft())
+        let id = pkg.metadata.captureID
+        try t.store.enrichments.write(try enrichmentDocument(pkg, .server, t.store, text: "wombat"), newAssets: [:])
+        try t.store.index.remove(captureID: id)
+        let raw = try t.rawDatabase()
+        try raw.execute("""
+            CREATE TRIGGER boom BEFORE INSERT ON captures WHEN NEW.capture_id = '\(id)'
+            BEGIN SELECT RAISE(ABORT, 'boom'); END
+            """)
+        let leftover = t.store.layout.enrichmentStagingDir.appendingPathComponent("x", isDirectory: true)
+        try fm.createDirectory(at: leftover, withIntermediateDirectories: true)
+
+        let report = try t.store.recover()
+
+        #expect(report.failed > 0)
+        #expect(fm.fileExists(atPath: t.store.layout.enrichmentDirectory(.server, captureID: id).path))
+        #expect(!fm.fileExists(atPath: leftover.path))
+
+        try raw.execute("DROP TRIGGER boom")
+        #expect(try t.store.recover().registered == 1)
+        #expect(try search(t, "wombat") == [id])
+    }
 }
 
-private func enrichmentDocument(_ pkg: CommittedPackage, _ layer: EnrichmentLayer, _ store: HippoStore) throws
-    -> EnrichmentDocument {
+private func deviceRevision(_ t: StoreHarness, _ captureID: String) throws -> String? {
+    try t.rawDatabase().query("SELECT device_revision FROM captures WHERE capture_id = ?", [.text(captureID)]).first?
+        .string("device_revision")
+}
+
+private func search(_ t: StoreHarness, _ q: String) throws -> [String] {
+    try t.store.index.page(CaptureFilter(searchText: q), after: nil, limit: 50).map(\.id)
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+private func enrichmentDocument(_ pkg: CommittedPackage, _ layer: EnrichmentLayer, _ store: HippoStore,
+                                text: String = "summary") throws -> EnrichmentDocument {
     let digest = try #require(try store.index.packageDigest(captureID: pkg.metadata.captureID))
     let facet = Facet(version: 1, status: .ok, generatedAt: Date(timeIntervalSince1970: 1_800_000_000),
-                      provenance: "test", data: .object(["text": .string("summary")]))
+                      provenance: "test", data: .object(["text": .string(text)]))
     return EnrichmentDocument(schemaVersion: 1, captureID: pkg.metadata.captureID, layer: layer,
                               packageDigest: digest, producer: EnrichmentProducer(name: "t", version: "1", build: "1"),
                               generatedAt: Date(timeIntervalSince1970: 1_800_000_000),

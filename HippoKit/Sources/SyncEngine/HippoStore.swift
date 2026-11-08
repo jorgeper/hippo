@@ -65,11 +65,18 @@ public final class HippoStore: Sendable {
                           leaseWaitLimit: leaseWaitLimit)
     }
 
-    /// Startup recovery (spec §4), then the enrichment sweep (design §6.2): enrichment staging leftovers
-    /// and enrichment directories with no indexed capture are removed. A sweep failure is only logged.
+    /// Startup recovery (spec §4), then the enrichment steps (design §6.2, §9): enrichment staging
+    /// leftovers are removed, and so are enrichment directories with no indexed capture, unless some item
+    /// of the package recovery failed (that capture's package may still exist). Then the index's search
+    /// text and `device_revision` are re-synced with the enrichment files. Enrichment failures are only logged.
     public func recover() throws -> RecoveryReport {
         let report = try Reconciler(layout: layout, index: index, jobs: jobs, destinations: destinations).run()
-        do { _ = try enrichments.sweep() } catch { Self.log.error("\("recover_enrichment_sweep_failed", privacy: .public)") }
+        do { _ = try enrichments.sweep(removingOrphans: report.failed == 0) } catch {
+            Self.log.error("\("recover_enrichment_sweep_failed", privacy: .public)")
+        }
+        do { _ = try enrichments.reconcileIndex() } catch {
+            Self.log.error("\("recover_enrichment_reindex_failed", privacy: .public)")
+        }
         return report
     }
 
