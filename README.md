@@ -30,7 +30,7 @@ Timeline of captures, a detail view, a note editor, a voice recorder, a Share Ex
 | `make device` | Build and install on a connected iPhone (needs `Config/Local.xcconfig`). |
 | `make sim` | Build, install and launch in the Simulator with the fixture captures. |
 | `make test` | HippoKit unit tests on the Mac. |
-| `make uitest` | UI smoke tests in the Simulator (`HIPPO_SIM` picks the simulator; default `iPhone 18 Pro`). |
+| `make uitest` | UI smoke tests in the Simulator (`HIPPO_SIM` picks the simulator; default `iPhone 18 Pro`). They are simulator-only: on a device the `com.jorgeper.hippo.uitests` bundle would need its own App ID. |
 | `make diagnostics` | Print `diagnostics.json` from the app on a connected iPhone. |
 
 > **Free-team installs expire after 7 days. Rerun `make device`; captures survive unless you delete the app.**
