@@ -11,6 +11,7 @@ struct CaptureDetailView: View {
     @State private var model: CaptureDetailModel
     @State private var confirmingDelete = false
     @State private var deleteFailed = false
+    @State private var retrying = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -41,6 +42,8 @@ struct CaptureDetailView: View {
             }
             .alert("Couldn't delete this capture", isPresented: $deleteFailed) {
                 Button("OK", role: .cancel) {}
+            } message: {
+                Text("Nothing was removed. Try again in a moment.")
             }
     }
 
@@ -48,9 +51,10 @@ struct CaptureDetailView: View {
         if let detail = model.detail {
             List {
                 if detail.preview != .none {
-                    Section { AttachmentPreview(kind: detail.preview) }
+                    AttachmentPreview(kind: detail.preview)
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
                 if let comment = detail.comment {
                     Section("Your comment") { Text(comment).italic().textSelection(.enabled) }
@@ -88,6 +92,7 @@ struct CaptureDetailView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .contentMargins(.top, 0, for: .scrollContent)
         } else if model.loadFailed {
             ContentUnavailableView {
                 Label("Couldn't load this capture", systemImage: "exclamationmark.triangle")
@@ -120,15 +125,18 @@ struct CaptureDetailView: View {
     private func syncRow(_ row: SyncRow) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                if let name = row.destinationName { Text(name).font(.headline) }
-                Spacer()
+                if let name = row.destinationName {
+                    Text(name).font(.headline)
+                    Spacer()
+                }
                 Text(row.label.title).font(.subheadline).foregroundStyle(color(row.label))
+                if row.destinationName == nil { Spacer() }
             }
             if let message = row.message {
                 Text(message).font(.footnote).foregroundStyle(.secondary)
             }
             if row.canRetry {
-                Button("Retry") { retry() }.buttonStyle(.bordered)
+                Button("Retry") { retry() }.buttonStyle(.bordered).disabled(retrying)
             }
         }
         .padding(.vertical, 2)
@@ -155,8 +163,11 @@ struct CaptureDetailView: View {
     }
 
     private func retry() {
+        guard !retrying else { return }
+        retrying = true
         let model = model, coordinator = environment.coordinator
         Task {
+            defer { retrying = false }
             await BackgroundActivity.run(name: "detail-retry") {
                 await model.retry()
                 _ = await coordinator?.syncNow()

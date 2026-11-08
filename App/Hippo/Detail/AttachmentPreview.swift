@@ -6,7 +6,7 @@ import HippoPresentation
 /// The large preview at the top of the details screen.
 struct AttachmentPreview: View {
     let kind: PreviewKind
-    @State private var quickLookURL: URL?
+    @State private var quickLook: QuickLookItem?
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -14,7 +14,7 @@ struct AttachmentPreview: View {
         case .image(let url): ImagePreview(url: url)
         case .video(let url): VideoPreview(url: url)
         case .audio(let url): AudioPreview(url: url)
-        case .pdf(let url): fileCard(url: url, symbol: "doc.richtext", hint: "Tap to open", previewable: true)
+        case .pdf(let url): fileCard(url: url, symbol: "doc.richtext", previewable: true)
         case .text(let body):
             Text(body)
                 .textSelection(.enabled)
@@ -34,17 +34,17 @@ struct AttachmentPreview: View {
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
-        case .file(let url, let previewable): fileCard(url: url, symbol: "doc", hint: nil, previewable: previewable)
+        case .file(let url, let previewable): fileCard(url: url, symbol: "doc", previewable: previewable)
         case .none: EmptyView()
         }
     }
 
-    @ViewBuilder private func fileCard(url: URL, symbol: String, hint: String?, previewable: Bool) -> some View {
+    @ViewBuilder private func fileCard(url: URL, symbol: String, previewable: Bool) -> some View {
         let card = HStack(spacing: 12) {
             Image(systemName: symbol).font(.title).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(url.lastPathComponent).font(.headline).lineLimit(2)
-                if previewable, let hint { Text(hint).font(.footnote).foregroundStyle(.secondary) }
+                if previewable { Text("Tap to open").font(.footnote).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 0)
         }
@@ -52,10 +52,10 @@ struct AttachmentPreview: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
         if previewable {
-            Button { quickLookURL = url } label: { card }
+            Button { quickLook = QuickLookItem(url: url) } label: { card }
                 .buttonStyle(.plain)
-                .fullScreenCover(item: $quickLookURL) { url in
-                    QuickLookView(url: url).ignoresSafeArea()
+                .fullScreenCover(item: $quickLook) { item in
+                    QuickLookView(url: item.url) { quickLook = nil }.ignoresSafeArea()
                 }
         } else {
             card
@@ -63,8 +63,53 @@ struct AttachmentPreview: View {
     }
 }
 
-extension URL: @retroactive Identifiable {
-    public var id: String { absoluteString }
+private struct QuickLookItem: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+/// Playback must sound with the ring/silent switch off. The recorder owns `.playAndRecord` while it is
+/// active, so that category is left alone.
+@MainActor private enum PlaybackSession {
+    static func activate() {
+        let session = AVAudioSession.sharedInstance()
+        if session.category != .playAndRecord {
+            try? session.setCategory(.playback, mode: .default)
+        }
+        try? session.setActive(true)
+    }
+}
+
+/// Owns one lazily created player and mirrors whether it is playing.
+@MainActor @Observable private final class PlayerModel {
+    private(set) var player: AVPlayer?
+    private(set) var playing = false
+    private(set) var duration: Double?
+    @ObservationIgnored private var observation: NSKeyValueObservation?
+
+    func prepare(url: URL) {
+        guard player == nil else { return }
+        let player = AVPlayer(url: url)
+        self.player = player
+        observation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
+            let status = player.timeControlStatus
+            Task { @MainActor in self?.playing = status != .paused }
+        }
+    }
+
+    func loadDuration() async {
+        if let time = try? await player?.currentItem?.asset.load(.duration), time.seconds.isFinite {
+            duration = time.seconds
+        }
+    }
+
+    func toggle() {
+        guard let player else { return }
+        if player.timeControlStatus == .paused { PlaybackSession.activate(); player.play() } else { player.pause() }
+    }
+
+    func rewind() { player?.seek(to: .zero) }
+    func pause() { player?.pause() }
 }
 
 private struct ImagePreview: View {
@@ -109,56 +154,51 @@ private struct ImagePreview: View {
 }
 
 private struct VideoPreview: View {
-    @State private var player: AVPlayer
-
-    init(url: URL) { _player = State(initialValue: AVPlayer(url: url)) }
+    let url: URL
+    @State private var model = PlayerModel()
 
     var body: some View {
-        VideoPlayer(player: player)
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .onDisappear { player.pause() }
+        Group {
+            if let player = model.player {
+                VideoPlayer(player: player)
+            } else {
+                Color.clear
+            }
+        }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .onAppear { model.prepare(url: url); PlaybackSession.activate() }
+        .onDisappear { model.pause() }
     }
 }
 
 private struct AudioPreview: View {
     let url: URL
-    @State private var player: AVPlayer
-    @State private var playing = false
-    @State private var duration: Double?
-
-    init(url: URL) {
-        self.url = url
-        _player = State(initialValue: AVPlayer(url: url))
-    }
+    @State private var model = PlayerModel()
 
     var body: some View {
         HStack(spacing: 12) {
-            Button {
-                if playing { player.pause() } else { player.play() }
-                playing.toggle()
-            } label: {
-                Image(systemName: playing ? "pause.circle.fill" : "play.circle.fill").font(.largeTitle)
+            Button { model.toggle() } label: {
+                Image(systemName: model.playing ? "pause.circle.fill" : "play.circle.fill").font(.largeTitle)
             }
-            .accessibilityLabel(playing ? "Pause" : "Play")
+            .accessibilityLabel(model.playing ? "Pause" : "Play")
             VStack(alignment: .leading, spacing: 2) {
                 Text("Voice recording").font(.headline)
-                if let duration { Text(Self.format(duration)).font(.footnote).foregroundStyle(.secondary) }
+                if let duration = model.duration { Text(Self.format(duration)).font(.footnote).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 0)
         }
         .padding()
         .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
         .task(id: url) {
-            if let time = try? await player.currentItem?.asset.load(.duration), time.seconds.isFinite {
-                duration = time.seconds
-            }
+            model.prepare(url: url)
+            await model.loadDuration()
         }
-        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { _ in
-            playing = false
-            player.seek(to: .zero)
+        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification,
+                                                        object: model.player?.currentItem)) { _ in
+            model.rewind()
         }
-        .onDisappear { player.pause(); playing = false }
+        .onDisappear { model.pause() }
     }
 
     private static func format(_ seconds: Double) -> String {
