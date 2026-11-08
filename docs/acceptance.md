@@ -21,10 +21,10 @@ Scenarios that can only be checked on a real iPhone. Install with `make device`,
 | 15 | Detail: retry failed sync | Get a row to a failed sync state. Tap Retry in Detail. | A sync starts and the state changes. | not run | |
 | 16 | Recorder: real microphone | Tap Record, speak, Stop, Save. Open the capture. | A voice note is saved and plays back with your voice. | not run | |
 | 17 | Recorder: interruption message | Record, then trigger a phone call or Siri. | "Recording stopped by an interruption..." is shown. The saved duration is non-zero. | not run | |
-| 18 | Recorder: cancel while recording | Start recording. Tap Cancel. | "Discard recording?" is asked. Keep recording continues it. Discard saves nothing. | not run | |
+| 18 | Recorder: cancel with a recording in progress or stopped | Start recording, tap Cancel. Repeat after tapping Stop. | Both times "Discard recording?" is asked. Keep recording continues it; Discard saves nothing. | not run | |
 | 19 | Share: Safari URL and Photos image | Share a web page from Safari. Share an image from Photos. | Each shows "✓ Saved on this iPhone" and appears in the timeline. | not run | |
 | 20 | Share: mixed with an unsupported item | Share a selection where one item is unsupported. | The inline notice appears. Save asks "Save the rest", and its Cancel returns to the sheet. | not run | |
 | 21 | Settings: location permission | Turn on "Save location with captures". Deny the iOS prompt. | The prompt appears on first use. After denying, the footer says location is off in iOS Settings and Open Settings is shown. | not run | |
 | 22 | Background sync | Connect the Developer folder. Save captures, background the app. Wait. Then check the device crash logs (Settings, Privacy & Security, Analytics & Improvements, Analytics Data, or Xcode, Devices, View Device Logs). | The captures eventually sync. The crash logs show no 0xdead10cc termination for Hippo. | not run | |
-| 24 | Backlog drain | Connect the Developer folder with more than 200 captures waiting. Keep the app open. | All captures sync while the app stays open. | not run | |
 | 23 | Install after 7-day expiry | After the free-team profile expires, run `make device`. | Captures are still there. | not run | |
+| 24 | Backlog drain | Connect the Developer folder with more than 200 captures waiting. Keep the app open. | All captures sync while the app stays open. | not run | |
