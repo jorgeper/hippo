@@ -49,11 +49,12 @@ struct SyncHarness {
 
     var adapter: FilesystemAdapter { FilesystemAdapter(root: remote, faults: faults) }
 
-    func worker(_ adapter: (any StorageAdapter)? = nil, random: @escaping @Sendable () -> Double = { 1 }) -> SyncWorker {
+    func worker(_ adapter: (any StorageAdapter)? = nil, owner: String = "test-worker",
+                random: @escaping @Sendable () -> Double = { 1 }) -> SyncWorker {
         let a: any StorageAdapter = adapter ?? self.adapter
         let clock = self.clock
         return SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index,
-                          adapterFor: { _ in a }, owner: "test-worker", now: { clock.now }, random: random)
+                          adapterFor: { _ in a }, owner: owner, now: { clock.now }, random: random)
     }
 
     /// Commits, registers and enqueues a capture with one attachment of `attachmentBytes` bytes, or a
@@ -130,6 +131,53 @@ struct HookedAdapter: StorageAdapter {
                                           checkpoint: checkpoint, saveCheckpoint: { cp in
             try hook(relativePath)
             try await saveCheckpoint(cp)
+        })
+    }
+}
+
+/// A one-shot signal: `wait()` returns once `open()` has been called, before or after the wait began.
+/// One waiter per gate.
+final class Gate: Sendable {
+    private let stream: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+
+    init() { (stream, continuation) = AsyncStream.makeStream() }
+
+    func open() { continuation.finish() }
+    func wait() async { for await _ in stream {} }
+}
+
+/// Wraps the filesystem adapter and suspends the upload of `path` just after its first checkpoint
+/// has been saved, so a worker is genuinely mid-file until `release` opens.
+struct PausingAdapter: StorageAdapter {
+    let inner: FilesystemAdapter
+    let path: String
+    let paused = Gate()
+    let release = Gate()
+
+    var capabilities: StorageCapabilities { inner.capabilities }
+    func validateDestination() async throws { try await inner.validateDestination() }
+    func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }
+    func inspectFile(relativePath: String) async throws -> RemoteFileInfo? {
+        try await inner.inspectFile(relativePath: relativePath)
+    }
+    func verify(remote: RemoteFileInfo, localURL: URL, expected: FileIntegrity) async throws -> VerificationEvidence? {
+        try await inner.verify(remote: remote, localURL: localURL, expected: expected)
+    }
+    func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
+                    saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt {
+        guard relativePath == path else {
+            return try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
+                                              checkpoint: checkpoint, saveCheckpoint: saveCheckpoint)
+        }
+        let (count, paused, release) = (Counter(), self.paused, self.release)
+        return try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
+                                          checkpoint: checkpoint, saveCheckpoint: { cp in
+            try await saveCheckpoint(cp)
+            if count.next() == 1 {
+                paused.open()
+                await release.wait()
+            }
         })
     }
 }

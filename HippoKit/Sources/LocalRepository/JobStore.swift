@@ -57,27 +57,52 @@ public final class JobStore: Sendable {
             """, [.text(Self.newJobID()), .text(captureID), .int(Self.ms(Date()))])
     }
 
+    /// Delay before a job whose lease expired `n` times in a row is reclaimed again:
+    /// `min(21_600, 30 * 2^(n-1))` seconds.
+    public static let defaultReclaimDelay: @Sendable (Int) -> TimeInterval = { n in
+        min(21_600, 30 * pow(2, Double(max(n, 1) - 1)))
+    }
+
     /// Atomically takes the next eligible job: a due `pending`/`retryable_failure` job, or an
     /// `uploading` job whose lease expired; in both cases the destination must be active and no
-    /// cancel requested. Does not change `attempt_count`.
-    public func claimNext(owner: String, now: Date, lease: TimeInterval) throws -> UploadJob? {
+    /// cancel requested. An expired lease is a crashed attempt: it increments `attempt_count` and
+    /// records `lease_expired`. Once that count reaches 3, the job is not claimed but parked as
+    /// `retryable_failure` until `now + reclaimDelay(count)`, and the next candidate is considered.
+    public func claimNext(owner: String, now: Date, lease: TimeInterval,
+                          reclaimDelay: @Sendable (Int) -> TimeInterval = JobStore.defaultReclaimDelay) throws -> UploadJob? {
         let nowMS = Self.ms(now)
         return try db.transaction { tx in
-            let candidates = try tx.query("""
-                SELECT j.job_id FROM jobs j JOIN destinations d ON d.destination_id = j.destination_id
-                WHERE d.status = 'active' AND j.cancel_requested = 0 AND (
-                  (j.state IN ('pending', 'retryable_failure')
-                     AND (j.next_attempt_at_ms IS NULL OR j.next_attempt_at_ms <= ?))
-                  OR (j.state = 'uploading' AND (j.lease_expires_at_ms IS NULL OR j.lease_expires_at_ms <= ?)))
-                ORDER BY (j.next_attempt_at_ms IS NULL) DESC, j.next_attempt_at_ms ASC, j.updated_at_ms ASC, j.job_id ASC
-                LIMIT 1
-                """, [.int(nowMS), .int(nowMS)])
-            guard let jobID = candidates.first?.string("job_id") else { return nil }
-            let rows = try tx.query("""
-                UPDATE jobs SET state = 'uploading', lease_owner = ?, lease_expires_at_ms = ?, updated_at_ms = ?
-                WHERE job_id = ? RETURNING *
-                """, [.text(owner), .int(nowMS + Self.ms(lease)), .int(nowMS), .text(jobID)])
-            return rows.first.map(Self.job)
+            while true {
+                let candidates = try tx.query("""
+                    SELECT j.job_id, j.state FROM jobs j JOIN destinations d ON d.destination_id = j.destination_id
+                    WHERE d.status = 'active' AND j.cancel_requested = 0 AND (
+                      (j.state IN ('pending', 'retryable_failure')
+                         AND (j.next_attempt_at_ms IS NULL OR j.next_attempt_at_ms <= ?))
+                      OR (j.state = 'uploading' AND (j.lease_expires_at_ms IS NULL OR j.lease_expires_at_ms <= ?)))
+                    ORDER BY (j.next_attempt_at_ms IS NULL) DESC, j.next_attempt_at_ms ASC, j.updated_at_ms ASC, j.job_id ASC
+                    LIMIT 1
+                    """, [.int(nowMS), .int(nowMS)])
+                guard let candidate = candidates.first, let jobID = candidate.string("job_id") else { return nil }
+                if candidate.string("state") == JobState.uploading.rawValue {
+                    let attempts = try tx.query("""
+                        UPDATE jobs SET attempt_count = attempt_count + 1, last_error_code = 'lease_expired'
+                        WHERE job_id = ? RETURNING attempt_count
+                        """, [.text(jobID)]).first?.int("attempt_count") ?? 0
+                    if attempts >= Self.maxLeaseExpiries {
+                        let retryAt = nowMS + Self.ms(reclaimDelay(Int(attempts)))
+                        try tx.execute("""
+                            UPDATE jobs SET state = 'retryable_failure', next_attempt_at_ms = ?, lease_owner = NULL,
+                              lease_expires_at_ms = NULL, updated_at_ms = ? WHERE job_id = ?
+                            """, [.int(retryAt), .int(nowMS), .text(jobID)])
+                        continue
+                    }
+                }
+                let rows = try tx.query("""
+                    UPDATE jobs SET state = 'uploading', lease_owner = ?, lease_expires_at_ms = ?, updated_at_ms = ?
+                    WHERE job_id = ? RETURNING *
+                    """, [.text(owner), .int(nowMS + Self.ms(lease)), .int(nowMS), .text(jobID)])
+                return rows.first.map(Self.job)
+            }
         }
     }
 
@@ -112,10 +137,18 @@ public final class JobStore: Sendable {
                        [.int(Self.ms(Date())), .text(captureID)])
     }
 
-    /// Undoes `requestCancel` for a capture whose deletion did not complete.
+    /// Undoes `requestCancel` for a capture whose deletion did not complete. Jobs a worker already
+    /// paused because of that cancel (`paused` with `cancelled`) become `pending` again.
     public func clearCancel(captureID: String) throws {
-        try db.execute("UPDATE jobs SET cancel_requested = 0, updated_at_ms = ? WHERE capture_id = ?",
-                       [.int(Self.ms(Date())), .text(captureID)])
+        let now = Self.ms(Date())
+        try db.transaction { tx in
+            try tx.execute("UPDATE jobs SET cancel_requested = 0, updated_at_ms = ? WHERE capture_id = ?",
+                           [.int(now), .text(captureID)])
+            try tx.execute("""
+                UPDATE jobs SET state = 'pending', next_attempt_at_ms = NULL, updated_at_ms = ?
+                WHERE capture_id = ? AND state = 'paused' AND last_error_code = 'cancelled'
+                """, [.int(now), .text(captureID)])
+        }
     }
 
     /// Manual "retry now": makes the capture's `blocked` and `retryable_failure` jobs claimable
@@ -215,6 +248,9 @@ public final class JobStore: Sendable {
     private static func ms(_ seconds: TimeInterval) -> Int64 { Int64((seconds * 1000).rounded()) }
 
     // MARK: Helpers
+
+    /// Lease expiries in a row after which a job backs off instead of being reclaimed at once.
+    private static let maxLeaseExpiries: Int64 = 3
 
     private static let failureStates: Set<JobState> = [.retryableFailure, .needsAuthentication, .blocked, .paused]
 

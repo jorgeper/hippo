@@ -331,8 +331,9 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(await h.worker(adapter).runOnce() == SyncPassResult(synced: 0, failed: 0, idle: false))
         let job = try h.job(pkg)
         #expect(job.state == .uploading)
-        #expect(job.attemptCount == 0)
-        #expect(job.lastErrorCode == nil)
+        // Only the thief's reclaim counted the expired lease; the old owner recorded nothing.
+        #expect(job.attemptCount == 1)
+        #expect(job.lastErrorCode == "lease_expired")
         #expect(try h.db.query("SELECT lease_owner FROM jobs WHERE job_id = ?", [.text(job.jobID)])[0]
                     .string("lease_owner") == "thief")
         #expect(try h.jobs.receipts(jobID: job.jobID).map(\.relativePath) == ["metadata.json"])
@@ -343,6 +344,34 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(offset == 1 << 20)
         #expect(!FileManager.default.fileExists(atPath: h.remote.appendingPathComponent(path).path))
         #expect(!h.uploads.contains("upload \(pkg.markerPath)"))
+    }
+
+    @Test func workersWithSamePrefixHaveDistinctLeaseOwners() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture(attachmentBytes: 3 * FilesystemAdapter.chunkSize)
+        let adapter = PausingAdapter(inner: h.adapter, path: pkg.attachmentPath)
+        let a = h.worker(adapter, owner: "app")
+        let b = h.worker(owner: "app")
+        #expect(a.leaseOwner != b.leaseOwner)
+        #expect(a.leaseOwner.hasPrefix("app#"))
+        #expect(b.leaseOwner.hasPrefix("app#"))
+        let suffix = String(a.leaseOwner.dropFirst("app#".count))
+        #expect(UUID(uuidString: suffix) != nil)
+        #expect(suffix == suffix.lowercased())
+
+        let run = Task { let r = await a.runOnce(); adapter.paused.open(); return r }
+        await adapter.paused.wait()
+        // A is suspended mid-file holding the job under its own lease owner.
+        let jobID = try h.job(pkg).jobID
+        #expect(try h.db.query("SELECT lease_owner FROM jobs WHERE job_id = ?", [.text(jobID)])[0]
+                    .string("lease_owner") == a.leaseOwner)
+        #expect(await b.runOnce().idle)
+        // The bare prefix owns nothing.
+        #expect(try h.jobs.renewLease(jobID: jobID, owner: "app", now: h.clock.now, lease: 120) == false)
+        adapter.release.open()
+
+        #expect(await run.value == SyncPassResult(synced: 1, failed: 0, idle: false))
+        #expect(try h.job(pkg).state == .synced)
     }
 
     @Test func claimErrorIsNotIdle() async throws {
