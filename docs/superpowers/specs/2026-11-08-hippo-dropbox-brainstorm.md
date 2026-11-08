@@ -1,0 +1,108 @@
+# Hippo Dropbox phase: brainstorm notes (handoff)
+
+Status, 2026-11-08: the brainstorm has started. Nothing below is approved for building yet. These notes are where to resume: settle the open questions with Jorge, write the design doc (`docs/superpowers/specs/YYYY-MM-DD-hippo-dropbox-design.md`), run the builder check, get approval, then write the plan and build with subagent-driven development, as in the enrichment and visibility phases.
+
+Background reading, in this order:
+- `docs/superpowers/specs/2026-11-07-hippo-v0-design.md` §3.1 already specifies most of the Dropbox adapter: auth, uploads, integrity, errors, SDK-vs-HTTP choice, and the "Hippo Dev" test app. It still stands unless something below reopens it.
+- `HippoKit/Sources/SyncEngine/StorageAdapter.swift`: the provider-neutral contract the Dropbox adapter implements. The Developer-folder `FilesystemAdapter` is the reference implementation, and the shared AdapterContract tests apply to both.
+- `docs/package-format.md`, `docs/enrichment-format.md` and `docs/log-format.md`: what lands in the folder.
+
+## What Jorge described (2026-11-08)
+
+In his words, lightly cleaned up:
+
+- **Connecting.** "When I go to the app, I have a way to configure Dropbox that basically opens some auth flow that gives access to my Dropbox to this app. And in it I choose the folder for Hippo."
+- **What's in the folder.** "In that folder, I'm gonna have the logs, I'm gonna have all this data along with the metadata."
+- **Syncing.** "As I use Hippo, basically you will go and sync to Dropbox." He was unsure what an iPhone allows in the background, and asked that it at least sync every time he opens the app.
+- **Why.** "When I open Dropbox, I will see all my files in there. And ultimately what I want to do is to use this information to connect it to maybe an AI agent that can read from that and use all these memories in whichever way." The folder is the product; the phone is intake. This matches the `hippo-product-direction` memory.
+- **Deletes and the new-phone case.** "If I delete things from Dropbox, then they'll delete from the phone and vice versa." Then he qualified it: "We need to be careful … I don't want it to keep a perfect mirror, because if I get a new phone … I don't want it to basically go and wipe everything out in the backend. So maybe the way to think about this is the Dropbox folder has everything and the phone could have a subset, but every time I sync the phone to Dropbox, it'll make sure the work on the phone is in the Dropbox."
+
+## Played back, and Jorge said "this all looks great"
+
+- **Connecting:** Settings has a Dropbox connect button. Dropbox's sign-in opens, Jorge grants access, and he picks the folder. Which folder is still open (Q2).
+- **Folder contents:** every capture package with its metadata, the enrichment layers (silver, gold), and the logs. This is the same layout the Developer folder gets today.
+- **Sync timing:** this mostly exists already. Hippo syncs on launch, on returning to the foreground, while open, and in iOS background tasks, which iOS grants now and then. Dropbox plugs into the same scheduling. The v0 design adds background `URLSession` uploads, so a started upload can finish after the app is suspended. Timing is never promised.
+- **Two copies:**
+  - Dropbox is the full set, and the phone holds a subset.
+  - Every sync makes sure everything on the phone is in Dropbox.
+  - **A capture missing from the phone never means "delete it in Dropbox".** A new or wiped phone must never remove anything remotely.
+  - A delete made in Dropbox removes the capture from the phone too. That's new: today nothing flows from Dropbox to the phone except gold.
+- **Today's delete:** "Delete from iPhone…" removes only the phone's copy, and its prompt says uploaded copies stay where they are.
+
+## Open questions, most important first
+
+Ask one at a time. Each has my recommendation, which Jorge has not confirmed.
+
+1. **Deleting on the phone.** Should a delete on the phone also delete the capture in Dropbox, or only free up the phone, as today?
+   - Jorge's "and vice versa" suggests both ways.
+   - His new-phone worry is about absence, not explicit deletes.
+   - Recommendation: two explicit actions in Detail, "Delete from iPhone" (today's) and "Delete everywhere". The second writes a tombstone that a later sync applies in Dropbox, so it works offline.
+   - Absence still never deletes anything.
+2. **Which folder.** v0 §3.1 decided Dropbox's **App folder** access type: Hippo can only see `Apps/Hippo/`, the narrowest permission, and Dropbox creates the folder itself. Jorge now says "I choose the folder", and that needs full-Dropbox access.
+   - Recommendation: keep the App folder, maybe with an optional subfolder name inside it.
+   - Ask whether he needs it somewhere else, for example so the AI agent reads an existing folder.
+3. **What counts as "deleted in Dropbox".** Recommendation:
+   - A capture is deleted remotely only when its whole package folder is gone, or its `complete.json` is.
+   - A single missing or edited attachment doesn't delete anything. It's ignored, or shown as "changed in Dropbox".
+   - Moves or renames inside the folder count as a delete.
+   - This needs `listChanges` deletion entries, which the gold pull's adapter call already has a cursor for.
+4. **Safety valve for mass disappearance.** If Jorge deletes or renames the whole folder, or disconnects, or a cursor reset makes everything look gone, the phone must not wipe itself.
+   - Recommendation: if more than a small threshold disappears in one pass (for example 20 captures or 10%), apply nothing and show a "Dropbox looks different, review?" prompt.
+   - A capture the phone hasn't finished uploading is never deleted by a remote change.
+5. **New phone.** Should a new install only upload its own captures, or also show older captures from Dropbox, as titles only or downloaded on demand?
+   - v0 says a new install doesn't rebuild the library from Dropbox. Jorge's "the phone could have a subset" fits that.
+   - Recommendation: no restore this phase. Note it as a possible later phase.
+6. **Sync timing.** Is "on open, while open, plus iOS background time and background uploads" enough? Or does he want a visible "Sync now" and a last-synced line? The line already exists from the visibility batch.
+7. **Disconnect and switching accounts.**
+   - v0 §3.1 and V5: jobs are bound to the Dropbox `account_id`.
+   - Captures saved before connecting upload after connecting.
+   - Nothing bound to account A is uploaded to account B.
+   - Confirm that disconnecting keeps local captures and stops sync, and doesn't delete anything.
+
+## Already decided: from v0 §3.1 and the parked follow-ups
+
+These carry into the design unless Jorge reopens them.
+
+- **Auth and storage:** OAuth 2 PKCE as a public client with `token_access_type=offline` in `ASWebAuthenticationSession`. Tokens are stored in the shared Keychain access group. Background and extension code never shows UI; an expired login moves the job to `needs_authentication`.
+- **Scopes:** `files.content.write`, `files.content.read`, `files.metadata.read`, `account_info.read`. The `files.content.write` scope covers deletes too.
+- **App keys:**
+  - The app key goes in the gitignored `Config/Secrets.xcconfig`, with a committed `Secrets.example.xcconfig`.
+  - The "Hippo Dev" app writes to `Apps/Hippo Dev`, and its key and refresh token live in a gitignored `.env` with a committed `.env.example`.
+  - Real-Dropbox integration tests run only against Hippo Dev, and are skipped when the env vars are absent.
+- **Uploads:**
+  - Small files use single-request upload; large ones use upload sessions with the checkpoint persisted (session IDs are sensitive and never logged).
+  - Writes use `mode: add` and `autorename: false`. On a conflict, a matching size and `content_hash` counts as success; otherwise the job is blocked as a content conflict and nothing is overwritten.
+  - `content_hash` is computed locally (SHA-256 per 4 MB block, then SHA-256 of the concatenated digests) and verified before `complete.json` is written.
+  - One round-trip download is checked by SHA-256 in integration.
+- **Errors:** expired or revoked token, offline, `429` with `Retry-After`, `insufficient_space` (blocked, user action), 5xx, and expired upload session (restart that file).
+- **Background transfers:** use a background `URLSession` with the App Group `sharedContainerIdentifier` for upload-from-file, and refresh the access token first.
+- **SDK or direct HTTP:** check SwiftyDropbox against PKCE refresh in a shared Keychain, background upload-from-file, extension use and checkpoint persistence. Prefer the SDK if it covers all four; otherwise use `URLSession` directly. Record the choice in an ADR, and keep the SDK inside the adapter.
+- **Parked follow-ups** (memory `hippo-core-parked-followups`) that must land in this phase:
+  - The adapter honours Task cancellation within `BackgroundActivity.expiryGrace` (2 s), so a long upload can't outlive the background assertion (0xdead10cc risk).
+  - `replaceFile` uses upload mode overwrite and is allowed only under `enrichments/` and `logs/`, matching the FilesystemAdapter rule.
+  - `listChanges` uses `list_folder` recursive plus `continue`, and a `reset` maps to `cursorReset`.
+  - `downloadFile` is implemented.
+  - The shared AdapterContract tests run against Dropbox (Hippo Dev).
+  - Log uploads are throttled on cellular. Today's log file re-uploads on every pass, so limit it to at most every 15 minutes or Wi-Fi only.
+- **Also parked, worth considering with sync:**
+  - No foreground retry timer for `next_attempt_at`.
+  - No refresh when connectivity returns in the foreground.
+  - Dropbox makes both more visible.
+
+## Jorge has to do these before the build (not before the design)
+
+- Create two apps in the Dropbox App Console, both with Scoped access, App folder type and the four scopes:
+  - **"Hippo"**: its app key goes in `Config/Secrets.xcconfig`.
+  - **"Hippo Dev"**: its app key and a long-lived refresh token go in `.env`.
+  - The README documents these steps.
+- Keys never go into git and never get pasted in full into chat. Show only the first and last four characters.
+
+## Device acceptance to plan for
+
+`docs/acceptance.md` rows 1–24 are still "not run". Several of them have upload halves that waited for Dropbox (offline screenshot, round trip, voice note, backlog drain, background sync). The design should add Dropbox rows covering:
+- connect and disconnect;
+- first upload of the backlog;
+- delete in Dropbox reaching the phone;
+- a new phone not wiping anything;
+- the safety valve;
+- the switch-account case from V5.
