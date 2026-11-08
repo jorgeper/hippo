@@ -221,6 +221,43 @@ private struct LogHarness {
         #expect(!a.segmentFiles().isEmpty)
     }
 
+    @Test func appendWaitingOnUnlinkedSegmentMovesToNewSegment() throws {
+        let t = try LogHarness(); defer { t.cleanup() }
+        let log = t.log(.app, lockTimeout: .seconds(2))
+        log.append(LogEvent(event: .appLaunch))              // caches segment 0
+        let seg0 = t.url("2026-11-08.jsonl")
+        let fd = open(seg0.path, O_WRONLY | O_APPEND)
+        #expect(fd >= 0)
+        #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
+
+        let done = DispatchGroup()
+        DispatchQueue.global().async(group: done) {
+            log.append(LogEvent(event: .captureSaved, captureID: "c1", trigger: "note"))
+        }
+        Thread.sleep(forTimeInterval: 0.05)                  // the appender is now waiting on segment 0
+        let cleared = t.log(.share, lockTimeout: .milliseconds(10))
+        cleared.clear()                                      // creates .1 first, then removes segment 0
+        flock(fd, LOCK_UN); close(fd)
+        done.wait()
+
+        #expect(log.segmentFiles().map(\.lastPathComponent) == ["2026-11-08.1.jsonl"])
+        let lines = try t.lines("2026-11-08.1.jsonl")
+        #expect(lines.count == 2)
+        #expect(lines[0].contains("log.cleared"))
+        #expect(lines[1].contains("capture.saved"))
+    }
+
+    @Test func creatingSegmentZeroBacksOffWhenALaterSegmentExists() throws {
+        let t = try LogHarness(); defer { t.cleanup() }
+        let log = t.log()
+        try FileManager.default.createDirectory(at: t.layout.logsDir, withIntermediateDirectories: true)
+        try Data("{}\n".utf8).write(to: t.url("2026-11-08.1.jsonl"))
+        guard case .gone = log.openLocked(t.url("2026-11-08.jsonl"), create: true, timeout: .milliseconds(50)) else {
+            Issue.record("expected .gone"); return
+        }
+        #expect(!FileManager.default.fileExists(atPath: t.url("2026-11-08.jsonl").path))
+    }
+
     @Test func fileNames() {
         #expect(ActivityLog.fileName(day: utc("2026-11-08T23:59:59Z"), segment: 0) == "2026-11-08.jsonl")
         #expect(ActivityLog.fileName(day: utc("2026-11-08T00:00:00Z"), segment: 1) == "2026-11-08.1.jsonl")

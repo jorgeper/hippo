@@ -97,12 +97,12 @@ public final class ActivityLog: Sendable {
         }
     }
 
-    private enum Opened { case locked(Int32), gone, failed }
+    enum Opened { case locked(Int32), gone, failed }
 
     /// Opens `url` and takes the lock. An existing segment is opened without `O_CREAT`, so a segment that a
     /// `clear()` deleted is never re-created. `.gone` means look again: the file is missing, was unlinked
     /// while we waited, or (when creating segment 0) another segment of the day has appeared.
-    private func openLocked(_ url: URL, create: Bool, timeout: Duration) -> Opened {
+    func openLocked(_ url: URL, create: Bool, timeout: Duration) -> Opened {
         let fd = open(url.path, O_WRONLY | O_APPEND | (create ? O_CREAT : 0), 0o644)
         guard fd >= 0 else { return errno == ENOENT ? .gone : .failed }
         guard lock(fd, timeout: timeout) else { close(fd); return .failed }
@@ -253,7 +253,8 @@ public final class ActivityLog: Sendable {
         line.append(0x0A)
         let fd = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
         guard fd >= 0 else { Self.osLog.error("\("write_failed", privacy: .public)"); return }
-        defer { close(fd) }
+        defer { close(fd) }   // closing also releases the lock
+        _ = lock(fd, timeout: lockTimeout)
         if !Self.writeAll(fd, line) { Self.osLog.error("\("write_failed", privacy: .public)") }
         cache.withLock { $0 = Cache(day: day, url: url) }
         for s in orderedSegments() where s.url.lastPathComponent != url.lastPathComponent { try? FileManager.default.removeItem(at: s.url) }
