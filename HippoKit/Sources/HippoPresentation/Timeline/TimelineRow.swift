@@ -1,0 +1,69 @@
+import Foundation
+import UniformTypeIdentifiers
+import CaptureCore
+import LocalRepository
+
+public struct TimelineRow: Identifiable, Equatable, Sendable {
+    public enum RowKind: Sendable, Equatable { case media, multi, link, note, voice, file }
+
+    public var id: String
+    public var time: String
+    public var title: String
+    public var subtitle: String?
+    public var comment: String?
+    public var kind: RowKind
+    public var sync: SyncLabel
+    /// Package-relative paths.
+    public var thumbnailAttachmentPaths: [String]
+    public var extraCount: Int
+
+    /// `metadata` nil means the summary alone is used.
+    public static func make(_ s: CaptureSummary, metadata: CaptureMetadata?, locale: Locale) -> TimelineRow {
+        var row = TimelineRow(id: s.id, time: timeText(s, locale: locale), title: s.title, subtitle: nil,
+                              comment: s.noteExcerpt, kind: .file, sync: SyncLabel(s.syncBucket),
+                              thumbnailAttachmentPaths: [], extraCount: 0)
+        let hasAudio = s.contentTypes.contains(.audio)
+        let hasVisual = s.contentTypes.contains(.image) || s.contentTypes.contains(.video)
+        if s.attachmentCount >= 2 {
+            let visual = metadata?.attachments.filter(isVisual).map(\.relativePath)
+                ?? s.primaryAttachmentPath.map { [$0] } ?? []
+            let shown = Array(visual.prefix(3))
+            row.kind = .multi
+            row.thumbnailAttachmentPaths = shown
+            row.extraCount = s.attachmentCount - shown.count
+        } else if s.method == .voiceRecording || (s.attachmentCount == 1 && hasAudio) {
+            row.kind = .voice
+            let seconds = metadata?.attachments.first?.media?.durationSeconds
+            if let seconds, seconds.isFinite, seconds >= 0 {
+                let total = Int(seconds)
+                row.title = "Voice note · \(total / 60):" + (total % 60 < 10 ? "0" : "") + "\(total % 60)"
+            } else {
+                row.title = "Voice note"
+            }
+        } else if s.attachmentCount == 1 && hasVisual {
+            row.kind = .media
+            row.thumbnailAttachmentPaths = s.primaryAttachmentPath.map { [$0] } ?? []
+        } else if s.attachmentCount == 0 && s.contentTypes.contains(.url) {
+            row.kind = .link
+            row.subtitle = metadata?.urls.first.flatMap { host(of: $0.url) }
+        } else if s.method == .typedNote {
+            row.kind = .note
+        }
+        return row
+    }
+
+    private static func timeText(_ s: CaptureSummary, locale: Locale) -> String {
+        let zone = s.utcOffsetSeconds.flatMap { TimeZone(secondsFromGMT: $0) } ?? .current
+        return s.capturedAt.formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, timeZone: zone))
+    }
+
+    private static func host(of raw: String) -> String? {
+        guard let host = URLComponents(string: raw)?.host, !host.isEmpty else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    private static func isVisual(_ a: Attachment) -> Bool {
+        if let type = UTType(a.uti) { return type.conforms(to: .image) || type.conforms(to: .movie) }
+        return a.mimeType.map { $0.hasPrefix("image/") || $0.hasPrefix("video/") } ?? false
+    }
+}

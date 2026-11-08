@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "SyncEngine", targets: ["SyncEngine"]),
         .library(name: "FilesystemAdapter", targets: ["FilesystemAdapter"]),
         .library(name: "ShareIntake", targets: ["ShareIntake"]),
+        .library(name: "HippoPresentation", targets: ["HippoPresentation"]),
     ],
     targets: [
         .target(name: "CaptureCore"),
@@ -17,6 +18,7 @@ let package = Package(
         .target(name: "SyncEngine", dependencies: ["CaptureCore", "LocalRepository"]),
         .target(name: "FilesystemAdapter", dependencies: ["SyncEngine", "CaptureCore"]),
         .target(name: "ShareIntake", dependencies: ["CaptureCore"]),
+        .target(name: "HippoPresentation", dependencies: ["CaptureCore", "LocalRepository", "SyncEngine", "ShareIntake"]),
         .target(name: "HippoTestSupport", dependencies: ["ShareIntake"]),
         .executableTarget(name: "hippo-fixtures", dependencies: ["CaptureCore", "HippoTestSupport"]),
         .testTarget(name: "CaptureCoreTests", dependencies: ["CaptureCore", "HippoTestSupport"]),
@@ -25,6 +27,9 @@ let package = Package(
                                                     "HippoTestSupport"]),
         .testTarget(name: "AdapterContractTests", dependencies: ["FilesystemAdapter", "SyncEngine", "CaptureCore"]),
         .testTarget(name: "ShareIntakeTests", dependencies: ["ShareIntake", "CaptureCore", "HippoTestSupport"]),
+        .testTarget(name: "HippoPresentationTests", dependencies: ["HippoPresentation", "FilesystemAdapter",
+                                                                   "HippoTestSupport", "CaptureCore", "LocalRepository",
+                                                                   "SyncEngine"]),
     ],
     swiftLanguageModes: [.v6]
 )
