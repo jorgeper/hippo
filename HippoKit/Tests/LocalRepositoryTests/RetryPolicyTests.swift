@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import SyncEngine
+import LocalRepository
 
 @Suite struct RetryPolicyTests {
     @Test func retryDelayBoundsAndRetryAfter() {

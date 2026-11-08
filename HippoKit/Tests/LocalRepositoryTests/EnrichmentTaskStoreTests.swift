@@ -108,4 +108,18 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         try h.index.remove(captureID: id)
         #expect(try tasks.counts().isEmpty)
     }
+
+    @Test func taskReadsOneRowWhateverItsStatus() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let tasks = EnrichmentTaskStore(db: h.db)
+        let id = try await h.add(note: "x").metadata.captureID
+        #expect(try tasks.task(captureID: id, kind: .place) == nil)
+        try tasks.set(captureID: id, kind: .place, version: 2, status: "pending", now: t0)
+        try tasks.recordAttempt(captureID: id, kind: .place, status: "failed", errorCode: "gone",
+                                nextAttemptAt: t0.addingTimeInterval(5), incrementAttempts: true, now: t0)
+        #expect(try tasks.task(captureID: id, kind: .place) == EnrichmentTask(
+            captureID: id, kind: .place, version: 2, status: "failed", attemptCount: 1,
+            nextAttemptAt: t0.addingTimeInterval(5), lastErrorCode: "gone"))
+        #expect(try tasks.task(captureID: id, kind: .transcript) == nil)
+    }
 }

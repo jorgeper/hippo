@@ -56,7 +56,13 @@ public final class EnrichmentTaskStore: Sendable {
               AND t.kind IN (\(Self.placeholders(kinds.count)))
             ORDER BY c.captured_at_ms DESC, c.capture_id DESC, (t.kind = ?) ASC, t.kind ASC LIMIT 1
             """, [.int(Self.ms(now))] + Self.kindArgs(kinds) + [.text(FacetKind.dataDetection.rawValue)])
-        return rows.first.map(Self.task)
+        return rows.first.map(Self.decodeTask)
+    }
+
+    /// The capture's row for `kind`, whatever its status. Nil if there is none.
+    public func task(captureID: String, kind: FacetKind) throws -> EnrichmentTask? {
+        try db.query("SELECT * FROM enrichment_tasks WHERE capture_id = ? AND kind = ?",
+                     [.text(captureID), .text(kind.rawValue)]).first.map(Self.decodeTask)
     }
 
     /// Records the outcome of an attempt. `incrementAttempts` is false for attempts that don't count
@@ -109,7 +115,7 @@ public final class EnrichmentTaskStore: Sendable {
 
     private static func ms(_ d: Date) -> Int64 { Int64((d.timeIntervalSince1970 * 1000).rounded()) }
 
-    private static func task(_ r: Row) -> EnrichmentTask {
+    private static func decodeTask(_ r: Row) -> EnrichmentTask {
         EnrichmentTask(captureID: r.string("capture_id") ?? "", kind: FacetKind(rawValue: r.string("kind") ?? ""),
                        version: Int(r.int("version") ?? 0), status: r.string("status") ?? "",
                        attemptCount: Int(r.int("attempt_count") ?? 0), nextAttemptAt: r.date("next_attempt_at_ms"),
