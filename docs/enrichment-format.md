@@ -127,6 +127,7 @@ The phone skips (and records a diagnostics code for) gold that exceeds these, so
 
 - `enrichment.json` at most 1,048,576 bytes (1 MiB).
 - Each asset at most 5,242,880 bytes (5 MiB).
-- A pull applies at most 200 changed files per pass (soft: it stops fetching new pages once it reaches 200; the rest follow on the next pass).
+- Each document references at most 32 distinct assets, declaring at most 52,428,800 bytes (50 MiB) in total. A document over either is skipped (`gold_too_large`) before any of its assets is downloaded.
+- A pull handles about 200 changed files per pass, and each asset it downloads counts as one. The limit is soft: the pull stops fetching new pages once it reaches 200, and the rest follow on the next pass.
 - Only assets referenced from `enrichment.json` are fetched, and only after their size and hash are checked.
 - Gold for a capture the phone does not hold is ignored.

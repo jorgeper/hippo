@@ -67,11 +67,34 @@ private struct Setup {
         return d
     }
 
-    func puller(_ adapter: (any StorageAdapter)? = nil) -> GoldPuller {
+    func puller(_ adapter: (any StorageAdapter)? = nil, softChangeLimit: Int = 200) -> GoldPuller {
         let a: any StorageAdapter = adapter ?? h.adapter
         let clock = h.clock
         return GoldPuller(layout: h.layout, index: h.index, destinations: h.destinations, enrichments: enrichments,
-                          adapterFor: { _ in a }, now: { clock.now })
+                          adapterFor: { _ in a }, softChangeLimit: softChangeLimit, now: { clock.now })
+    }
+
+    /// A server document referencing `count` distinct assets, each declared at `declaredBytes` (the real
+    /// bytes when nil); writes the document and, when `writeAssets`, the asset files.
+    @discardableResult
+    func putManyAssetGold(count: Int, declaredBytes: Int64? = nil, writeAssets: Bool = true) throws -> EnrichmentDocument {
+        var refs: [JSONValue] = []
+        for i in 0..<count {
+            let bytes = Data("asset-\(i)".utf8)
+            let path = "assets/\(hex(bytes)).jpg"
+            refs.append(.object(["relative_path": .string(path), "sha256": .string(hex(bytes)),
+                                 "byte_count": .number(Double(declaredBytes ?? Int64(bytes.count)))]))
+            if writeAssets { try put(bytes, at: remoteDir() + "/" + path) }
+        }
+        let facet = Facet(version: 1, status: .ok, generatedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                          provenance: "gold", data: .object(["text": .string("walrus"), "thumbs": .array(refs)]))
+        let d = EnrichmentDocument(schemaVersion: 1, captureID: id, layer: .server,
+                                   packageDigest: try #require(try h.index.packageDigest(captureID: id)),
+                                   producer: EnrichmentProducer(name: "server", version: "1", build: "1"),
+                                   generatedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                                   facets: [FacetKind.summary.rawValue: facet])
+        try put(try EnrichmentJSON.encode(d), at: remoteDir() + "/enrichment.json")
+        return d
     }
 
     var cursor: String? { try? enrichments.goldCursor(destinationID: "dest-fs") }
@@ -171,6 +194,60 @@ private struct Setup {
         let s = try await Setup(); defer { s.h.cleanup() }
         try s.put(Data(count: 1_048_577), at: s.remoteDir() + "/enrichment.json")
         s.expectSkipped(await s.puller().pull(), code: "gold_too_large")
+    }
+
+    @Test func goldWithMaxAssetsApplies() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.putManyAssetGold(count: 32)
+        let r = await s.puller().pull()
+        #expect(r.applied == 1)
+        #expect(r.code == nil)
+    }
+
+    @Test func goldWithTooManyAssetsSkippedBeforeAnyDownload() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.putManyAssetGold(count: 33)
+        let downloads = Downloads()
+        let adapter = HookedAdapter(inner: s.h.adapter, beforeDownload: { if $0.contains("/assets/") { downloads.add($0) } })
+        s.expectSkipped(await s.puller(adapter).pull(), code: "gold_too_large")
+        #expect(downloads.count == 0)
+    }
+
+    @Test func goldOverTotalAssetBytesSkippedBeforeAnyDownload() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        // Each asset is within the 5 MiB per-asset cap; together they declare 55 MiB.
+        try s.putManyAssetGold(count: 11, declaredBytes: 5_242_880, writeAssets: false)
+        let downloads = Downloads()
+        let adapter = HookedAdapter(inner: s.h.adapter, beforeDownload: { if $0.contains("/assets/") { downloads.add($0) } })
+        s.expectSkipped(await s.puller(adapter).pull(), code: "gold_too_large")
+        #expect(downloads.count == 0)
+    }
+
+    @Test func goldAtTotalAssetBytesCapIsNotTooLarge() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        // Exactly 50 MiB declared passes the size check (and then fails verification, as the bytes differ).
+        try s.putManyAssetGold(count: 10, declaredBytes: 5_242_880)
+        s.expectSkipped(await s.puller().pull(), code: "gold_asset_invalid")
+    }
+
+    @Test func assetDownloadsCountTowardTheSoftChangeLimit() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.putManyAssetGold(count: 5)
+        let lists = Downloads()
+        let adapter = MorePagesAdapter(inner: s.h.adapter, lists: lists)
+
+        // Six listed changes (the document and its five assets) plus five downloads reach a limit of 7:
+        // no further page is listed. The changes alone would not.
+        let r = await s.puller(adapter, softChangeLimit: 7).pull()
+        #expect(r.applied == 1)
+        #expect(lists.count == 1)
+
+        // Below the limit (two changes plus one download, limit 4), the next page is listed.
+        let s2 = try await Setup(); defer { s2.h.cleanup() }
+        try s2.putGold()
+        let lists2 = Downloads()
+        _ = await s2.puller(MorePagesAdapter(inner: s2.h.adapter, lists: lists2), softChangeLimit: 4).pull()
+        #expect(lists2.count == 2)
     }
 
     @Test func goldWrongCaptureSkipped() async throws {
@@ -357,5 +434,35 @@ private struct Setup {
         let r = await s.puller(adapter).pull()
         #expect(r.skipped == 1)
         #expect(!s.localDirExists())
+    }
+}
+
+/// Says the first page has more after it, so the puller decides whether to list again.
+private struct MorePagesAdapter: StorageAdapter {
+    let inner: FilesystemAdapter
+    let lists: Downloads
+
+    var capabilities: StorageCapabilities { inner.capabilities }
+    func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
+        lists.add(prefix)
+        let page = try await inner.listChanges(under: prefix, cursor: cursor)
+        return ChangePage(changes: page.changes, cursor: page.cursor, hasMore: cursor == nil)
+    }
+    func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
+        try await inner.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
+    }
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
+        try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes)
+    }
+    func validateDestination() async throws { try await inner.validateDestination() }
+    func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }
+    func inspectFile(relativePath: String) async throws -> RemoteFileInfo? { try await inner.inspectFile(relativePath: relativePath) }
+    func verify(remote: RemoteFileInfo, localURL: URL, expected: FileIntegrity) async throws -> VerificationEvidence? {
+        try await inner.verify(remote: remote, localURL: localURL, expected: expected)
+    }
+    func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
+                    saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt {
+        try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
+                                   checkpoint: checkpoint, saveCheckpoint: saveCheckpoint)
     }
 }

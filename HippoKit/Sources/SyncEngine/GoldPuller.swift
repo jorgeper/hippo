@@ -27,7 +27,13 @@ public final class GoldPuller: Sendable {
     public static let prefix = "enrichments/server/"
     public let maxDocumentBytes: Int64 = 1_048_576
     public let maxAssetBytes: Int64 = 5_242_880
-    public let softChangeLimit = 200
+    /// Changes processed per pass before the puller stops listing new pages (soft: the page in hand is
+    /// finished). Each asset downloaded counts as one change.
+    public let softChangeLimit: Int
+    /// Per document, at most this many referenced assets and this many declared asset bytes in total;
+    /// a document over either is skipped (`gold_too_large`) before any asset is downloaded.
+    public let maxAssetsPerDocument = 32
+    public let maxDocumentAssetBytes: Int64 = 52_428_800
 
     private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "enrichment")
 
@@ -40,7 +46,8 @@ public final class GoldPuller: Sendable {
 
     public init(layout: StoreLayout, index: CaptureIndex, destinations: DestinationStore, enrichments: EnrichmentStore,
                 adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
-                now: @escaping @Sendable () -> Date = Date.init) {
+                softChangeLimit: Int = 200, now: @escaping @Sendable () -> Date = Date.init) {
+        self.softChangeLimit = softChangeLimit
         self.layout = layout
         self.index = index
         self.destinations = destinations
@@ -81,7 +88,8 @@ public final class GoldPuller: Sendable {
                 for change in page.changes {
                     try Task.checkCancellation()
                     processed += 1
-                    if let code = try await handle(change, adapter: adapter, staging: staging, result: &result, seen: &seen) {
+                    if let code = try await handle(change, adapter: adapter, staging: staging, result: &result, seen: &seen,
+                                                   downloads: &processed) {
                         itemCode = code
                     }
                 }
@@ -128,8 +136,9 @@ public final class GoldPuller: Sendable {
     }
 
     /// Applies one change. Returns a code when the change was skipped or applied with a mismatch.
+    /// Each asset downloaded adds one to `downloads` (the pass's processed count).
     private func handle(_ change: RemoteChange, adapter: any StorageAdapter, staging: URL,
-                        result: inout GoldPullResult, seen: inout Seen) async throws -> String? {
+                        result: inout GoldPullResult, seen: inout Seen, downloads: inout Int) async throws -> String? {
         switch change {
         case .deleted(let path):
             guard let parsed = try target(path), parsed.file == .document else {
@@ -172,7 +181,8 @@ public final class GoldPuller: Sendable {
             let work = staging.appendingPathComponent(UUID().uuidString, isDirectory: true)
             defer { try? FileManager.default.removeItem(at: work) }
             do {
-                let code = try await apply(documentInfo, parsed: parsed, adapter: adapter, work: work)
+                let code = try await apply(documentInfo, parsed: parsed, adapter: adapter, work: work,
+                                           downloads: &downloads)
                 result.applied += 1
                 return code
             } catch let skip as Skip {
@@ -188,7 +198,7 @@ public final class GoldPuller: Sendable {
     }
 
     private func apply(_ info: RemoteFileInfo, parsed: RemoteEnrichmentPath, adapter: any StorageAdapter,
-                       work: URL) async throws -> String? {
+                       work: URL, downloads: inout Int) async throws -> String? {
         guard info.byteCount <= maxDocumentBytes else { throw Skip(code: "gold_too_large") }
         let fm = FileManager.default
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
@@ -211,14 +221,21 @@ public final class GoldPuller: Sendable {
         }
         guard document.captureID == parsed.captureID, document.layer == .server else { throw Skip(code: "gold_mismatch") }
 
+        // Bounded before anything is fetched: one document can't make the phone download without limit.
+        let assets = document.referencedAssets()
+        guard assets.count <= maxAssetsPerDocument,
+              assets.reduce(Int64(0), { $0 + max($1.byteCount, 0) }) <= maxDocumentAssetBytes
+        else { throw Skip(code: "gold_too_large") }
+
         var newAssets: [String: URL] = [:]
-        for asset in document.referencedAssets() {
+        for asset in assets {
             try Task.checkCancellation()
             guard EnrichmentPaths.isValidAssetPath(asset.relativePath), asset.byteCount >= 0,
                   asset.byteCount <= maxAssetBytes else { throw Skip(code: "gold_asset_invalid") }
             if localAssetMatches(asset, captureID: document.captureID) { continue }
             let local = work.appendingPathComponent(asset.relativePath)
             try fm.createDirectory(at: local.deletingLastPathComponent(), withIntermediateDirectories: true)
+            downloads += 1
             do {
                 _ = try await adapter.downloadFile(relativePath: parsed.directory + "/" + asset.relativePath, to: local,
                                                    maxBytes: maxAssetBytes)
