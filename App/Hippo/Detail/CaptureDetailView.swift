@@ -73,7 +73,6 @@ struct CaptureDetailView: View {
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .layerStripe(.bronze, shown: showsStripes)
                 }
                 if let comment = detail.comment {
                     Section("Your comment") {

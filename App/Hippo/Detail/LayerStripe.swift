@@ -14,19 +14,19 @@ extension Layer {
 }
 
 extension View {
-    /// A 3 pt full-height bar inset at the cell's leading edge, by where the content came from.
-    /// Decorative: every fact it marks is also stated in words (Status).
+    /// A 3 pt full-height bar just inside the cell's leading edge, by where the content came from.
+    /// Drawn as the row background (normal grouped-cell colour plus the bar), so it spans the whole
+    /// cell, leaves no gaps between rows and never moves the content. Apply it on each row view.
+    /// With `shown` false the row keeps the system background. Decorative: `accessibilityHidden`.
     @ViewBuilder
     func layerStripe(_ layer: Layer, shown: Bool) -> some View {
         if shown {
-            self
-                .padding(.leading, 8)
-                .overlay(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(layer.stripeColor)
-                        .frame(width: 3)
-                        .accessibilityHidden(true)
+            self.listRowBackground(
+                ZStack(alignment: .leading) {
+                    Color(.secondarySystemGroupedBackground)
+                    layer.stripeColor.frame(width: 3).padding(.leading, 6)
                 }
+                .accessibilityHidden(true))
         } else {
             self
         }

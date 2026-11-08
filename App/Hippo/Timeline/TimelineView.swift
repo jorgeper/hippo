@@ -92,8 +92,9 @@ struct TimelineView: View {
                 guard taskReload == nil else { return }
                 taskReload = Task {
                     try? await Task.sleep(for: .milliseconds(500))
+                    if Task.isCancelled { return }
                     taskReload = nil
-                    if !Task.isCancelled { await model.reload() }
+                    await model.reload()
                 }
             }
             .onDisappear { taskReload?.cancel(); taskReload = nil }
