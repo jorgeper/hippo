@@ -269,5 +269,17 @@ import CaptureCore
         }
     }
 
+    // "Weds" is read as Wednesday by the detector but is not a prefix of "wednesday"; it must still re-anchor as a weekday.
+    @Test func wedsAbbreviationFollowsDetector() {
+        for capWeekday in 1...7 {
+            let cap = recentNoon(weekday: capWeekday)
+            let expected = expectedWeekday("dinner %@ at 7", 4, capturedOn: cap)
+            #expect(expected != nil)
+            let actual = DataDetectionEnricher.detect(in: "dinner Weds at 7", source: "s", anchor: DateAnchor(day: ymd(cap)))
+                .first { $0.type == "date" }?.value
+            #expect(actual == expected, "Weds captured on \(Self.weekdayNames[capWeekday - 1])")
+        }
+    }
+
     @Test func versionIsThree() { #expect(DataDetectionEnricher().version == 3) }
 }
