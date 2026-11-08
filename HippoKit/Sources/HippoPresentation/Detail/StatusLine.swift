@@ -1,7 +1,7 @@
 import Foundation
 import CaptureCore
 
-public enum StatusState: Equatable, Sendable { case done, working, waiting, failed }
+public enum StatusState: Equatable, Sendable { case done, working, waiting, failed, off }
 
 /// One plain line of Detail's Status section, with its stripe layer (design §6.1).
 public struct StatusLine: Equatable, Sendable {
@@ -25,7 +25,7 @@ public struct StatusLine: Equatable, Sendable {
             switch step {
             case .done: (text, state) = ("\(name): done", .done)
             case .nothingFound: (text, state) = ("\(name): nothing found", .done)
-            case .off: (text, state) = ("\(name): off in Settings", .done)
+            case .off: (text, state) = ("\(name): off in Settings", .off)
             case .failed(let code):
                 let reason = code.flatMap(reasonText).map { " — \($0)" } ?? ""
                 (text, state) = ("\(name): couldn't \(verb(kind))\(reason)", .failed)

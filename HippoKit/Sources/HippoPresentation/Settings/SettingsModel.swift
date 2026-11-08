@@ -118,13 +118,19 @@ public final class SettingsModel {
     private func buildStatusSummary(unfinished: [EnrichmentTask]) -> String {
         let current = now()
         let settings = settings
-        var working = 0, waiting = 0, failed = 0
+        var working = 0, offline = 0, retry = 0, failed = 0
         for (_, tasks) in Dictionary(grouping: unfinished, by: \.captureID) {
             let steps = EnrichmentProgress.steps(tasks, isEnabled: { settings.isEnrichmentEnabled($0) },
                                                  isOnline: isOnline(), now: current)
             switch EnrichmentProgress.row(steps) {
             case .working: working += 1
-            case .waiting: waiting += 1
+            case .waiting:
+                let isOffline = steps.contains { key, state in
+                    if state == .waiting(code: "offline") { return true }
+                    if case .waitingForInput(let input) = state { return steps[input] == .waiting(code: "offline") }
+                    return false
+                }
+                if isOffline { offline += 1 } else { retry += 1 }
             case .none: break
             }
             if steps.values.contains(where: { if case .failed = $0 { true } else { false } }) { failed += 1 }
@@ -140,7 +146,8 @@ public final class SettingsModel {
         }
         var parts = [head]
         if working > 0 { parts.append("\(working) being processed") }
-        if waiting > 0 { parts.append("\(waiting) waiting for a connection") }
+        if offline > 0 { parts.append("\(offline) waiting for a connection") }
+        if retry > 0 { parts.append("\(retry) waiting to retry") }
         if failed > 0 { parts.append("\(failed) couldn't be processed") }
         return parts.joined(separator: " · ")
     }

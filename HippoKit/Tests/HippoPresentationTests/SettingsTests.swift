@@ -24,7 +24,7 @@ private struct Harness {
     let model: SettingsModel
 
     init(faults: FaultPlan = FaultPlan(), adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil,
-         permission: @escaping () async -> Bool = { true },
+         permission: @escaping () async -> Bool = { true }, online: Bool = true,
          onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) throws {
         t = try TestStore()
         remote = t.base.appendingPathComponent("Remote", isDirectory: true)
@@ -38,7 +38,7 @@ private struct Harness {
                                       settings: settings)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
                               requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled,
-                              now: { Date(timeIntervalSince1970: 1_800_000_000) }, locale: Locale(identifier: "en_US"))
+                              isOnline: { online }, now: { Date(timeIntervalSince1970: 1_800_000_000) }, locale: Locale(identifier: "en_US"))
     }
 
     func cleanup() {
@@ -113,19 +113,22 @@ struct SettingsTests {
     }
 
     @Test func statusSummaryCounts() async throws {
-        let h = try Harness(); defer { h.cleanup() }
+        let h = try Harness(online: false); defer { h.cleanup() }
         let at = Date(timeIntervalSince1970: 1_800_000_000)
         var ids: [String] = []
-        for n in 0..<4 { ids.append(try await h.t.note("n\(n)", at: at.addingTimeInterval(Double(n))).metadata.captureID) }
+        for n in 0..<5 { ids.append(try await h.t.note("n\(n)", at: at.addingTimeInterval(Double(n))).metadata.captureID) }
         let tasks = h.t.store.enrichmentTasks
         for id in ids.prefix(2) { try tasks.set(captureID: id, kind: .dataDetection, version: 1, status: "pending", now: at) }
+        // Offline: a due network row with no stored code or retry time.
         try tasks.set(captureID: ids[2], kind: .linkPreview, version: 1, status: "pending", now: at)
-        try tasks.recordAttempt(captureID: ids[2], kind: .linkPreview, status: "pending", errorCode: "offline",
-                                nextAttemptAt: at.addingTimeInterval(300), incrementAttempts: false, now: at)
-        try tasks.set(captureID: ids[3], kind: .transcript, version: 1, status: "failed", now: at)
+        // Deferred for another reason.
+        try tasks.set(captureID: ids[3], kind: .place, version: 1, status: "pending", now: at)
+        try tasks.recordAttempt(captureID: ids[3], kind: .place, status: "pending", errorCode: "throttled",
+                                nextAttemptAt: at.addingTimeInterval(300), incrementAttempts: true, now: at)
+        try tasks.set(captureID: ids[4], kind: .transcript, version: 1, status: "failed", now: at)
         h.settings.recordSync(at: at.addingTimeInterval(-120), failed: false)
         await h.model.refresh()
-        #expect(h.model.statusSummary == "Last sync 2 minutes ago · 2 being processed · 1 waiting for a connection · 1 couldn't be processed")
+        #expect(h.model.statusSummary == "Last sync 2 minutes ago · 2 being processed · 1 waiting for a connection · 1 waiting to retry · 1 couldn't be processed")
         h.settings.recordSync(at: at.addingTimeInterval(-120), failed: true)
         await h.model.refresh()
         #expect(h.model.statusSummary?.hasPrefix("Last sync 2 minutes ago didn't finish · 2 being processed") == true)

@@ -112,7 +112,7 @@ private func steps(_ tasks: [EnrichmentTask], off: Set<FacetKind> = [], online: 
             "App guess: done"])
         #expect(lines.map(\.layer) == [.bronze, .silver, .gold, .silver, .silver, .silver, .gold])
         #expect(lines.last?.text == "From your server · \(DetailFormat.dateTime(arrived, zone: la, locale: locale))")
-        #expect(lines.map(\.state) == [.done, .done, .done, .working, .done, .done, .done])
+        #expect(lines.map(\.state) == [.done, .done, .done, .working, .off, .done, .done])
     }
 
     @Test func statusFailedReason() {
