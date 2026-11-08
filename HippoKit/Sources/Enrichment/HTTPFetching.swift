@@ -9,7 +9,11 @@ public protocol HTTPFetching: Sendable {
 /// URLSession-backed fetcher: ephemeral session, no cookies, no credentials, and redirects only to links the
 /// fetch policy would allow.
 public struct URLSessionHTTPFetcher: HTTPFetching {
-    public init() {}
+    private let baseConfiguration: URLSessionConfiguration?
+
+    public init() { baseConfiguration = nil }
+    /// Tests pass a configuration carrying a stub `URLProtocol`.
+    init(configuration: URLSessionConfiguration) { baseConfiguration = configuration }
 
     private final class RedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -21,7 +25,7 @@ public struct URLSessionHTTPFetcher: HTTPFetching {
     }
 
     public func get(_ url: URL, timeout: TimeInterval, maxBytes: Int) async throws -> Data {
-        let config = URLSessionConfiguration.ephemeral
+        let config = baseConfiguration ?? URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
@@ -57,11 +61,11 @@ public struct URLSessionHTTPFetcher: HTTPFetching {
             switch error.code {
             case .cancelled: throw CancellationError()
             case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff,
-                 .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+                 .callIsActive:
                 throw EnrichmentError.deferred(code: "offline", retryAfter: 60)
             case .timedOut: throw EnrichmentError.transient(code: "timeout")
             case .badURL, .unsupportedURL, .userCancelledAuthentication: throw EnrichmentError.permanent(code: "bad_url")
-            default: throw EnrichmentError.transient(code: "network")
+            default: throw EnrichmentError.transient(code: "network")   // includes unreachable or unknown hosts
             }
         }
     }

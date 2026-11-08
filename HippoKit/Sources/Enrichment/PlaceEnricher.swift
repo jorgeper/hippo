@@ -43,7 +43,7 @@ public struct PlaceEnricher: Enricher {
     private func targets(_ m: CaptureMetadata) -> [Target] {
         var out: [Target] = []
         if let l = m.captureLocation {
-            out.append(Target(id: "capture", lat: l.latitude, lon: l.longitude, poi: l.horizontalAccuracyMeters <= Self.poiRadius))
+            out.append(Target(id: "capture", lat: l.latitude, lon: l.longitude, poi: l.horizontalAccuracyMeters >= 0 && l.horizontalAccuracyMeters <= Self.poiRadius))
         }
         for a in m.attachments {
             if let l = a.media?.embeddedLocation { out.append(Target(id: a.attachmentID, lat: l.latitude, lon: l.longitude, poi: false)) }
@@ -59,31 +59,35 @@ public struct PlaceEnricher: Enricher {
         var failures: [EnrichmentError] = []
         for t in targets {
             try Task.checkCancellation()
+            let area: PlaceArea?
             do {
                 let key = "\((t.lat * 10_000).rounded())|\((t.lon * 10_000).rounded())"
-                let area: PlaceArea?
                 if let cached = await cache.get(key) { area = cached } else {
                     area = try await lookup.area(latitude: t.lat, longitude: t.lon)
                     await cache.set(key, area)
                 }
-                var nearby: NearbyPlace?
-                if t.poi {
-                    // A failed POI lookup keeps the area: "near X" is a nicety.
-                    do {
-                        let p = try await lookup.nearestPointOfInterest(latitude: t.lat, longitude: t.lon, radiusMeters: Self.poiRadius)
-                        if let p, p.distanceMeters <= Self.poiRadius { nearby = p }
-                    } catch is CancellationError { throw CancellationError() } catch {}
-                }
-                if area == nil && nearby == nil { continue }
-                items.append(PlaceItem(target: t.id, subLocality: area?.subLocality, locality: area?.locality,
-                                       region: area?.region, country: area?.country, nearby: nearby))
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as EnrichmentError {
-                failures.append(error)
+                failures.append(error); continue
             } catch {
-                failures.append(.transient(code: "place_failed"))
+                failures.append(.transient(code: "place_failed")); continue
             }
+            var nearby: NearbyPlace?
+            if t.poi {
+                do {
+                    let p = try await lookup.nearestPointOfInterest(latitude: t.lat, longitude: t.lon, radiusMeters: Self.poiRadius)
+                    if let p, p.distanceMeters <= Self.poiRadius { nearby = p }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let error as EnrichmentError {
+                    // Not now: defer the whole pass so "near X" is not lost for good. Other errors keep the area.
+                    if case .deferred = error { throw error }
+                } catch {}
+            }
+            if area == nil && nearby == nil { continue }
+            items.append(PlaceItem(target: t.id, subLocality: area?.subLocality, locality: area?.locality,
+                                   region: area?.region, country: area?.country, nearby: nearby))
         }
         if !targets.isEmpty, failures.count == targets.count {
             if let first = failures.first, failures.allSatisfy({ if case .deferred = $0 { true } else { false } }) { throw first }

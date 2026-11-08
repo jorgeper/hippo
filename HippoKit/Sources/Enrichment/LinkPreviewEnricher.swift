@@ -7,8 +7,12 @@ public struct LinkMetadata: Sendable {
     public var siteName: String?
     public var summary: String?
     public var imageData: Data?
-    public init(title: String? = nil, siteName: String? = nil, summary: String? = nil, imageData: Data? = nil) {
+    /// Where the fetch ended up after redirects. A final URL the policy would skip discards the preview.
+    public var finalURL: URL?
+    public init(title: String? = nil, siteName: String? = nil, summary: String? = nil, imageData: Data? = nil,
+                finalURL: URL? = nil) {
         self.title = title; self.siteName = siteName; self.summary = summary; self.imageData = imageData
+        self.finalURL = finalURL
     }
 }
 
@@ -45,6 +49,9 @@ public struct LinkPreviewEnricher: Enricher {
         var attempted = 0
         var failures: [EnrichmentError] = []
         let stagingDir = tempDirectory.appendingPathComponent("tmp-\(UUID().uuidString)")
+        // Staged files belong to the runner only after a successful return; any throw removes them.
+        var succeeded = false
+        defer { if !succeeded { try? FileManager.default.removeItem(at: stagingDir) } }
 
         func store(_ jpeg: Data) throws -> AssetRef {
             let sha = SHA256.hash(data: jpeg).map { String(format: "%02x", $0) }.joined()
@@ -81,6 +88,7 @@ public struct LinkPreviewEnricher: Enricher {
                                                  channel: parsed.channel, thumbnail: thumb))
                 case .fetch:
                     let md = try await metadata.metadata(for: url, timeout: Self.timeout)
+                    if let final = md.finalURL, case .skip = LinkFetchPolicy.decide(final) { continue }
                     var thumb: AssetRef?
                     if let data = md.imageData, let jpeg = try? ThumbnailEncoder.jpeg(from: data) { thumb = try store(jpeg) }
                     let site = Self.clean(md.siteName) ?? Self.siteName(from: url)
@@ -103,7 +111,11 @@ public struct LinkPreviewEnricher: Enricher {
             if let first = failures.first, failures.allSatisfy({ if case .deferred = $0 { true } else { false } }) { throw first }
             throw failures[0]
         }
-        if items.isEmpty { return EnricherOutput(status: .empty, data: nil, provenance: "link_presentation") }
+        succeeded = true
+        if items.isEmpty {
+            try? FileManager.default.removeItem(at: stagingDir)
+            return EnricherOutput(status: .empty, data: nil, provenance: "link_presentation")
+        }
         return EnricherOutput(status: .ok, data: try .payload(LinkPreviewData(items: items)),
                               provenance: allOEmbed ? "oembed" : "link_presentation", newAssets: assets)
     }

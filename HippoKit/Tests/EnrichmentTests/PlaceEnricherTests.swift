@@ -8,6 +8,7 @@ private final class FakeLookup: PlaceLookup, @unchecked Sendable {
     private var _areaCalls = 0, _poiCalls = 0, _radius: [Double] = []
     var poi: NearbyPlace?
     var areaError: (any Error)?
+    var poiError: (any Error)?
     init(poi: NearbyPlace? = nil) { self.poi = poi }
     var areaCalls: Int { lock.withLock { _areaCalls } }
     var poiCalls: Int { lock.withLock { _poiCalls } }
@@ -19,6 +20,7 @@ private final class FakeLookup: PlaceLookup, @unchecked Sendable {
     }
     func nearestPointOfInterest(latitude: Double, longitude: Double, radiusMeters: Double) async throws -> NearbyPlace? {
         lock.withLock { _poiCalls += 1; _radius.append(radiusMeters) }
+        if let poiError { throw poiError }
         return poi
     }
 }
@@ -90,5 +92,26 @@ private func items(_ out: EnricherOutput) throws -> [PlaceItem] {
         await #expect(throws: EnrichmentError.deferred(code: "offline", retryAfter: 60)) {
             _ = try await PlaceEnricher(lookup: lookup).run(fixtureInput(meta(accuracy: 10)))
         }
+    }
+
+    @Test func poiDeferredDefersWholePass() async throws {
+        let lookup = FakeLookup(); lookup.poiError = EnrichmentError.deferred(code: "offline", retryAfter: 60)
+        await #expect(throws: EnrichmentError.deferred(code: "offline", retryAfter: 60)) {
+            _ = try await PlaceEnricher(lookup: lookup).run(fixtureInput(meta(accuracy: 10)))
+        }
+    }
+
+    @Test func poiOtherErrorKeepsArea() async throws {
+        let lookup = FakeLookup(); lookup.poiError = EnrichmentError.transient(code: "x")
+        let out = try await PlaceEnricher(lookup: lookup).run(fixtureInput(meta(accuracy: 10)))
+        let item = try #require(try items(out).first)
+        #expect(item.locality == "San Francisco"); #expect(item.nearby == nil)
+    }
+
+    @Test func negativeAccuracyMeansNoPOI() async throws {
+        let lookup = FakeLookup(poi: NearbyPlace(name: "Cafe", distanceMeters: 5))
+        let out = try await PlaceEnricher(lookup: lookup).run(fixtureInput(meta(accuracy: -1)))
+        #expect(try items(out).first?.nearby == nil)
+        #expect(lookup.poiCalls == 0)
     }
 }

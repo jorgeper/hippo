@@ -66,6 +66,19 @@ private func longestSide(_ url: URL) -> Int {
         ("https://x.com/Verify/me", "single_use"),
         ("https://x.com/codes/list", "fetch"),
         ("https://x.com/a?keyword=1", "fetch"),
+        ("http://2130706433/", "private_host"),
+        ("http://127.1/", "private_host"),
+        ("http://0x7f.1/", "private_host"),
+        ("http://LOCALHOST./", "private_host"),
+        ("http://localhost./", "private_host"),
+        ("http://Printer.LOCAL/", "private_host"),
+        ("http://user:pw@localhost/", "private_host"),
+        ("HTTPS://EXAMPLE.com/a", "fetch"),
+        ("FTP://example.com/a", "scheme"),
+        ("https://x.com/a?%74oken=1", "single_use"),
+        ("https://x.com/a?TOKEN=1", "single_use"),
+        ("https://x.com/%75nsubscribe", "single_use"),
+        ("https://x.com/Account/LOGIN", "single_use"),
     ] as [(String, String)])
     func linkPolicyTable(_ urlString: String, _ expected: String) throws {
         let decision = LinkFetchPolicy.decide(try #require(URL(string: urlString)))
@@ -174,5 +187,39 @@ private func longestSide(_ url: URL) -> Int {
         let e = LinkPreviewEnricher(http: FakeHTTP { _ in Data() }, metadata: FakeMetadata(), tempDirectory: tempDir())
         #expect(!e.applies(to: fixtureMetadata()))
         #expect(e.applies(to: fixtureMetadata(urls: ["https://a.com"])))
+    }
+
+    @Test func stagingRemovedWhenLaterURLFails() async throws {
+        let jpeg = try MediaMaker.imageData(width: 400, height: 400)
+        let meta = FakeMetadata { u in
+            if u.host == "b.com" { throw CancellationError() }
+            return LinkMetadata(title: "t", imageData: jpeg)
+        }
+        let dir = tempDir(); try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let e = LinkPreviewEnricher(http: FakeHTTP { _ in Data() }, metadata: meta, tempDirectory: dir)
+        await #expect(throws: CancellationError.self) {
+            _ = try await e.run(fixtureInput(fixtureMetadata(urls: ["https://a.com/1", "https://b.com/2"])))
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty)
+    }
+
+    @Test func stagingKeptOnSuccess() async throws {
+        let jpeg = try MediaMaker.imageData(width: 400, height: 400)
+        let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let e = LinkPreviewEnricher(http: FakeHTTP { _ in Data() },
+                                    metadata: FakeMetadata { _ in LinkMetadata(title: "t", imageData: jpeg) }, tempDirectory: dir)
+        let out = try await e.run(fixtureInput(fixtureMetadata(urls: ["https://a.com/1"])))
+        #expect(FileManager.default.fileExists(atPath: try #require(out.newAssets.values.first).path))
+    }
+
+    @Test func finalURLSkippedDiscardsPreview() async throws {
+        let meta = FakeMetadata { u in
+            LinkMetadata(title: "t", finalURL: u.host == "a.com" ? URL(string: "https://a.com/reset?x=1") : u)
+        }
+        let e = LinkPreviewEnricher(http: FakeHTTP { _ in Data() }, metadata: meta, tempDirectory: tempDir())
+        let out = try await e.run(fixtureInput(fixtureMetadata(urls: ["https://a.com/1", "https://b.com/2"])))
+        let items = try decode(out).items
+        #expect(items.count == 1); #expect(items[0].url == "https://b.com/2")
     }
 }
