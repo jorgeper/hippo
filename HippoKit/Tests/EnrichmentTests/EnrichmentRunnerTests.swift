@@ -5,6 +5,7 @@ import LocalRepository
 import SyncEngine
 import Enrichment
 import FilesystemAdapter
+@testable import HippoPresentation
 
 private let t0 = RunnerHarness.t0
 
@@ -543,36 +544,89 @@ private let t0 = RunnerHarness.t0
         #expect(h.store.log.globalEvents(limit: 50, before: nil).filter { $0.event == .enrichScheduled }.isEmpty)
     }
 
-    @Test func noEventCarriesContent() async throws {
+    /// A provider whose destination is a local folder (`providerKind` "filesystem").
+    private struct FolderProvider: StorageProvider {
+        let kind = "filesystem"
+        let displayName = "Folder"
+        let root: URL
+        @MainActor func connect() async throws -> Destination {
+            Destination(id: "dest-fs", providerKind: kind, accountIdentifier: "local", remoteRoot: root.path,
+                        displayName: displayName, status: .active)
+        }
+        func makeAdapter(for d: Destination) throws -> any StorageAdapter { FilesystemAdapter(root: root) }
+        func signOut(_ d: Destination) async {}
+    }
+
+    @MainActor @Test func noEventCarriesContent() async throws {
         let h = try RunnerHarness(); defer { h.cleanup() }
         let remote = h.base.appendingPathComponent("Remote")
         try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
-        _ = try h.store.destinations.connect(Destination(id: "dest-fs", providerKind: "filesystem",
-                                                         accountIdentifier: "local", remoteRoot: "/",
-                                                         displayName: "Local folder", status: .active))
+        let provider = FolderProvider(root: remote)
+        _ = try h.store.destinations.connect(try await provider.connect())
         let id = try await h.store.capture(CaptureDraft(
             captureID: UUID(), startedAt: RunnerHarness.t0, timeZone: RunnerHarness.zone, method: .shareExtension,
             userNote: "SECRET-NOTE-TEXT", urls: [CapturedURL(url: "https://example.com/private", source: "shared")]))
             .metadata.captureID
         let directory = try #require(try h.store.index.relativeDirectory(captureID: id))
-        let runner = h.runner([FakeEnricher(kind: .dataDetection)])
+
+        // An enricher whose output carries the secrets.
+        let secret: JSONValue = .object(["items": .array([.string("SECRET-NOTE-TEXT")]),
+                                         "url": .string("https://example.com/private")])
+        let runner = h.runner([FakeEnricher(kind: .dataDetection, steps: [.output(FakeEnricher.ok(secret))])])
         try await runner.schedule()
         _ = await runner.runPending()
-        let adapter = FilesystemAdapter(root: remote)
-        _ = await h.store.makeWorker(adapterFor: { _ in adapter }, owner: "test").runOnce()
-        _ = await h.store.makeEnrichmentUploader(adapterFor: { _ in adapter }).runOnce()
-        _ = await h.store.makeGoldPuller(adapterFor: { _ in adapter }).pull()
 
+        // A gold document for the capture on the remote, with the secrets too.
+        let facet = Facet(version: 1, status: .ok, generatedAt: RunnerHarness.t0, provenance: "gold", data: secret)
+        let gold = EnrichmentDocument(
+            schemaVersion: 1, captureID: id, layer: .server,
+            packageDigest: try #require(try h.store.index.packageDigest(captureID: id)),
+            producer: EnrichmentProducer(name: "server", version: "1", build: "1"), generatedAt: RunnerHarness.t0,
+            facets: [FacetKind.summary.rawValue: facet])
+        let goldDir = remote.appendingPathComponent(
+            try EnrichmentPaths.remoteDirectory(.server, packageDirectory: directory))
+        try FileManager.default.createDirectory(at: goldDir, withIntermediateDirectories: true)
+        try EnrichmentJSON.encode(gold).write(to: goldDir.appendingPathComponent("enrichment.json"))
+
+        let registry = ProviderRegistry([provider])
+        let coordinator = SyncCoordinator(store: h.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0")
+        _ = await coordinator.syncNow(trigger: "launch")
+        let suite = "hippo-enrich-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let model = SettingsModel(store: h.store, registry: registry, coordinator: coordinator,
+                                  settings: AppSettings(defaults: UserDefaults(suiteName: suite)!),
+                                  requestLocationPermission: { true })
+        await model.setEnrichment(.transcript, on: false)
+
+        let mine = events(h, id)
+        let global = h.store.log.globalEvents(limit: 100, before: nil)
+        let names = Set(mine.map(\.event)).union(global.map(\.event))
+        #expect(names.isSuperset(of: [.captureSaved, .enrichQueued, .enrichStarted, .enrichFinished, .enrichScheduled,
+                                      .enrichPass, .packageUploaded, .silverUploaded, .goldApplied, .goldPull,
+                                      .syncPass, .settingsChanged]))
+        #expect(global.filter { $0.event == .syncPass }.allSatisfy { $0.trigger == "launch" })
         let files = h.store.log.segmentFiles()
         #expect(!files.isEmpty)
-        let names = Set(events(h, id).map(\.event))
-        #expect(names.isSuperset(of: [.captureSaved, .enrichQueued, .enrichFinished, .packageUploaded, .silverUploaded]))
         for file in files {
             let text = String(decoding: try Data(contentsOf: file), as: UTF8.self)
             #expect(!text.contains("SECRET"))
             #expect(!text.contains("example.com"))
             #expect(!text.contains(directory))
         }
+    }
+
+    @Test func passEndCodes() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        _ = try await h.note("one")
+        _ = try await h.note("two", minutes: 1)
+        let runner = h.runner([FakeEnricher(kind: .dataDetection)])
+        try await runner.schedule()
+        _ = await runner.runPending(maxTasks: 1)
+        _ = await runner.runPending()
+        _ = await runner.runPending()
+        let ends = h.store.log.globalEvents(limit: 20, before: nil)
+            .filter { $0.event == .enrichPass && $0.phase == "end" }.reversed()
+        #expect(ends.map(\.code) == ["max_tasks", "nothing_due", "idle"])
     }
 
 }
