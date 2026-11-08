@@ -34,23 +34,35 @@ whether work is still pending**, so "not done yet", "nothing to find" and "broke
    one capture: sync passes (start, end, result), background-task runs, gold pulls and cursor resets,
    enrichment passes (captures processed, early stops), switch changes and backfills.
 
+**Developer mode (decided 2026-11-08):** Activity and the global log sit behind a **Developer mode** switch in
+Settings, available in **release builds too** (not DEBUG-only like the Developer folder). Off by default *(my call)*.
+
+**Log storage (decided 2026-11-08):** Jorge: "stored somewhere in the phone along with the rest of the
+metadata, but clearly separable." So: on the phone, inside Hippo's store in the App Group container
+(`Library/Application Support/Hippo/`), but in its **own file or folder** (for example `logs/` or a separate
+`logs.sqlite`), not mixed into capture packages or the main `hippo.sqlite` tables, so it can be cleared,
+copied or exported on its own without touching captures. Exact layout is for the design.
+
 *(My calls, played back to Jorge without objection — confirm in the design):*
-- Activity and the global log sit behind a **Developer mode** switch in Settings, off by default.
 - Both logs have a **Copy** button so a log can be pasted into a Claude session.
 - Logs persist across app restarts, keep only the most recent entries (cap to be set in the design), and
   record outcomes and counts, **never** transcript, note or OCR text.
 
 ## Open questions for the design / builder check
 
-- Is Developer mode available in release builds, or DEBUG only? (The Developer folder destination is DEBUG only.)
-- Log storage: a table in the existing SQLite store (shared by app and share extension) vs a file; retention cap.
+- Log layout within its separate location (separate SQLite file vs JSON-lines files), retention cap, and
+  whether clearing logs is a Settings action.
+- Are logs ever synced to the destination (Dropbox / Developer folder), or phone-only? Not discussed; ask.
 - The share extension must write "captured/saved" events: cross-process writes to the shared store.
 - Which Detail rows/sections get which stripe when a field mixes layers (gold overrides silver per field).
 - Do stripes also appear on timeline rows, or Detail only?
 - Dark-mode colours for the stripes.
 - What the pending state looks like per kind (link preview, place, transcript, text in image, found items).
 
-## Candidates to fold in (not decided — ask Jorge)
+## Candidates to fold in (Jorge undecided 2026-11-08)
+
+Jorge is not sure about these. Next session: give a one-line cost/benefit for each and a recommendation
+(fold in, or leave for later), and let him pick.
 
 Open follow-ups from the enrichment phase (end of `docs/superpowers/plans/2026-11-07-hippo-enrichment.md`
 and the `hippo-enrichment-followups` memory):
