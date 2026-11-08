@@ -49,8 +49,9 @@ public final class CaptureDetailModel {
                 let names = Dictionary(uniqueKeysWithValues: try Set(jobs.map(\.destinationID)).map {
                     ($0, try store.destinations.destination(id: $0))
                 })
+                let enrichment = ResolvedEnrichment.load(store: store, captureID: id)
                 let detail = CaptureDetail.make(metadata: metadata, packageURL: url, noteBody: package.noteBody(),
-                                                jobs: jobs, destination: { names[$0] ?? nil }, now: now,
+                                                jobs: jobs, enrichment: enrichment, destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName)
                 return Loaded(detail: detail, prompt: prompt)

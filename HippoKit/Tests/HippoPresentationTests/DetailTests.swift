@@ -47,8 +47,9 @@ private let dropbox = Destination(id: "d1", providerKind: "dropbox", accountIden
 /// The system time format puts U+202F before AM/PM; tests compare with a plain space.
 private func plain(_ s: String?) -> String? { s?.replacingOccurrences(of: "\u{202F}", with: " ") }
 
-private func make(_ m: CaptureMetadata, body: String? = nil, jobs: [UploadJob] = []) -> CaptureDetail {
-    CaptureDetail.make(metadata: m, packageURL: pkg, noteBody: body, jobs: jobs,
+private func make(_ m: CaptureMetadata, body: String? = nil, jobs: [UploadJob] = [],
+                  enrichment: ResolvedEnrichment = .empty) -> CaptureDetail {
+    CaptureDetail.make(metadata: m, packageURL: pkg, noteBody: body, jobs: jobs, enrichment: enrichment,
                        destination: { $0 == "d1" ? dropbox : nil }, now: now, locale: locale, calendar: calendar)
 }
 
@@ -59,7 +60,68 @@ struct SyncCase: Sendable {
     }
 }
 
+private func resolved(places: [String: PlaceItem] = [:], detections: [Detection] = [], guess: String? = nil,
+                      server: Bool = false, transcripts: [String: TranscriptItem] = [:]) -> ResolvedEnrichment {
+    ResolvedEnrichment(links: [:], places: places, recognizedText: [:], transcripts: transcripts,
+                       detections: detections, sourceAppGuess: guess, summary: nil, tags: [], usesServer: server)
+}
+
 @Suite struct DetailTests {
+    @Test func detailWhereUsesPlace() {
+        let loc = CaptureLocation(latitude: 47.6, longitude: -122.3, horizontalAccuracyMeters: 10, observedAt: now, provenance: "t")
+        let place = PlaceItem(target: "capture", subLocality: "Capitol Hill", locality: "Seattle")
+        let d = make(meta(location: loc), enrichment: resolved(places: ["capture": place]))
+        let labels = d.captured.map(\.label)
+        #expect(labels == ["When", "How", "Where", "Coordinates"])
+        #expect(d.captured[2].value == "Capitol Hill, Seattle")
+        #expect(d.captured[3].value.contains("47.6"))
+        #expect(make(meta(location: loc)).captured.map(\.label) == ["When", "How", "Where"])
+    }
+
+    @Test func detailPhotoTakenIn() {
+        let facts = MediaFacts(embeddedCreatedAt: EmbeddedTimestamp(value: "2026-11-07T10:00:00-08:00", hasUTCOffset: true))
+        let place = PlaceItem(target: "a1", locality: "Lisbon", country: "Portugal")
+        let d = make(meta(attachments: [att(media: facts)]), enrichment: resolved(places: ["a1": place]))
+        #expect(d.attachments[0].last == DetailRow(label: "Taken in", value: "Lisbon, Portugal"))
+    }
+
+    @Test func detailSourceGuessRow() {
+        let d = make(meta(), enrichment: resolved(guess: "Safari"))
+        #expect(d.captured.map(\.label) == ["When", "How", "Source"])
+        #expect(d.captured[2].value == "Probably from Safari")
+    }
+
+    @Test func detailFoundActions() {
+        let dets = [
+            Detection(type: "phone", text: "(415) 555-0100", value: "+1 (415) 555-0100", source: "note"),
+            Detection(type: "address", text: "1 Main St", source: "note"),
+            Detection(type: "date", text: "tomorrow", value: "2026-11-08T09:00:00-08:00", source: "note"),
+            Detection(type: "date", text: "noon", value: "2026-11-08T12:00:00", source: "note"),
+            Detection(type: "link", text: "a.test", value: "https://a.test/", source: "note")]
+        let d = make(meta(urls: []), body: "hello", enrichment: resolved(detections: dets))
+        #expect(d.found.count == 5)
+        #expect(d.found[0].action == .call(URL(string: "tel:+14155550100")!))
+        #expect(d.found[1].action == .map(URL(string: "maps://?q=1%20Main%20St")!))
+        guard case .addToCalendar(let start, let title)? = d.found[2].action else { Issue.record("no date"); return }
+        #expect(start == DetailFormat.parseRFC3339("2026-11-08T09:00:00-08:00")!.date)
+        #expect(!title.isEmpty)
+        // No offset: wall clock in the capture zone (Los Angeles, UTC-8 in November).
+        guard case .addToCalendar(let wall, _)? = d.found[3].action else { Issue.record("no wall date"); return }
+        #expect(wall == DetailFormat.parseRFC3339("2026-11-08T12:00:00-08:00")!.date)
+        #expect(d.found[4].action == .open(URL(string: "https://a.test/")!))
+    }
+
+    @Test func detailServerNote() {
+        #expect(make(meta(), enrichment: resolved(server: true)).fromServerNote == "Some details come from your server.")
+        #expect(make(meta()).fromServerNote == nil)
+    }
+
+    @Test func detailTranscriptsTitled() {
+        let t = TranscriptItem(attachmentID: "a1", text: "hi there", locale: "en_US", segments: [])
+        let d = make(meta(attachments: [att(uti: "public.mpeg-4-audio")]), enrichment: resolved(transcripts: ["a1": t]))
+        #expect(d.transcripts == [TitledText(title: "Attachment 1", text: "hi there")])
+    }
+
     @Test func omitsMissingValues() {
         let d = make(meta(urls: ["https://example.com/x"]))
         #expect(d.captured.map(\.label) == ["When", "How"])

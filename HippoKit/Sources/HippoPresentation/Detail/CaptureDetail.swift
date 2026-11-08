@@ -3,6 +3,23 @@ import UniformTypeIdentifiers
 import CaptureCore
 import LocalRepository
 
+public struct TitledText: Equatable, Sendable {
+    public let title: String
+    public let text: String
+    public init(title: String, text: String) { self.title = title; self.text = text }
+}
+
+public enum FoundAction: Equatable, Sendable {
+    case call(URL), map(URL), addToCalendar(start: Date, title: String), open(URL)
+}
+
+public struct FoundItem: Equatable, Sendable {
+    public let kind: String
+    public let text: String
+    public let action: FoundAction?
+    public init(kind: String, text: String, action: FoundAction?) { self.kind = kind; self.text = text; self.action = action }
+}
+
 /// Everything the details screen shows for one capture. Missing values are omitted, never blank.
 public struct CaptureDetail: Equatable, Sendable {
     public var preview: PreviewKind
@@ -15,11 +32,18 @@ public struct CaptureDetail: Equatable, Sendable {
     public var sync: [SyncRow]
     /// Files offered through Share/Export: every attachment's file.
     public var exportURLs: [URL]
+    public var linkCards: [ResolvedLink]
+    public var transcripts: [TitledText]
+    public var recognizedText: [TitledText]
+    public var found: [FoundItem]
+    public var summary: String?
+    public var tags: [String]
+    public var fromServerNote: String?
 
     /// `now` is accepted for symmetry with the timeline; nothing here is relative to it, because
     /// ages are measured against the capture time. `calendar.timeZone` is the current zone.
     public static func make(metadata m: CaptureMetadata, packageURL: URL, noteBody: String?, jobs: [UploadJob],
-                            destination: (String) -> Destination?, now: Date, locale: Locale,
+                            enrichment: ResolvedEnrichment, destination: (String) -> Destination?, now: Date, locale: Locale,
                             calendar: Calendar) -> CaptureDetail {
         let files: [(Attachment, URL)] = m.attachments.compactMap { a in
             guard (try? PackagePath.validateRelative(a.relativePath)) != nil else { return nil }
@@ -32,15 +56,66 @@ public struct CaptureDetail: Equatable, Sendable {
             preview: preview(metadata: m, files: files, links: links, noteBody: noteBody),
             comment: nonEmpty(m.userNote), sharedTitle: nonEmpty(m.sharedTitle), sharedText: nonEmpty(m.sharedText),
             links: links,
-            captured: capturedRows(m, locale: locale, calendar: calendar),
-            attachments: m.attachments.enumerated().map { attachmentRows($1, number: $0 + 1, locale: locale) },
+            captured: capturedRows(m, enrichment: enrichment, locale: locale, calendar: calendar),
+            attachments: m.attachments.enumerated().map {
+                attachmentRows($1, number: $0 + 1, place: enrichment.places[$1.attachmentID], locale: locale)
+            },
             sync: sync,
-            exportURLs: files.map(\.1))
+            exportURLs: files.map(\.1),
+            linkCards: m.urls.compactMap { enrichment.links[$0.url] },
+            transcripts: titled(m, enrichment.transcripts.mapValues(\.text)),
+            recognizedText: titled(m, enrichment.recognizedText),
+            found: enrichment.detections.map { foundItem($0, metadata: m, noteBody: noteBody) },
+            summary: nonEmpty(enrichment.summary), tags: enrichment.tags,
+            fromServerNote: enrichment.usesServer ? "Some details come from your server." : nil)
     }
 
     private static func nonEmpty(_ s: String?) -> String? {
         guard let s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return s
+    }
+
+    // MARK: Enrichment
+
+    private static func titled(_ m: CaptureMetadata, _ texts: [String: String]) -> [TitledText] {
+        m.attachments.enumerated().compactMap { i, a in
+            guard let text = nonEmpty(texts[a.attachmentID]) else { return nil }
+            return TitledText(title: "Attachment \(i + 1)", text: text)
+        }
+    }
+
+    private static func foundItem(_ d: Detection, metadata m: CaptureMetadata, noteBody: String?) -> FoundItem {
+        var action: FoundAction?
+        switch d.type {
+        case "phone":
+            let number = (d.value ?? d.text).filter { $0.isASCII && ($0.isNumber || $0 == "+") }
+            if !number.isEmpty { action = URL(string: "tel:\(number)").map(FoundAction.call) }
+        case "address":
+            if let q = d.text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#?"))),
+               let url = URL(string: "maps://?q=\(q)") { action = .map(url) }
+        case "date":
+            if let start = date(from: d.value, zoneID: m.timezoneIdentifier, fallbackOffset: m.utcOffsetSeconds) {
+                action = .addToCalendar(start: start, title: DisplayTitle.make(m, noteBody: noteBody))
+            }
+        case "link":
+            if let url = URL(string: d.value ?? d.text) { action = .open(url) }
+        default: break
+        }
+        return FoundItem(kind: d.type, text: d.text, action: action)
+    }
+
+    /// A value with an offset is exact; one without is wall-clock in the capture's zone.
+    private static func date(from value: String?, zoneID: String, fallbackOffset: Int) -> Date? {
+        guard let value else { return nil }
+        if let parsed = DetailFormat.parseRFC3339(value) { return parsed.date }
+        guard let zone = TimeZone(identifier: zoneID) ?? TimeZone(secondsFromGMT: fallbackOffset),
+              let wall = DetailFormat.parseWallClock(value) else { return nil }
+        // `parseWallClock` reads in GMT; shift to the same wall-clock reading in the capture zone.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .gmt
+        let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: wall)
+        cal.timeZone = zone
+        return cal.date(from: c)
     }
 
     // MARK: Preview
@@ -65,7 +140,7 @@ public struct CaptureDetail: Equatable, Sendable {
 
     // MARK: Captured
 
-    private static func capturedRows(_ m: CaptureMetadata, locale: Locale, calendar: Calendar) -> [DetailRow] {
+    private static func capturedRows(_ m: CaptureMetadata, enrichment: ResolvedEnrichment, locale: Locale, calendar: Calendar) -> [DetailRow] {
         var rows: [DetailRow] = []
         let parsed = DetailFormat.parseRFC3339(m.localDatetime)
         let instant = parsed?.date ?? m.capturedAt
@@ -85,6 +160,9 @@ public struct CaptureDetail: Equatable, Sendable {
         default: nil
         }
         if let how { rows.append(DetailRow(label: "How", value: how)) }
+        if let app = nonEmpty(enrichment.sourceAppGuess) {
+            rows.append(DetailRow(label: "Source", value: "Probably from \(app)"))
+        }
         if let l = m.captureLocation {
             var value = DetailFormat.coordinates(latitude: l.latitude, longitude: l.longitude)
             if l.horizontalAccuracyMeters >= 0, let meters = Int(exactly: l.horizontalAccuracyMeters.rounded()) {
@@ -92,14 +170,19 @@ public struct CaptureDetail: Equatable, Sendable {
             }
             let age = m.capturedAt.timeIntervalSince(l.observedAt)
             if age >= 60 { value += " · \(DetailFormat.age(age)) before saving" }
-            rows.append(DetailRow(label: "Where", value: value))
+            if let line = enrichment.places["capture"].flatMap(PlaceText.line) {
+                rows.append(DetailRow(label: "Where", value: line))
+                rows.append(DetailRow(label: "Coordinates", value: value))
+            } else {
+                rows.append(DetailRow(label: "Where", value: value))
+            }
         }
         return rows
     }
 
     // MARK: Attachments
 
-    private static func attachmentRows(_ a: Attachment, number: Int, locale: Locale) -> [DetailRow] {
+    private static func attachmentRows(_ a: Attachment, number: Int, place: PlaceItem?, locale: Locale) -> [DetailRow] {
         var rows: [DetailRow] = []
         rows.append(DetailRow(label: "Name", value: nonEmpty(a.originalFilename) ?? "Attachment \(number)"))
         rows.append(DetailRow(label: "Type", value: nonEmpty(a.mimeType) ?? a.uti))
@@ -117,6 +200,7 @@ public struct CaptureDetail: Equatable, Sendable {
             rows.append(DetailRow(label: "Photo location",
                                   value: DetailFormat.coordinates(latitude: l.latitude, longitude: l.longitude)))
         }
+        if let place, let area = PlaceText.area(place) { rows.append(DetailRow(label: "Taken in", value: area)) }
         return rows
     }
 

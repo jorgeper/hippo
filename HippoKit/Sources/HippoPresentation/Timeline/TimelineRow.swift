@@ -18,13 +18,16 @@ public struct TimelineRow: Identifiable, Equatable, Sendable {
     /// Package-relative paths.
     public var thumbnailAttachmentPaths: [String]
     public var extraCount: Int
+    /// A file URL for a link's preview picture, when one has been fetched.
+    public var thumbnailURL: URL?
 
     /// `metadata` nil means the summary alone is used.
-    public static func make(_ s: CaptureSummary, metadata: CaptureMetadata?, locale: Locale) -> TimelineRow {
+    public static func make(_ s: CaptureSummary, metadata: CaptureMetadata?, enrichment: ResolvedEnrichment?,
+                                locale: Locale) -> TimelineRow {
         var row = TimelineRow(id: s.id, time: timeText(s, locale: locale), title: s.title, subtitle: nil,
                               comment: s.noteExcerpt, kind: .file, sync: SyncLabel(s.syncBucket),
                               relativeDirectory: s.relativeDirectory,
-                              thumbnailAttachmentPaths: [], extraCount: 0)
+                              thumbnailAttachmentPaths: [], extraCount: 0, thumbnailURL: nil)
         let hasAudio = s.contentTypes.contains(.audio)
         let hasVisual = s.contentTypes.contains(.image) || s.contentTypes.contains(.video)
         if s.attachmentCount >= 2 {
@@ -43,16 +46,41 @@ public struct TimelineRow: Identifiable, Equatable, Sendable {
             } else {
                 row.title = "Voice note"
             }
+            if let line = transcriptLine(metadata: metadata, enrichment: enrichment) { row.subtitle = line }
         } else if s.attachmentCount == 1 && hasVisual {
             row.kind = .media
             row.thumbnailAttachmentPaths = s.primaryAttachmentPath.map { [$0] } ?? []
         } else if s.attachmentCount == 0 && s.contentTypes.contains(.url) {
             row.kind = .link
-            row.subtitle = metadata?.urls.first.flatMap { host(of: $0.url) }
+            let first = metadata?.urls.first?.url
+            let link = first.flatMap { enrichment?.links[$0] }
+            if let title = nonEmpty(link?.title) { row.title = title }
+            row.subtitle = nonEmpty(link?.channel) ?? nonEmpty(link?.siteName) ?? first.flatMap { host(of: $0) }
+            row.thumbnailURL = link?.thumbnailURL
         } else if s.method == .typedNote {
             row.kind = .note
         }
         return row
+    }
+
+    private static func nonEmpty(_ s: String?) -> String? {
+        guard let s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return s
+    }
+
+    /// The first non-empty line of the first audio attachment's transcript, at most 80 characters.
+    private static func transcriptLine(metadata: CaptureMetadata?, enrichment: ResolvedEnrichment?) -> String? {
+        guard let metadata, let enrichment,
+              let audio = metadata.attachments.first(where: isAudio),
+              let text = enrichment.transcripts[audio.attachmentID]?.text else { return nil }
+        let line = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty }
+        return line.map { String($0.prefix(80)) }
+    }
+
+    private static func isAudio(_ a: Attachment) -> Bool {
+        if let type = UTType(a.uti) { return type.conforms(to: .audio) }
+        return a.mimeType?.hasPrefix("audio/") ?? false
     }
 
     private static func timeText(_ s: CaptureSummary, locale: Locale) -> String {
