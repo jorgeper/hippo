@@ -37,6 +37,12 @@ public struct ResolvedEnrichment: Equatable, Sendable {
                                                  detections: [], sourceAppGuess: nil, summary: nil, tags: [],
                                                  usesServer: false)
 
+    /// An empty or whitespace-only string counts as absent.
+    private static func blank(_ s: String?) -> String? {
+        guard let s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return s
+    }
+
     private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "presentation")
 
     /// Reads both layers for the capture. A missing or unreadable document counts as no document.
@@ -68,9 +74,9 @@ public struct ResolvedEnrichment: Equatable, Sendable {
         for url in order {
             let s = silverLinks.first { $0.url == url }, g = goldLinks.first { $0.url == url }
             var fromServer = false
-            func pick<V>(_ gold: V?, _ silver: V?) -> V? {
-                if let gold { fromServer = true; return gold }
-                return silver
+            func pick(_ gold: String?, _ silver: String?) -> String? {
+                if let gold = blank(gold) { fromServer = true; return gold }
+                return blank(silver)
             }
             let thumb: URL? = {
                 if let a = g?.thumbnail { fromServer = true; return assetURL(.server, a) }
@@ -91,24 +97,26 @@ public struct ResolvedEnrichment: Equatable, Sendable {
         for t in targets {
             let s = silverPlaces.first { $0.target == t }, g = goldPlaces.first { $0.target == t }
             var fromServer = false
-            func pick<V>(_ gold: V?, _ silver: V?) -> V? {
-                if let gold { fromServer = true; return gold }
-                return silver
+            func pick(_ gold: String?, _ silver: String?) -> String? {
+                if let gold = blank(gold) { fromServer = true; return gold }
+                return blank(silver)
             }
+            var nearby = s?.nearby
+            if let gn = g?.nearby, blank(gn.name) != nil { nearby = gn; fromServer = true }
             out.places[t] = PlaceItem(
                 target: t, subLocality: pick(g?.subLocality, s?.subLocality), locality: pick(g?.locality, s?.locality),
                 region: pick(g?.region, s?.region), country: pick(g?.country, s?.country),
-                nearby: pick(g?.nearby, s?.nearby))
+                nearby: nearby)
             if fromServer { out.usesServer = true }
         }
 
         // Recognized text and transcripts: one item per attachment.
         for i in data(device, .textRecognition, TextRecognitionData.self)?.items ?? [] { out.recognizedText[i.attachmentID] = i.text }
-        for i in data(server, .textRecognition, TextRecognitionData.self)?.items ?? [] {
+        for i in data(server, .textRecognition, TextRecognitionData.self)?.items ?? [] where blank(i.text) != nil {
             out.recognizedText[i.attachmentID] = i.text; out.usesServer = true
         }
         for i in data(device, .transcript, TranscriptData.self)?.items ?? [] { out.transcripts[i.attachmentID] = i }
-        for i in data(server, .transcript, TranscriptData.self)?.items ?? [] {
+        for i in data(server, .transcript, TranscriptData.self)?.items ?? [] where blank(i.text) != nil {
             out.transcripts[i.attachmentID] = i; out.usesServer = true
         }
 
@@ -118,12 +126,12 @@ public struct ResolvedEnrichment: Equatable, Sendable {
         } else {
             out.detections = data(device, .dataDetection, DataDetectionData.self)?.items ?? []
         }
-        if let g = data(server, .sourceAppGuess, SourceAppGuessData.self) {
+        if let g = data(server, .sourceAppGuess, SourceAppGuessData.self), blank(g.app) != nil {
             out.sourceAppGuess = g.app; out.usesServer = true
         } else {
             out.sourceAppGuess = data(device, .sourceAppGuess, SourceAppGuessData.self)?.app
         }
-        if let g = data(server, .summary, SummaryData.self) {
+        if let g = data(server, .summary, SummaryData.self), blank(g.text) != nil {
             out.summary = g.text; out.usesServer = true
         } else {
             out.summary = data(device, .summary, SummaryData.self)?.text

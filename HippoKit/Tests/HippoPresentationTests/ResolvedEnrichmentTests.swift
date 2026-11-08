@@ -73,3 +73,91 @@ private let thumb = AssetRef(relativePath: "assets/t.jpg", byteCount: 3, sha256:
         #expect(ResolvedEnrichment.make(device: nil, server: nil, assetURL: assetURL) == .empty)
     }
 }
+
+private func docs(silver: [FacetKind: (FacetStatus, any Encodable)], gold: [FacetKind: (FacetStatus, any Encodable)])
+    throws -> ResolvedEnrichment {
+    ResolvedEnrichment.make(device: try enrichmentDoc(.device, facets: silver),
+                            server: try enrichmentDoc(.server, facets: gold), assetURL: assetURL)
+}
+
+private func det(_ t: String) -> Detection { Detection(type: "phone", text: t, value: t, source: "note") }
+
+@Suite struct ResolvedEnrichmentRulesTests {
+    @Test func singleItemGoldOkWins() throws {
+        let r = try docs(silver: [.dataDetection: (.ok, DataDetectionData(items: [det("s")])),
+                                  .sourceAppGuess: (.ok, SourceAppGuessData(app: "S", reason: "r")),
+                                  .summary: (.ok, SummaryData(text: "s")), .tags: (.ok, TagsData(values: ["s"]))],
+                         gold: [.dataDetection: (.ok, DataDetectionData(items: [det("g")])),
+                                .sourceAppGuess: (.ok, SourceAppGuessData(app: "G", reason: "r")),
+                                .summary: (.ok, SummaryData(text: "g")), .tags: (.ok, TagsData(values: ["g"]))])
+        #expect(r.detections.map(\.text) == ["g"] && r.sourceAppGuess == "G" && r.summary == "g" && r.tags == ["g"])
+        #expect(r.usesServer)
+    }
+
+    @Test func singleItemFailedOrEmptyGoldLeavesSilver() throws {
+        let silver: [FacetKind: (FacetStatus, any Encodable)] = [
+            .dataDetection: (.ok, DataDetectionData(items: [det("s")])),
+            .sourceAppGuess: (.ok, SourceAppGuessData(app: "S", reason: "r")),
+            .summary: (.ok, SummaryData(text: "s")), .tags: (.ok, TagsData(values: ["s"]))]
+        let failed = try docs(silver: silver, gold: [
+            .dataDetection: (.failed, DataDetectionData(items: [det("g")])),
+            .sourceAppGuess: (.failed, SourceAppGuessData(app: "G", reason: "r")),
+            .summary: (.failed, SummaryData(text: "g")), .tags: (.empty, TagsData(values: ["g"]))])
+        let blank = try docs(silver: silver, gold: [
+            .dataDetection: (.ok, DataDetectionData(items: [])),
+            .sourceAppGuess: (.ok, SourceAppGuessData(app: "", reason: "r")),
+            .summary: (.ok, SummaryData(text: "")), .tags: (.ok, TagsData(values: []))])
+        for r in [failed, blank] {
+            #expect(r.detections.map(\.text) == ["s"] && r.sourceAppGuess == "S" && r.summary == "s" && r.tags == ["s"])
+            #expect(!r.usesServer)
+        }
+    }
+
+    @Test func placePerFieldAndGoldNonOkIgnored() throws {
+        let s = PlaceData(items: [PlaceItem(target: "capture", locality: "Seattle", country: "US")])
+        let ok = try docs(silver: [.place: (.ok, s)], gold: [.place: (.ok, PlaceData(items: [
+            PlaceItem(target: "capture", locality: "Tacoma", region: "")]))])
+        let p = try #require(ok.places["capture"])
+        #expect(p.locality == "Tacoma" && p.country == "US" && p.region == nil && ok.usesServer)
+        for status in [FacetStatus.failed, .empty] {
+            let r = try docs(silver: [.place: (.ok, s)], gold: [.place: (status, PlaceData(items: [
+                PlaceItem(target: "capture", locality: "Tacoma")]))])
+            #expect(r.places["capture"]?.locality == "Seattle" && !r.usesServer)
+        }
+        let blank = try docs(silver: [.place: (.ok, s)], gold: [.place: (.ok, PlaceData(items: [
+            PlaceItem(target: "capture", locality: "")]))])
+        #expect(blank.places["capture"]?.locality == "Seattle" && !blank.usesServer)
+    }
+
+    @Test func transcriptsAndRecognizedTextPerAttachment() throws {
+        func t(_ id: String, _ text: String) -> TranscriptItem { TranscriptItem(attachmentID: id, text: text, locale: "en_US", segments: []) }
+        let silver: [FacetKind: (FacetStatus, any Encodable)] = [
+            .transcript: (.ok, TranscriptData(items: [t("a1", "s1"), t("a2", "s2")])),
+            .textRecognition: (.ok, TextRecognitionData(items: [
+                RecognizedText(attachmentID: "a1", text: "s1", languages: []),
+                RecognizedText(attachmentID: "a2", text: "s2", languages: [])]))]
+        let r = try docs(silver: silver, gold: [
+            .transcript: (.ok, TranscriptData(items: [t("a1", "g1"), t("a2", "")])),
+            .textRecognition: (.ok, TextRecognitionData(items: [
+                RecognizedText(attachmentID: "a1", text: "g1", languages: []),
+                RecognizedText(attachmentID: "a2", text: "", languages: [])]))])
+        #expect(r.transcripts["a1"]?.text == "g1" && r.transcripts["a2"]?.text == "s2")
+        #expect(r.recognizedText == ["a1": "g1", "a2": "s2"] && r.usesServer)
+        let f = try docs(silver: silver, gold: [
+            .transcript: (.failed, TranscriptData(items: [t("a1", "g1")])),
+            .textRecognition: (.failed, TextRecognitionData(items: [RecognizedText(attachmentID: "a1", text: "g", languages: [])]))])
+        #expect(f.transcripts["a1"]?.text == "s1" && f.recognizedText["a1"] == "s1" && !f.usesServer)
+    }
+
+    @Test func silverOnlyAndNonOkSilver() throws {
+        let only = ResolvedEnrichment.make(device: try enrichmentDoc(.device, facets: [
+            .summary: (.ok, SummaryData(text: "s"))]), server: nil, assetURL: assetURL)
+        #expect(only.summary == "s" && !only.usesServer)
+        let bad = ResolvedEnrichment.make(device: try enrichmentDoc(.device, facets: [
+            .summary: (.failed, SummaryData(text: "s")), .tags: (.empty, TagsData(values: ["x"])),
+            .place: (.failed, PlaceData(items: [PlaceItem(target: "capture", locality: "X")])),
+            .linkPreview: (.failed, LinkPreviewData(items: [LinkPreviewItem(url: "https://a.test", title: "t")]))]),
+            server: nil, assetURL: assetURL)
+        #expect(bad == .empty)
+    }
+}

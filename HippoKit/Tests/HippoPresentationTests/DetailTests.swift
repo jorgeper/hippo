@@ -111,6 +111,29 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(d.found[4].action == .open(URL(string: "https://a.test/")!))
     }
 
+    @Test func foundLinkOpensOnlyWebURLs() {
+        func action(_ value: String?, text: String = "x") -> FoundAction? {
+            make(meta(), enrichment: resolved(detections: [Detection(type: "link", text: text, value: value, source: "n")]))
+                .found[0].action
+        }
+        #expect(action("javascript:alert(1)") == nil)
+        #expect(action("file:///etc/passwd") == nil)
+        #expect(action("myapp://x") == nil)
+        #expect(action(nil, text: "a.test") == nil)
+        #expect(action("https://") == nil)
+        #expect(action("https://example.com") == .open(URL(string: "https://example.com")!))
+        #expect(make(meta(), enrichment: resolved(detections: [Detection(type: "link", text: "javascript:alert(1)", source: "n")]))
+            .found[0].text == "javascript:alert(1)")
+    }
+
+    @Test func foundPhonePlusOnlyLeading() {
+        func url(_ v: String) -> FoundAction? {
+            make(meta(), enrichment: resolved(detections: [Detection(type: "phone", text: v, value: v, source: "n")])).found[0].action
+        }
+        #expect(url("+1 415 555+0100") == .call(URL(string: "tel:+14155550100")!))
+        #expect(url("415+555") == .call(URL(string: "tel:415555")!))
+    }
+
     @Test func detailServerNote() {
         #expect(make(meta(), enrichment: resolved(server: true)).fromServerNote == "Some details come from your server.")
         #expect(make(meta()).fromServerNote == nil)

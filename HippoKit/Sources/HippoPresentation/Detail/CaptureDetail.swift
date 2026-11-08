@@ -88,8 +88,10 @@ public struct CaptureDetail: Equatable, Sendable {
         var action: FoundAction?
         switch d.type {
         case "phone":
-            let number = (d.value ?? d.text).filter { $0.isASCII && ($0.isNumber || $0 == "+") }
-            if !number.isEmpty { action = URL(string: "tel:\(number)").map(FoundAction.call) }
+            let raw = (d.value ?? d.text).trimmingCharacters(in: .whitespaces)
+            let digits = raw.filter { $0.isASCII && $0.isNumber }
+            let number = (raw.hasPrefix("+") ? "+" : "") + digits
+            if !digits.isEmpty { action = URL(string: "tel:\(number)").map(FoundAction.call) }
         case "address":
             if let q = d.text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#?"))),
                let url = URL(string: "maps://?q=\(q)") { action = .map(url) }
@@ -98,7 +100,9 @@ public struct CaptureDetail: Equatable, Sendable {
                 action = .addToCalendar(start: start, title: DisplayTitle.make(m, noteBody: noteBody))
             }
         case "link":
-            if let url = URL(string: d.value ?? d.text) { action = .open(url) }
+            // Gold is untrusted: only web links become actions.
+            if let url = URL(string: d.value ?? d.text), let scheme = url.scheme?.lowercased(),
+               scheme == "http" || scheme == "https", let host = url.host, !host.isEmpty { action = .open(url) }
         default: break
         }
         return FoundItem(kind: d.type, text: d.text, action: action)
