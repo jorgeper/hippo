@@ -8,8 +8,12 @@ import UIKit
 /// lock in the shared container (`0xdead10cc`). The app uses a UIKit background task; the Share
 /// Extension, where `UIApplication.shared` is unavailable, uses `ProcessInfo.performExpiringActivity`.
 enum BackgroundActivity {
+    /// How long stopped work gets to unwind after background time expires.
+    static let expiryGrace: Duration = .seconds(2)
+
     /// `name` is a fixed string; it shows up in system logs. `onExpire` runs when the app's background time
-    /// runs out, before the assertion ends; sync passes use it to stop. The extension ignores it, because
+    /// runs out; sync passes use it to start stopping, and the assertion then ends when the work returns or
+    /// after `expiryGrace`. The extension ignores it, because
     /// it never syncs.
     static func run<T: Sendable, E: Error>(name: String, onExpire: (@Sendable () -> Void)? = nil,
                                            _ work: @escaping @Sendable () async throws(E) -> T) async throws(E) -> T {
@@ -62,8 +66,14 @@ private final class BackgroundTaskToken {
     init(name: String, onExpire: (@Sendable () -> Void)?) {
         identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
             MainActor.assumeIsolated {
-                onExpire?()
-                self?.end()
+                guard let onExpire else { self?.end(); return }
+                // Start winding the work down, then keep the assertion until `work()` returns (which ends
+                // it) or a short cap passes, so the stopped work can release its SQLite locks first.
+                onExpire()
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: BackgroundActivity.expiryGrace)
+                    self?.end()
+                }
             }
         }
     }

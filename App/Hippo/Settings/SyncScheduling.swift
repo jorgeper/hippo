@@ -15,9 +15,11 @@ enum SyncScheduling {
 
     private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "scheduling")
 
+    static func logDiagnosticsFailure() { log.error("\("diagnostics_failed", privacy: .public)") }
+
     /// The `onExpire` for any background-assertion block that syncs.
     static func stopper(_ coordinator: SyncCoordinator) -> @Sendable () -> Void {
-        { Task { await coordinator.stop() } }
+        { coordinator.requestStop() }
     }
 
     @discardableResult
@@ -30,23 +32,27 @@ enum SyncScheduling {
         guard let coordinator = environment.coordinator else { return }
         let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
             guard let task = task as? BGProcessingTask else { return }
-            handle(task, coordinator: coordinator)
+            handle(task, environment: environment, coordinator: coordinator)
         }
         if !registered { log.error("\("bg_register_failed", privacy: .public)") }
     }
 
-    private static func handle(_ task: BGProcessingTask, coordinator: SyncCoordinator) {
+    private static func handle(_ task: BGProcessingTask, environment: AppEnvironment, coordinator: SyncCoordinator) {
         let completion = CompleteOnce(task)
         let finish: @Sendable (Bool) -> Void = { completion.finish(success: $0) }
+        // On expiry, stop at once and report incomplete when the pass has returned or after the grace.
         task.expirationHandler = {
+            completion.markExpired()
+            coordinator.requestStop()
             Task {
-                await coordinator.stop()
+                try? await Task.sleep(for: BackgroundActivity.expiryGrace)
                 finish(false)
             }
         }
         Task {
             await runPass(coordinator, name: "background-sync")
-            finish(true)
+            await scheduleBackgroundTask(environment)
+            finish(!completion.expired)
         }
     }
 
@@ -55,7 +61,10 @@ enum SyncScheduling {
     private final class CompleteOnce: @unchecked Sendable {
         private let task: BGProcessingTask
         private let completed = OSAllocatedUnfairLock(initialState: false)
+        private let expiredFlag = OSAllocatedUnfairLock(initialState: false)
         init(_ task: BGProcessingTask) { self.task = task }
+        var expired: Bool { expiredFlag.withLock { $0 } }
+        func markExpired() { expiredFlag.withLock { $0 = true } }
         func finish(success: Bool) {
             let first = completed.withLock { done in defer { done = true }; return !done }
             if first { task.setTaskCompleted(success: success) }
@@ -90,18 +99,16 @@ enum SyncScheduling {
 private struct SyncSchedulingModifier: ViewModifier {
     let environment: AppEnvironment
     @Environment(\.scenePhase) private var scenePhase
-    /// The launch itself goes inactive to active; only a return from the background syncs here, because
-    /// launch recovery triggers its own pass.
-    @State private var wasBackgrounded = false
+    /// The first activation is the launch itself, which launch recovery covers with its own pass.
+    @State private var launchActivationSeen = false
 
     func body(content: Content) -> some View {
         content.onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
-                wasBackgrounded = true
                 enteredBackground()
-            case .active where wasBackgrounded:
-                wasBackgrounded = false
+            case .active:
+                guard launchActivationSeen else { launchActivationSeen = true; return }
                 if let coordinator = environment.coordinator {
                     Task { await SyncScheduling.runPass(coordinator, name: "foreground-sync") }
                 }
@@ -115,7 +122,11 @@ private struct SyncSchedulingModifier: ViewModifier {
         let environment = environment
         Task {
             await BackgroundActivity.run(name: "enter-background") {
-                try? environment.store.writeDiagnostics(appVersion: environment.producer.appVersion)
+                do {
+                    try environment.store.writeDiagnostics(appVersion: environment.producer.appVersion)
+                } catch {
+                    SyncScheduling.logDiagnosticsFailure()
+                }
                 await SyncScheduling.scheduleBackgroundTask(environment)
             }
         }

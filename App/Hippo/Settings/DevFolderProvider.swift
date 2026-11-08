@@ -13,20 +13,25 @@ struct DevFolderProvider: StorageProvider {
     let kind = "filesystem"
     let displayName = "Developer folder"
 
-    @MainActor func connect() async throws -> Destination {
+    /// Recomputed on every use: App Group container paths can change across reinstalls.
+    private static func remoteRoot() throws -> URL {
         guard let container = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: AppEnvironment.appGroupID) else { throw Failure.appGroupUnavailable }
-        let root = container
+        return container
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent("HippoDevRemote", isDirectory: true)
+    }
+
+    @MainActor func connect() async throws -> Destination {
+        let root = try Self.remoteRoot()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return Destination(id: "dev-folder", providerKind: kind, accountIdentifier: "this-iphone",
                            remoteRoot: root.path, displayName: displayName, status: .active)
     }
 
     func makeAdapter(for d: Destination) throws -> any StorageAdapter {
-        FilesystemAdapter(root: URL(fileURLWithPath: d.remoteRoot, isDirectory: true))
+        FilesystemAdapter(root: try Self.remoteRoot())
     }
 
     func signOut(_ d: Destination) async {}

@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var confirmingSignOut = false
     @State private var confirmingUpload = false
     @State private var failed = false
+    @State private var busy = false
     @State private var locationDenied = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
@@ -35,15 +36,20 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .task {
             await model.refresh()
-            locationDenied = LocationService.shared.isDenied
+            await reconcileLocation()
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            locationDenied = LocationService.shared.isDenied
-            Task { await model.refresh() }
+            Task {
+                await model.refresh()
+                await reconcileLocation()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.passFinished)) { _ in
-            Task { await model.refresh() }
+            Task {
+                await model.refresh()
+                await reconcileLocation()
+            }
         }
         .alert("Something went wrong", isPresented: $failed) {
             Button("OK", role: .cancel) {}
@@ -58,8 +64,13 @@ struct SettingsView: View {
         let destination = model.activeDestination
         Section {
             if let destination {
-                LabeledContent(destination.displayName, value: providerName(destination))
+                if providerName(destination) == destination.displayName {
+                    Text(destination.displayName)
+                } else {
+                    LabeledContent(destination.displayName, value: providerName(destination))
+                }
                 Button("Sign out", role: .destructive) { confirmingSignOut = true }
+                    .disabled(busy)
                     .confirmationDialog("Sign out of \(destination.displayName)? Captures stay on this iPhone; uploads pause until you sign in again.",
                                         isPresented: $confirmingSignOut, titleVisibility: .visible) {
                         Button("Sign out", role: .destructive) { perform("settings-sign-out") { try await model.signOut() } }
@@ -72,6 +83,7 @@ struct SettingsView: View {
                     Button("Connect \(provider.displayName)") {
                         perform("settings-connect") { try await model.connect(provider) }
                     }
+                    .disabled(busy)
                 }
             }
         } header: {
@@ -96,10 +108,18 @@ struct SettingsView: View {
 
     @ViewBuilder private var syncSection: some View {
         Section("Sync") {
-            Text(model.summary)
+            HStack {
+                Text(model.summary)
+                if busy {
+                    Spacer()
+                    ProgressView()
+                }
+            }
             Button("Retry now") { perform("settings-retry") { try await model.retryAll() } }
+                .disabled(busy)
             if let destination = model.activeDestination {
                 Button("Upload existing captures to \(destination.displayName)…") { confirmingUpload = true }
+                    .disabled(busy)
                     .confirmationDialog("Hippo will upload every capture on this iPhone to \(destination.displayName). Copies already uploaded elsewhere stay where they are.",
                                         isPresented: $confirmingUpload, titleVisibility: .visible) {
                         Button("Upload existing captures") {
@@ -115,7 +135,7 @@ struct SettingsView: View {
     @ViewBuilder private var locationSection: some View {
         Section {
             Toggle("Save location with captures", isOn: Binding(
-                get: { model.locationEnabled },
+                get: { model.locationEnabled && !locationDenied },
                 set: { on in
                     Task {
                         await model.setLocationEnabled(on)
@@ -127,6 +147,8 @@ struct SettingsView: View {
                     if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                 }
             }
+        } header: {
+            Text("Location")
         } footer: {
             if locationDenied {
                 Text("Location is turned off for Hippo in iOS Settings.")
@@ -134,6 +156,12 @@ struct SettingsView: View {
                 Text("Uses your location only at the moment you save. Never in the background.")
             }
         }
+    }
+
+    /// A denied iOS permission shows as off: the stored preference is cleared to match.
+    private func reconcileLocation() async {
+        locationDenied = LocationService.shared.isDenied
+        if locationDenied && model.locationEnabled { await model.setLocationEnabled(false) }
     }
 
     // MARK: On this iPhone / About
@@ -162,8 +190,11 @@ struct SettingsView: View {
     /// Runs `action` inside a background assertion that stops syncing if time runs out; failures show
     /// one fixed alert.
     private func perform(_ name: String, _ action: @escaping @MainActor @Sendable () async throws -> Void) {
+        guard !busy else { return }
+        busy = true
         let coordinator = coordinator
         Task {
+            defer { busy = false }
             do {
                 try await BackgroundActivity.run(name: name, onExpire: SyncScheduling.stopper(coordinator)) {
                     try await action()

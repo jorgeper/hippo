@@ -20,9 +20,11 @@ public actor SyncCoordinator {
     private let appVersion: String
 
     /// The current pass: running, or about to run once the pass it follows has finished.
-    private var running: Task<SyncPassResult, Never>?
+    private var running: Task<SyncPassResult, Never>? { didSet { mirrorHandles() } }
     /// The follow-up pass, waiting for `running`.
-    private var pending: Task<SyncPassResult, Never>?
+    private var pending: Task<SyncPassResult, Never>? { didSet { mirrorHandles() } }
+    /// Copies of `running` and `pending` that `requestStop()` can cancel without an actor hop.
+    private let handles = OSAllocatedUnfairLock(initialState: [Task<SyncPassResult, Never>]())
     /// The last pass `stop()` cancelled. A new pass waits for it to wind down, so passes never overlap.
     private var stopped: Task<SyncPassResult, Never>?
     /// Bumped by `stop()`; a pass scheduled before then never starts.
@@ -74,6 +76,18 @@ public actor SyncCoordinator {
         stopped = running ?? stopped
         running = nil
         pending = nil
+    }
+
+    /// Starts cancelling the current and waiting passes immediately, from any thread, without waiting
+    /// for the actor (for expiry handlers that must not hop). Also performs `stop()`'s bookkeeping.
+    public nonisolated func requestStop() {
+        handles.withLock { $0 }.forEach { $0.cancel() }
+        Task { await stop() }
+    }
+
+    private func mirrorHandles() {
+        let current = [running, pending].compactMap { $0 }
+        handles.withLock { $0 = current }
     }
 
     private func promotePending(_ generation: Int) async -> SyncPassResult {

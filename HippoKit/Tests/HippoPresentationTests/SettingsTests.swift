@@ -186,6 +186,27 @@ struct SettingsTests {
         #expect(await h.coordinator.isBusy == false)
     }
 
+    @Test func requestStopCancelsWithoutAwaiting() async throws {
+        let remote = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-held-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: remote) }
+        let held = HeldAdapter(FilesystemAdapter(root: remote))
+        let h = try Harness(adapter: { _ in held })
+        defer { h.cleanup() }
+        _ = try await h.t.note("held", at: start)
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+
+        let first = Task { await h.coordinator.syncNow() }
+        await held.started()
+        h.coordinator.requestStop()  // synchronous, no await
+        let r = await first.value
+        #expect(r.synced == 0)
+        while await h.coordinator.isBusy { try await Task.sleep(for: .milliseconds(1)) }
+
+        let later = try await h.t.note("after stop", at: start.addingTimeInterval(1))
+        #expect(await h.coordinator.syncNow().synced == 1)
+        #expect(try h.states(later) == [.synced])
+    }
+
     @Test func cancelledCallerDoesNotStopSharedPass() async throws {
         let remote = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-held-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: remote) }
