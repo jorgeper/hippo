@@ -71,11 +71,13 @@ Enrichment is derived data added to a capture after it is saved: link titles and
 | `device` (silver) | the phone, in the app only | `Library/Application Support/Hippo/enrichments/device/<capture-id>/` | `enrichments/device/YYYY/MM/DD/<capture-id>/` |
 | `server` (gold) | a server | `Library/Application Support/Hippo/enrichments/server/<capture-id>/` | `enrichments/server/YYYY/MM/DD/<capture-id>/` |
 
-Each directory holds `enrichment.json` and an optional `assets/` folder. The phone writes only silver and only reads gold. Gold for a capture that is not on the phone is ignored. Deleting a capture on the phone also deletes its local silver and gold; remote copies are never touched. Each Settings switch under "Enrichment" turns one kind off.
+Local paths are inside the App Group container. Each directory holds `enrichment.json` and an optional `assets/` folder. The phone writes only silver and only reads gold. Gold for a capture that is not on the phone is ignored. Deleting a capture on the phone also deletes its local silver and gold; remote copies are never touched. Each Settings switch under "Enrichment" turns one kind off.
 
 ### What leaves the phone
 
-- Link previews fetch the linked page (or YouTube's public oEmbed endpoint) from the linked site, with a 15 s timeout, for the first 5 links per capture.
+- Link previews run with a 15 s timeout, for the first 5 links per capture:
+  - A YouTube link sends the video URL to `www.youtube.com/oembed`, not to the watch page. The thumbnail is downloaded from the host that response names (normally `i.ytimg.com`).
+  - Any other link is fetched from the linked site through LinkPresentation, which may also load that page's image.
 - Place names send coordinates to Apple Maps. The place line shows city and region; "near <Name>" appears only for an accurate fix.
 - Everything else (text in images, transcripts, found dates and addresses, app guesses) runs on the iPhone.
 
@@ -91,6 +93,8 @@ These links are recorded as empty and never requested (YouTube oEmbed excepted):
 - IP-literal hosts, `localhost` and `.local` names;
 - URLs with a query key `token`, `code`, `key`, `sig`, `signature`, `auth`, `otp` or `magic`;
 - URLs whose path contains `unsubscribe`, `login`, `verify`, `reset` or `confirm`.
+
+The URL a redirect ends at is checked against the same rules, and the result is discarded if it breaks one.
 
 ### Server and Dropbox
 
