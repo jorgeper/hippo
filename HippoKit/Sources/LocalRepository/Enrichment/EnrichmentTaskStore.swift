@@ -107,6 +107,18 @@ public final class EnrichmentTaskStore: Sendable {
             """, [.int(Self.ms(now))] + Self.kindArgs(kinds)).isEmpty
     }
 
+    /// True if enrichment has work for any kind in `versions` (kind → its enricher's version): a due
+    /// `pending` task, or a capture with no row for the kind, or a row at another version, that still
+    /// needs scheduling (a capture saved by the Share Extension has no rows yet).
+    public func hasWork(versions: [FacetKind: Int], now: Date) throws -> Bool {
+        if try hasDueWork(kinds: Set(versions.keys), now: now) { return true }
+        for (kind, version) in versions.sorted(by: { $0.key.rawValue < $1.key.rawValue })
+        where try !capturesNeeding(kind: kind, version: version, limit: 1).isEmpty {
+            return true
+        }
+        return false
+    }
+
     // MARK: Helpers
 
     private static func placeholders(_ n: Int) -> String { Array(repeating: "?", count: n).joined(separator: ",") }

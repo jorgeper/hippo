@@ -36,6 +36,10 @@ struct CaptureDetailView: View {
             .onReceive(NotificationCenter.default.publisher(for: TimelineModel.enrichmentChanged)) { _ in
                 Task { await model.load() }
             }
+            // A sync pass may have pulled gold for this capture, or changed its upload state.
+            .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.passFinished)) { _ in
+                Task { await model.load() }
+            }
             .confirmationDialog(model.deletionPrompt?.title ?? "Delete from iPhone?", isPresented: $confirmingDelete,
                                 titleVisibility: .visible, presenting: model.deletionPrompt) { prompt in
                 Button(prompt.confirm, role: .destructive) { delete() }

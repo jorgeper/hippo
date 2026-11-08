@@ -92,6 +92,16 @@ private func longestSide(_ url: URL) -> Int {
         ("https://x.com/a?TOKEN=1", "single_use"),
         ("https://x.com/%75nsubscribe", "single_use"),
         ("https://x.com/Account/LOGIN", "single_use"),
+        ("http://router/", "private_host"),
+        ("http://router./admin", "private_host"),
+        ("http://nas.lan/", "private_host"),
+        ("http://NAS.LAN./", "private_host"),
+        ("https://grafana.internal/d/1", "private_host"),
+        ("http://printer.home.arpa/", "private_host"),
+        ("http://home.arpa/", "private_host"),
+        ("https://internal.example.com/a", "fetch"),
+        ("https://x.lanes.com/a", "fetch"),
+        ("https://arpa.example/home", "fetch"),
     ] as [(String, String)])
     func linkPolicyTable(_ urlString: String, _ expected: String) throws {
         let decision = LinkFetchPolicy.decide(try #require(URL(string: urlString)))

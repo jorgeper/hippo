@@ -150,6 +150,12 @@ enum EnrichmentScheduling {
         return made
     }
 
+    /// The enrichers' versions for the kinds switched on in Settings, for `EnrichmentTaskStore.hasWork`.
+    static func enabledVersions(_ env: AppEnvironment) -> [FacetKind: Int] {
+        let enabled = enabledKinds()
+        return runner(for: env).versions.filter { enabled.contains($0.key) }
+    }
+
     /// The kinds switched on in Settings.
     nonisolated static func enabledKinds() -> Set<FacetKind> {
         let settings = LocationService.settings

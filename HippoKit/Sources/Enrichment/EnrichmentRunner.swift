@@ -40,6 +40,9 @@ public actor EnrichmentRunner {
     private let store: EnrichmentStore
     private let enrichers: [any Enricher]
     private let byKind: [FacetKind: any Enricher]
+    /// Each enricher's kind and version, for callers that check for work without the runner
+    /// (`EnrichmentTaskStore.hasWork(versions:now:)`).
+    public nonisolated let versions: [FacetKind: Int]
     private let producer: EnrichmentProducer
     private let isEnabled: @Sendable (FacetKind) -> Bool
     private let isOnline: @Sendable () -> Bool
@@ -69,6 +72,7 @@ public actor EnrichmentRunner {
         }
         self.enrichers = unique
         self.byKind = byKind
+        self.versions = byKind.mapValues(\.version)
         self.producer = producer
         self.isEnabled = isEnabled
         self.isOnline = isOnline

@@ -44,13 +44,18 @@ public enum LinkFetchPolicy {
         return nil
     }
 
-    /// IP literals of any kind (public ones too), `localhost` and `.local` names.
+    /// Names that only resolve inside a home or company network.
+    private static let privateSuffixes = ["localhost", "local", "lan", "internal", "home.arpa"]
+
+    /// IP literals of any kind (public ones too), dotless names (`router`), and `localhost`, `.local`,
+    /// `.lan`, `.internal` and `.home.arpa` names.
     static func isPrivate(_ rawHost: String) -> Bool {
         var host = rawHost.lowercased()
         if host.hasPrefix("[") && host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
         while host.hasSuffix(".") { host.removeLast() }
-        if host == "localhost" || host.hasSuffix(".localhost") || host == "local" || host.hasSuffix(".local") { return true }
+        if privateSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return true }
         if host.contains(":") { return true }   // IPv6 literal (hostnames cannot contain a colon)
+        if !host.contains(".") { return true }  // a dotless name resolves only on the local network
         var v4 = in_addr()
         if inet_pton(AF_INET, host, &v4) == 1 { return true }
         // Shorthand IPv4 forms (`2130706433`, `0x7f.1`): a host whose labels are all numeric or hex.

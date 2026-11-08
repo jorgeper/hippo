@@ -61,13 +61,23 @@ public final class GoldPuller: Sendable {
         var result = GoldPullResult()
         guard !Task.isCancelled, let destination = try? destinations.active() else { return result }
 
-        let staging = layout.stagingDir.appendingPathComponent("gold-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: staging) }
+        let name = "gold-\(UUID().uuidString)"
+        let staging = layout.stagingDir.appendingPathComponent(name, isDirectory: true)
+        // Held from before the directory exists until after it is removed, as a package writer holds its
+        // own: launch recovery deletes only staging whose lock it can take, so it leaves a live pull alone
+        // and still sweeps one a crash left behind.
+        var lock: StagingLock?
+        defer {
+            try? FileManager.default.removeItem(at: staging)
+            lock?.release()
+        }
 
         var itemCode: String?
         var endCode: String?
         do {
             let adapter = try adapterFor(destination)
+            try FileManager.default.createDirectory(at: layout.stagingDir, withIntermediateDirectories: true)
+            lock = try StagingLock.acquire(at: layout.stagingDir.appendingPathComponent("\(name).lock"))
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
             var cursor = try enrichments.goldCursor(destinationID: destination.id)
             var resetUsed = false

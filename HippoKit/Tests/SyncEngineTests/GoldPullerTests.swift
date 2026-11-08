@@ -250,6 +250,33 @@ private struct Setup {
         #expect(lists2.count == 2)
     }
 
+    @Test func launchRecoveryDuringAPullKeepsItsStaging() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.putGold()
+        let reconciler = Reconciler(layout: s.h.layout, index: s.h.index, jobs: s.h.jobs, destinations: s.h.destinations)
+        let swept = Downloads()
+        // Recovery runs mid-download, as it can at launch alongside the first foreground sync.
+        let adapter = HookedAdapter(inner: s.h.adapter, beforeDownload: { _ in
+            if let report = try? reconciler.run(), report.removedStaging > 0 { swept.add("swept") }
+        })
+
+        let r = await s.puller(adapter).pull()
+
+        #expect(swept.count == 0)
+        #expect(r.applied == 1)
+        #expect(r.code == nil)
+        #expect(s.stagingLeftovers.isEmpty)   // neither the directory nor its lock file
+    }
+
+    @Test func abandonedGoldStagingIsStillSwept() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        let leftover = s.h.layout.stagingDir.appendingPathComponent("gold-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: leftover, withIntermediateDirectories: true)
+        let reconciler = Reconciler(layout: s.h.layout, index: s.h.index, jobs: s.h.jobs, destinations: s.h.destinations)
+        #expect(try reconciler.run().removedStaging == 1)
+        #expect(s.stagingLeftovers.isEmpty)
+    }
+
     @Test func goldWrongCaptureSkipped() async throws {
         let s = try await Setup(); defer { s.h.cleanup() }
         try s.putGold(try s.doc(captureID: UUID().uuidString.lowercased()))

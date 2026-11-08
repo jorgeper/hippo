@@ -80,6 +80,7 @@ Local paths are inside the App Group container. Each directory holds `enrichment
   - Any other link first gets a `HEAD` request (or, if the site rejects `HEAD`, a one-byte `GET`) to follow its redirects. Then the page is fetched from where they lead through LinkPresentation, which may also load that page's image.
 - Place names send coordinates to Apple Maps. The place line shows city and region; "near <Name>" appears only for an accurate fix.
 - Everything else (text in images, transcripts, found dates and addresses, app guesses) runs on the iPhone.
+- The results (silver) are uploaded to the connected storage destination, beside each capture's package once it has synced: link previews and their thumbnails, place names, recognized text, transcripts, found items and app guesses.
 
 ### English-only transcripts
 
@@ -90,7 +91,7 @@ Transcription runs on device only and never falls back to server recognition. It
 These links are recorded as empty and never requested (YouTube oEmbed excepted):
 
 - anything other than `http` or `https`;
-- IP-literal hosts, `localhost` and `.local` names;
+- IP-literal hosts, dotless names (such as `router`), and `localhost`, `.local`, `.lan`, `.internal` and `.home.arpa` names;
 - URLs with a query key `token`, `code`, `key`, `sig`, `signature`, `auth`, `otp` or `magic`;
 - URLs whose path contains `unsubscribe`, `login`, `verify`, `reset` or `confirm`.
 

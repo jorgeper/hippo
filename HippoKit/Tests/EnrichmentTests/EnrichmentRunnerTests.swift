@@ -179,6 +179,13 @@ private let t0 = RunnerHarness.t0
         #expect(RetryPolicy().cap == 21_600)
     }
 
+    @Test func versionsListEachKindOnce() throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let runner = h.runner([FakeEnricher(kind: .place, version: 3), FakeEnricher(kind: .transcript),
+                               FakeEnricher(kind: .place, version: 9)])   // the first one listed wins
+        #expect(runner.versions == [.place: 3, .transcript: 1])
+    }
+
     @Test func permanentWritesFailedFacet() async throws {
         let h = try RunnerHarness(); defer { h.cleanup() }
         let id = try await h.note("hi")

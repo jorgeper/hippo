@@ -100,6 +100,29 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(try tasks.capturesNeeding(kind: .transcript, version: 1, limit: 10) == [b, a])
     }
 
+    @Test func hasWorkCountsCapturesWithoutTaskRows() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let tasks = EnrichmentTaskStore(db: h.db)
+        #expect(try !tasks.hasWork(versions: [.place: 1], now: t0))   // no captures at all
+
+        // A capture with no task rows yet (saved by the Share Extension) is work.
+        let id = try await h.add(at: t0, note: "shared").metadata.captureID
+        #expect(try tasks.hasWork(versions: [.place: 1], now: t0))
+        #expect(try !tasks.hasWork(versions: [:], now: t0))
+
+        // Scheduled and done: no work, until the enricher's version changes.
+        try tasks.set(captureID: id, kind: .place, version: 1, status: "ok", now: t0)
+        #expect(try !tasks.hasWork(versions: [.place: 1], now: t0))
+        #expect(try tasks.hasWork(versions: [.place: 2], now: t0))
+
+        // A pending task is work once due.
+        try tasks.set(captureID: id, kind: .place, version: 1, status: "pending", now: t0)
+        try tasks.recordAttempt(captureID: id, kind: .place, status: "pending", errorCode: "busy",
+                                nextAttemptAt: t0.addingTimeInterval(300), incrementAttempts: true, now: t0)
+        #expect(try !tasks.hasWork(versions: [.place: 1], now: t0))
+        #expect(try tasks.hasWork(versions: [.place: 1], now: t0.addingTimeInterval(300)))
+    }
+
     @Test func taskRowsCascadeWithCapture() async throws {
         let h = try IndexHarness(); defer { h.cleanup() }
         let tasks = EnrichmentTaskStore(db: h.db)
