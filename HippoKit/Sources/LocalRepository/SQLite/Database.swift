@@ -64,20 +64,34 @@ public final class Database: @unchecked Sendable {
         }
         handle = db
         do {
-            // Busy timeout first so the WAL switch and migration wait for other connections.
+            // The busy handler covers lock waits, but `PRAGMA journal_mode=WAL` on a brand-new file can
+            // fail with SQLITE_BUSY immediately when another connection is mid-switch, without consulting
+            // the handler. Retry it ourselves, bounded by the same 5 s budget.
             sqlite3_busy_timeout(db, 5000)
             // The result row names the mode actually in effect; a silent fallback would change the
             // cross-process behaviour the store relies on.
-            let mode = try query("PRAGMA journal_mode=WAL").first?.string("journal_mode")
+            let mode = try Self.retryingBusy { try self.query("PRAGMA journal_mode=WAL").first?.string("journal_mode") }
             guard mode?.lowercased() == "wal" else {
                 throw DatabaseError.sqlite(code: SQLITE_ERROR, message: "WAL journal mode unavailable")
             }
             try execute("PRAGMA foreign_keys=ON")
-            try Migrations.apply(on: self, upTo: version)
+            try Self.retryingBusy { try Migrations.apply(on: self, upTo: version) }
         } catch {
             sqlite3_close(db)
             handle = nil
             throw error
+        }
+    }
+
+    /// Retries `body` while it fails with SQLITE_BUSY, sleeping 10 ms between attempts for up to 5 s.
+    private static func retryingBusy<T>(_ body: () throws -> T) throws -> T {
+        let deadline = Date().addingTimeInterval(5)
+        while true {
+            do {
+                return try body()
+            } catch DatabaseError.sqlite(let code, _) where code & 0xFF == SQLITE_BUSY && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
         }
     }
 
