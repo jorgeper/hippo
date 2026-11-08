@@ -17,6 +17,50 @@ public protocol PlaceLookup: Sendable {
     func nearestPointOfInterest(latitude: Double, longitude: Double, radiusMeters: Double) async throws -> NearbyPlace?
 }
 
+/// How a place lookup error is recorded. The app's MapKit lookup passes MapKit's errors through this;
+/// MapKit isn't imported here, so its errors are matched by domain and code.
+public enum PlaceLookupError {
+    private static let mapKitDomain = "MKErrorDomain"
+    private static let loadingThrottled = 3   // MKError.Code.loadingThrottled
+    private static let placemarkNotFound = 4  // MKError.Code.placemarkNotFound
+
+    /// No place at these coordinates: an empty result, not an error.
+    public static func isNotFound(_ error: Error) -> Bool {
+        let e = error as NSError
+        return e.domain == mapKitDomain && e.code == placemarkNotFound
+    }
+
+    /// Apple's rate limit isn't a failure: it defers without spending an attempt, with code `throttled`
+    /// (Detail: "Apple Maps is busy, will retry"). No connection defers as `offline`. Anything else is a
+    /// transient `geocode_failed`. Cancellation stays a `CancellationError`.
+    public static func map(_ error: Error) -> Error {
+        if error is CancellationError || Task.isCancelled { return CancellationError() }
+        let e = error as NSError
+        if e.domain == mapKitDomain, e.code == loadingThrottled {
+            return EnrichmentError.deferred(code: "throttled", retryAfter: 300)
+        }
+        if let url = underlyingURLError(e) {
+            switch url.code {
+            case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive:
+                return EnrichmentError.deferred(code: "offline", retryAfter: 60)
+            default:
+                break
+            }
+        }
+        return EnrichmentError.transient(code: "geocode_failed")
+    }
+
+    private static func underlyingURLError(_ error: NSError) -> URLError? {
+        var current: NSError? = error
+        for _ in 0..<4 {
+            guard let e = current else { return nil }
+            if e.domain == NSURLErrorDomain { return URLError(URLError.Code(rawValue: e.code)) }
+            current = e.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return nil
+    }
+}
+
 /// Place names for the capture location and for photos' embedded locations (design §5.2).
 public struct PlaceEnricher: Enricher {
     static let poiRadius = 100.0

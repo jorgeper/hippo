@@ -87,36 +87,16 @@ struct MapKitPlaceLookup: PlaceLookup {
         return t
     }
 
-    private static func isNotFound(_ error: Error) -> Bool {
-        (error as? MKError)?.code == .placemarkNotFound
-    }
+    private static func isNotFound(_ error: Error) -> Bool { PlaceLookupError.isNotFound(error) }
 
+    /// Fixed codes only (`PlaceLookupError.map`): throttling defers as `throttled`, no connection as `offline`.
     private static func map(_ error: Error) -> Error {
-        if error is CancellationError || Task.isCancelled { return CancellationError() }
-        if (error as? MKError)?.code == .loadingThrottled {
-            log.error("\("geocode_throttled", privacy: .public)")
-            // Apple's rate limit, not a failure: wait it out without spending an attempt (design §5.2).
-            return EnrichmentError.deferred(code: "geocode_throttled", retryAfter: 300)
+        let mapped = PlaceLookupError.map(error)
+        switch mapped as? EnrichmentError {
+        case .deferred(code: "throttled", _)?: log.error("\("geocode_throttled", privacy: .public)")
+        case .transient?: log.error("\("geocode_failed", privacy: .public)")
+        default: break
         }
-        if let url = underlyingURLError(error as NSError) {
-            switch url.code {
-            case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .callIsActive:
-                return EnrichmentError.deferred(code: "offline", retryAfter: 60)
-            default:
-                break
-            }
-        }
-        log.error("\("geocode_failed", privacy: .public)")
-        return EnrichmentError.transient(code: "geocode_failed")
-    }
-
-    private static func underlyingURLError(_ error: NSError) -> URLError? {
-        var current: NSError? = error
-        for _ in 0..<4 {
-            guard let e = current else { return nil }
-            if e.domain == NSURLErrorDomain { return URLError(URLError.Code(rawValue: e.code)) }
-            current = e.userInfo[NSUnderlyingErrorKey] as? NSError
-        }
-        return nil
+        return mapped
     }
 }
