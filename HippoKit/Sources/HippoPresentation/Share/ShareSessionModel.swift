@@ -25,6 +25,10 @@ public final class ShareSessionModel {
     public var comment: String = ""
     public private(set) var summary: String = ""
     public private(set) var previewImageURL: URL?
+    /// Set when the intake left items behind. The sheet shows it inline; Save asks before committing the rest.
+    public private(set) var partialNotice: String?
+    /// SF Symbol for the preview when there is no thumbnail.
+    public private(set) var previewSymbol: String = "doc"
 
     public var destinationLine: String {
         if let destinationName {
@@ -44,8 +48,7 @@ public final class ShareSessionModel {
     private let captureID = UUID()
 
     private var draft: CaptureDraft?
-    /// Set while the intake left items behind; `save` asks about them before committing.
-    private var partialMessage: String?
+    private var cancelled = false
 
     public init(store: HippoStore, intake: IntakeDirectory, input: ShareInput,
                 destinationName: String?, location: @escaping (Date) -> CaptureLocation?,
@@ -65,6 +68,8 @@ public final class ShareSessionModel {
                 self.state = .preparing(done: done, total: total)
             }
         }
+        // Cancelled while copying: the copies are discarded and the state stays as it was.
+        guard !cancelled else { intake.discard(captureID: captureID); return }
         let d = result.draft
         guard !d.attachments.isEmpty || !d.urls.isEmpty || d.sharedText != nil else {
             intake.discard(captureID: captureID)
@@ -76,19 +81,20 @@ public final class ShareSessionModel {
         summary = Self.summary(for: d, totalBytes: result.totalBytes)
         let unsupported = result.failures.filter { $0.kind == .unsupported }.count
         let failedLoads = result.failures.filter { $0.kind == .loadFailed }.count
-        partialMessage = result.failures.isEmpty ? nil : Self.partialMessage(unsupported: unsupported, loadFailed: failedLoads)
-        state = partialMessage.map { .confirmPartial(message: $0) } ?? .ready
+        previewSymbol = Self.symbol(for: d)
+        partialNotice = result.failures.isEmpty ? nil : Self.partialMessage(unsupported: unsupported, loadFailed: failedLoads)
+        state = .ready
     }
 
     /// Commits the capture. Without `acceptPartial`, items the intake couldn't take ask for confirmation first.
     public func save(acceptPartial: Bool = false) async {
-        guard var draft else { return }
+        guard !cancelled, var draft else { return }
         switch state {
         case .ready, .confirmPartial, .failed(_, canSave: true): break
         default: return
         }
-        if let partialMessage, !acceptPartial {
-            state = .confirmPartial(message: partialMessage)
+        if let partialNotice, !acceptPartial {
+            state = .confirmPartial(message: partialNotice)
             return
         }
         state = .saving
@@ -100,18 +106,26 @@ public final class ShareSessionModel {
             intake.discard(captureID: captureID)
             state = .saved
         } catch let error as CaptureError {
-            if case .attachmentsFailed(let failures) = error {
-                state = .confirmPartial(message: "\(failures.count) items couldn't be saved.")
+            if case .attachmentsFailed = error {
+                state = .confirmPartial(message: Self.message(for: error))
             } else {
                 state = .failed(message: Self.message(for: error), canSave: false)
             }
         } catch {
-            state = .failed(message: Self.genericFailureMessage, canSave: true)
+            // Only `CaptureError` comes out of the store; a retry wouldn't change anything.
+            state = .failed(message: Self.genericFailureMessage, canSave: false)
         }
     }
 
-    /// Removes the intake files. The sheet closes afterwards.
+    /// The user declined the "save the rest" question: back to editing, nothing saved.
+    public func declinePartial() {
+        guard case .confirmPartial = state else { return }
+        state = .ready
+    }
+
+    /// Removes the intake files, now or when a running `prepare()` returns. The sheet closes afterwards.
     public func cancel() {
+        cancelled = true
         intake.discard(captureID: captureID)
     }
 
@@ -132,6 +146,16 @@ public final class ShareSessionModel {
         case (true, false): "Hippo can't save \(a) of these items."
         default: "\(b) items couldn't be copied."
         }
+    }
+
+    static func symbol(for draft: CaptureDraft) -> String {
+        if let first = draft.attachments.first {
+            let type = UTType(first.uti)
+            if type?.conforms(to: .movie) == true { return "video" }
+            if type?.conforms(to: .image) == true { return "photo" }
+            return type?.conforms(to: .plainText) == true && draft.attachments.count == 1 ? "text.alignment" : "doc"
+        }
+        return draft.urls.isEmpty ? "text.alignment" : "link"
     }
 
     static func summary(for draft: CaptureDraft, totalBytes: Int64) -> String {

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import CaptureCore
 import ShareIntake
@@ -38,6 +39,19 @@ private struct Rig {
 private func link(_ url: String = "https://example.com/a/b") -> FakeProvider {
     FakeProvider(types: ["public.url"], url: URL(string: url))
 }
+/// Suspends in `loadURL` long enough for a test to cancel the session mid-prepare.
+private final class SlowProvider: ItemProviding {
+    let registeredTypeIdentifiers = ["public.url"]
+    let suggestedName: String? = nil
+    let started = Mutex(false)
+    func copyFile(typeIdentifier: String, to destination: URL) async throws {}
+    func loadURL() async throws -> URL {
+        started.withLock { $0 = true }
+        try await Task.sleep(for: .milliseconds(300))
+        return URL(string: "https://example.com")!
+    }
+    func loadText() async throws -> String { "" }
+}
 private let unsupported = FakeProvider(types: ["com.example.unknown"])
 
 @MainActor
@@ -72,7 +86,9 @@ private let unsupported = FakeProvider(types: ["com.example.unknown"])
         let rig = try Rig([link(), unsupported])
         defer { rig.ts.cleanup() }
         await rig.model.prepare()
-        #expect(rig.model.state == .confirmPartial(message: "Hippo can't save 1 of these items."))
+        #expect(rig.model.state == .ready)
+        #expect(rig.model.partialNotice == "Hippo can't save 1 of these items.")
+        rig.model.comment = " typed after the notice "
         await rig.model.save()
         #expect(rig.model.state == .confirmPartial(message: "Hippo can't save 1 of these items."))
         #expect(try rig.committed().isEmpty)
@@ -81,6 +97,69 @@ private let unsupported = FakeProvider(types: ["com.example.unknown"])
         let rows = try rig.committed()
         #expect(rows.count == 1)
         #expect(rows[0].urls.map(\.url) == ["https://example.com/a/b"])
+        #expect(rows[0].userNote == "typed after the notice")
+    }
+
+    @Test func decliningPartialConfirmationReturnsToReady() async throws {
+        let rig = try Rig([link(), unsupported])
+        defer { rig.ts.cleanup() }
+        await rig.model.prepare()
+        await rig.model.save()
+        #expect(rig.model.state == .confirmPartial(message: "Hippo can't save 1 of these items."))
+        rig.model.declinePartial()
+        #expect(rig.model.state == .ready)
+        #expect(rig.model.partialNotice != nil)
+        #expect(try rig.committed().isEmpty)
+        #expect(rig.captureDirectories.count == 1)
+        rig.model.declinePartial() // no-op outside the confirmation
+        #expect(rig.model.state == .ready)
+    }
+
+    @Test func cleanShareHasNoNotice() async throws {
+        let rig = try Rig([link()])
+        defer { rig.ts.cleanup() }
+        await rig.model.prepare()
+        #expect(rig.model.partialNotice == nil)
+    }
+
+    @Test func cancelDuringPrepareDiscardsAndStaysPreparing() async throws {
+        let slow = SlowProvider()
+        let ts = try TestStore()
+        defer { ts.cleanup() }
+        let intake = IntakeDirectory(storeRoot: ts.base.appendingPathComponent("Hippo"))
+        let model = ShareSessionModel(store: ts.store, intake: intake,
+                                      input: ShareInput(title: nil, contentText: nil, providers: [slow], userInfoKeys: []),
+                                      destinationName: nil, location: { _ in nil }, now: { t0 }, timeZone: la)
+        let task = Task { await model.prepare() }
+        while !slow.started.withLock({ $0 }) { try await Task.sleep(for: .milliseconds(5)) }
+        model.cancel()
+        await task.value
+        let root = ts.base.appendingPathComponent("Hippo/intake")
+        #expect(((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []).isEmpty)
+        if case .preparing = model.state {} else { Issue.record("state moved on after cancel: \(model.state)") }
+        await model.save()
+        #expect(try ts.store.index.count() == 0)
+    }
+
+    @Test func storeAttachmentFailureOffersPartialConfirmation() {
+        let failures = [AttachmentFailure(index: 0, reason: "x")]
+        #expect(ShareSessionModel.message(for: .attachmentsFailed(failures)) == "1 items couldn't be saved.")
+    }
+
+    @Test func previewSymbols() async throws {
+        let kb = Data(repeating: 1, count: 16)
+        let cases: [(FakeProvider, String)] = [
+            (FakeProvider(types: ["public.mpeg-4"], fileBytes: kb), "video"),
+            (FakeProvider(types: ["com.adobe.pdf"], fileBytes: kb), "doc"),
+            (link(), "link"),
+            (FakeProvider(types: ["public.utf8-plain-text"], text: "hello"), "text.alignment"),
+        ]
+        for (provider, symbol) in cases {
+            let rig = try Rig([provider])
+            defer { rig.ts.cleanup() }
+            await rig.model.prepare()
+            #expect(rig.model.previewSymbol == symbol)
+        }
     }
 
     @Test func nothingSavableFails() async throws {

@@ -6,6 +6,9 @@ import HippoPresentation
 /// Hosts the share sheet. The extension commits the capture before it calls `completeRequest`, never
 /// syncs, never shows sign-in UI and never waits for a location fix.
 final class ShareViewController: UIViewController {
+    /// Exactly one of `completeRequest` / `cancelRequest` runs, once.
+    private var finished = false
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
@@ -33,7 +36,9 @@ final class ShareViewController: UIViewController {
                     self?.cancelRequest()
                 },
                 finish: { [weak self] in
-                    self?.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+                    guard let self, !finished else { return }
+                    finished = true
+                    extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
                 }))
         }
 
@@ -50,6 +55,8 @@ final class ShareViewController: UIViewController {
     }
 
     private func cancelRequest() {
+        guard !finished else { return }
+        finished = true
         extensionContext?.cancelRequest(withError: CocoaError(.userCancelled))
     }
 }

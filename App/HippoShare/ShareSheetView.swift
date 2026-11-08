@@ -28,13 +28,20 @@ struct ShareSheetView: View {
         .task { await model.prepare() }
         .task(id: model.state == .saved) {
             guard model.state == .saved else { return }
-            try? await Task.sleep(for: .seconds(1))
+            // A cancelled task (the view went away) throws here, so it never calls `finish()`.
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
             finish()
         }
-        .alert(partialMessage ?? "", isPresented: .constant(partialMessage != nil)) {
+        .alert(partialMessage ?? "", isPresented: partialAlertShown) {
             Button("Save the rest") { Task { await save(true) } }
-            Button("Cancel", role: .cancel) { cancel() }
+            // Dismissing only returns to editing; the share stays open.
+            Button("Cancel", role: .cancel) {}
         }
+    }
+
+    private var partialAlertShown: Binding<Bool> {
+        Binding(get: { partialMessage != nil },
+                set: { if !$0 { model.declinePartial() } })
     }
 
     private var partialMessage: String? {
@@ -44,7 +51,7 @@ struct ShareSheetView: View {
     private var header: some View {
         HStack {
             Button("Cancel", action: cancel)
-                .disabled(model.state == .saving)
+                .disabled(model.state == .saving || model.state == .saved)
             Spacer()
             Text("Hippo").font(.headline)
             Spacer()
@@ -77,6 +84,11 @@ struct ShareSheetView: View {
                     Text(message).foregroundStyle(.red)
                 default:
                     preview
+                    if let notice = model.partialNotice {
+                        Label(notice, systemImage: "exclamationmark.triangle")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 TextField("Add a comment (optional)", text: Bindable(model).comment, axis: .vertical)
                     .lineLimit(3...8)
@@ -95,7 +107,7 @@ struct ShareSheetView: View {
 
     private var preview: some View {
         HStack(spacing: 12) {
-            SharePreviewThumbnail(url: model.previewImageURL)
+            SharePreviewThumbnail(url: model.previewImageURL, symbol: model.previewSymbol)
             Text(model.summary).font(.body)
             Spacer(minLength: 0)
         }
@@ -115,6 +127,7 @@ struct ShareSheetView: View {
 /// the full-size bitmap. Without an image (or if it can't be decoded) it shows a document symbol.
 private struct SharePreviewThumbnail: View {
     let url: URL?
+    let symbol: String
     @State private var image: UIImage?
 
     var body: some View {
@@ -122,7 +135,7 @@ private struct SharePreviewThumbnail: View {
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
-                Image(systemName: url == nil ? "doc" : "photo")
+                Image(systemName: symbol)
                     .font(.title)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
