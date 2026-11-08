@@ -13,6 +13,8 @@ public actor SyncCoordinator {
     static let maxRounds = 10
     /// Consecutive follow-up passes after the first when work remains (25 x 200 jobs).
     static let maxFollowUps = 25
+    /// A pass makes at most this many silver upload rounds (`EnrichmentUploader.runOnce`, 20 captures each).
+    static let maxUploadRounds = 10
     private static let nothingDone = SyncPassResult(synced: 0, failed: 0, idle: true)
 
     private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "sync")
@@ -138,8 +140,14 @@ public actor SyncCoordinator {
             if round.idle { moreWork = false; break }
             total.idle = false
         }
-        // Silver uploads never change the pass result or the follow-up decision.
-        if !Task.isCancelled { _ = await uploader.runOnce() }
+        // Silver uploads never change the pass result or the follow-up decision. A backlog (the first
+        // launch backfills the whole library) drains in batches while each one uploads something,
+        // bounded by `maxUploadRounds`.
+        for _ in 0..<Self.maxUploadRounds {
+            if Task.isCancelled { break }
+            let round = await uploader.runOnce()
+            if round.idle || round.synced == 0 { break }
+        }
         // Gold pulls never change the pass result or the follow-up decision either.
         if !Task.isCancelled { _ = await puller.pull() }
         do {

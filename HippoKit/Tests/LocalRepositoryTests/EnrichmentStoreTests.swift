@@ -309,6 +309,11 @@ private struct EnrichmentHarness {
         #expect(try candidates(t0.addingTimeInterval(60)) == [id(6), id(5), id(2)])
         #expect(try t.store.uploadCandidates(destinationID: "d", now: t0, limit: 1).map(\.captureID) == [id(5)])
         #expect(try t.store.uploadCandidates(destinationID: "other", now: t0, limit: 50).map(\.captureID) == [id(1)])
+        // The count (background scheduling, diagnostics) follows the same rules, with no limit.
+        #expect(try t.store.pendingUploadCount(destinationID: "d", now: t0) == 2)
+        #expect(try t.store.pendingUploadCount(destinationID: "d", now: t0.addingTimeInterval(60)) == 3)
+        #expect(try t.store.pendingUploadCount(destinationID: "other", now: t0) == 1)
+        #expect(try t.store.pendingUploadCount(destinationID: "none", now: t0) == 0)
 
         // 3 changes again → included; uploading it clears the row's failure state.
         let rev3b = try write(3, "three again")

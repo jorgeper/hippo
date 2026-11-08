@@ -131,6 +131,41 @@ struct SettingsTests {
                                                            limit: 10).isEmpty)
     }
 
+    @Test func passDrainsSilverBacklogInBoundedBatches() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let extra = 7
+        let count = SyncCoordinator.maxUploadRounds * 20 + extra   // 20 captures per uploader round
+        var packages: [CommittedPackage] = []
+        for i in 0..<count { packages.append(try await h.t.note("note \(i)", at: start.addingTimeInterval(Double(i)))) }
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        // Packages first, with no silver yet, so the next pass has silver to upload and no package work.
+        #expect(await h.coordinator.syncNow().synced == count)
+        for p in packages {
+            let digest = try #require(try h.t.store.index.packageDigest(captureID: p.metadata.captureID))
+            try h.t.store.enrichments.write(
+                EnrichmentDocument(schemaVersion: 1, captureID: p.metadata.captureID, layer: .device,
+                                   packageDigest: digest, producer: EnrichmentProducer(name: "t", version: "1", build: "1"),
+                                   generatedAt: start,
+                                   facets: [FacetKind.summary.rawValue: Facet(version: 1, status: .ok, generatedAt: start,
+                                                                               provenance: "test", data: nil)]),
+                newAssets: [:])
+        }
+        func pending() throws -> Int {
+            try h.t.store.enrichments.uploadCandidates(destinationID: h.provider.destination.id, now: Date(),
+                                                       limit: 10_000).count
+        }
+        #expect(try pending() == count)
+
+        // One pass uploads many batches, but stops after `maxUploadRounds` of them.
+        let result = await h.coordinator.syncNow()
+        #expect(result == SyncPassResult(synced: 0, failed: 0, idle: true))   // silver never counts
+        #expect(try pending() == extra)
+
+        _ = await h.coordinator.syncNow()
+        #expect(try pending() == 0)
+    }
+
     @Test func coordinatorCoalescesConcurrentCalls() async throws {
         let faults = FaultPlan()
         let h = try Harness(faults: faults)

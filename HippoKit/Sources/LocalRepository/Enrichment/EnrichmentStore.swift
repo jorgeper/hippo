@@ -234,6 +234,11 @@ public final class EnrichmentStore: Sendable {
     }
 
     /// How many captures `uploadCandidates` would return without a limit.
+    public func pendingUploadCount(destinationID: String, now: Date) throws -> Int {
+        try Self.uploadCandidateCount(db: db, destinationID: destinationID, now: now)
+    }
+
+    /// How many captures `uploadCandidates` would return without a limit.
     public static func uploadCandidateCount(db: Database, destinationID: String, now: Date) throws -> Int {
         Int(try db.query("SELECT count(*) AS n \(candidateClause)",
                          [.text(destinationID), .text(destinationID), .int(ms(now))])[0].int("n") ?? 0)

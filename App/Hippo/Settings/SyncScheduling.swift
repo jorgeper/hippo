@@ -79,13 +79,16 @@ enum SyncScheduling {
         }
     }
 
-    /// Asks iOS to run the task later, if anything is waiting to upload to a connected destination or
-    /// enrichment work is due for a kind that is switched on.
+    /// Asks iOS to run the task later, if anything is waiting to upload to a connected destination
+    /// (packages or silver) or enrichment work is due for a kind that is switched on.
     static func scheduleBackgroundTask(_ environment: AppEnvironment) async {
         let store = environment.store
         let (syncWork, enrichmentWork) = await Task.detached { () -> (Bool, Bool) in
-            let sync = (try? store.destinations.active()) != nil
-                && ((try? store.index.counts()) ?? [:])[.notSynced, default: 0] > 0
+            var sync = false
+            if let active = try? store.destinations.active() {
+                sync = ((try? store.index.counts()) ?? [:])[.notSynced, default: 0] > 0
+                    || ((try? store.enrichments.pendingUploadCount(destinationID: active.id, now: Date())) ?? 0) > 0
+            }
             let kinds = EnrichmentScheduling.enabledKinds()
             let enrich = (try? store.enrichmentTasks.hasDueWork(kinds: kinds, now: Date())) ?? false
             return (sync, enrich)
