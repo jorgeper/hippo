@@ -256,8 +256,106 @@ private struct Setup {
         let r = await s.puller(adapter).pull()
 
         #expect(r.code == "transient:server_500")
+        #expect(s.cursor == nil)
         #expect(s.lastCode == "transient:server_500")
         #expect(!s.localDirExists())
         #expect(s.stagingLeftovers.isEmpty)
+    }
+
+    @Test func deviceLayerDocumentAtServerPathSkipped() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.putGold(try s.doc(layer: .device))
+
+        let r = await s.puller().pull()
+
+        s.expectSkipped(r, code: "gold_mismatch")
+        #expect(try s.enrichments.document(.device, captureID: s.id) == nil)
+        let rev = try s.h.db.query("SELECT device_revision FROM captures WHERE capture_id = ?", [.text(s.id)]).first
+        #expect(rev?.string("device_revision") == nil)
+    }
+
+    @Test func docBeforeItsAssetIsAppliedOnceAssetArrives() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.put(try EnrichmentJSON.encode(try s.doc()), at: s.remoteDir() + "/enrichment.json")
+        s.expectSkipped(await s.puller().pull(), code: "gold_asset_invalid")
+
+        try s.put(s.assetBytes, at: s.remoteDir() + "/" + s.assetPath)
+        let r = await s.puller().pull()
+
+        #expect(r.applied == 1)
+        #expect(r.skipped == 0)
+        #expect(s.localDirExists())
+    }
+
+    @Test func assetBeforeItsDocIsIgnoredThenDocApplies() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.put(s.assetBytes, at: s.remoteDir() + "/" + s.assetPath)
+        let first = await s.puller().pull()
+        #expect(first == GoldPullResult(applied: 0, removed: 0, ignored: 1, skipped: 0, code: nil))
+        #expect(s.lastCode == "ok")
+
+        try s.put(try EnrichmentJSON.encode(try s.doc()), at: s.remoteDir() + "/enrichment.json")
+        let r = await s.puller().pull()
+
+        #expect(r.applied == 1)
+        #expect(s.localDirExists())
+    }
+
+    @Test func docAndAssetInOnePageApplyOnce() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.putGold()
+        let downloads = Downloads()
+        let adapter = HookedAdapter(inner: s.h.adapter, beforeDownload: {
+            if $0.hasSuffix("enrichment.json") { downloads.add($0) }
+        })
+
+        let r = await s.puller(adapter).pull()
+
+        #expect(r.applied == 1)
+        #expect(r.skipped == 0)
+        #expect(downloads.count == 1)
+    }
+
+    @Test func wrongDatePartitionIgnored() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        let stray = "enrichments/server/1999/01/01/\(s.id)"
+        #expect(stray != s.remoteDir())
+        try s.putGold(dir: stray)
+
+        let r = await s.puller().pull()
+
+        #expect(r.applied == 0)
+        #expect(r.ignored == 2)
+        #expect(!s.localDirExists())
+    }
+
+    @Test func deleteAtStrayPartitionKeepsLocalGold() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.putGold()
+        _ = await s.puller().pull()
+        let stray = "enrichments/server/1999/01/01/\(s.id)"
+        try s.put(Data("{}".utf8), at: stray + "/enrichment.json")
+        _ = await s.puller().pull()
+        try FileManager.default.removeItem(at: s.h.remote.appendingPathComponent(stray + "/enrichment.json"))
+
+        let r = await s.puller().pull()
+
+        #expect(r.removed == 0)
+        #expect(r.ignored >= 1)
+        #expect(s.localDirExists())
+    }
+
+    @Test func downloadedDocumentOverCapSkipped() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        // Listed small, but the file that arrives is larger than the cap.
+        let path = s.remoteDir() + "/enrichment.json"
+        try s.put(Data(count: 10), at: path)
+        let url = s.h.remote.appendingPathComponent(path)
+        let adapter = HookedAdapter(inner: s.h.adapter, beforeDownload: { _ in
+            try? Data(count: 1_048_577).write(to: url)
+        })
+        let r = await s.puller(adapter).pull()
+        #expect(r.skipped == 1)
+        #expect(!s.localDirExists())
     }
 }

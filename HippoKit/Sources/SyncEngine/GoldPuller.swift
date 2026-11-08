@@ -65,6 +65,7 @@ public final class GoldPuller: Sendable {
             var cursor = try enrichments.goldCursor(destinationID: destination.id)
             var resetUsed = false
             var processed = 0
+            var seen = Seen()
             while true {
                 try Task.checkCancellation()
                 let page: ChangePage
@@ -76,10 +77,11 @@ public final class GoldPuller: Sendable {
                     cursor = nil
                     continue
                 }
+                seen = Seen()
                 for change in page.changes {
                     try Task.checkCancellation()
                     processed += 1
-                    if let code = try await handle(change, adapter: adapter, staging: staging, result: &result) {
+                    if let code = try await handle(change, adapter: adapter, staging: staging, result: &result, seen: &seen) {
                         itemCode = code
                     }
                 }
@@ -112,13 +114,25 @@ public final class GoldPuller: Sendable {
     /// A local write failed: the pull ends with the cursor at the last saved page, so the document is retried.
     private struct WriteFailed: Error {}
 
+    /// Directories whose document was already tried on the current page, so each is processed at most once.
+    private struct Seen { var attempted: Set<String> = [] }
+
+    /// The change's path if it is a server-layer file of an indexed capture, in the capture's own date
+    /// partition; anything else is not ours to apply.
+    private func target(_ path: String) throws -> RemoteEnrichmentPath? {
+        guard let parsed = EnrichmentPaths.parseRemote(path), parsed.layer == .server,
+              let packageDirectory = try index.relativeDirectory(captureID: parsed.captureID),
+              (try? EnrichmentPaths.remoteDirectory(.server, packageDirectory: packageDirectory)) == parsed.directory
+        else { return nil }
+        return parsed
+    }
+
     /// Applies one change. Returns a code when the change was skipped or applied with a mismatch.
     private func handle(_ change: RemoteChange, adapter: any StorageAdapter, staging: URL,
-                        result: inout GoldPullResult) async throws -> String? {
+                        result: inout GoldPullResult, seen: inout Seen) async throws -> String? {
         switch change {
         case .deleted(let path):
-            guard let parsed = EnrichmentPaths.parseRemote(path), parsed.layer == .server,
-                  parsed.file == .document, try isIndexed(parsed.captureID) else {
+            guard let parsed = try target(path), parsed.file == .document else {
                 result.ignored += 1
                 return nil
             }
@@ -126,17 +140,39 @@ public final class GoldPuller: Sendable {
             let existed = FileManager.default.fileExists(atPath: dir.path)
             try enrichments.removeLayer(.server, captureID: parsed.captureID)
             if existed { result.removed += 1 } else { result.ignored += 1 }
+            seen.attempted.remove(parsed.directory)
             return nil
         case .upserted(let info):
-            guard let parsed = EnrichmentPaths.parseRemote(info.relativePath), parsed.layer == .server,
-                  parsed.file == .document, try isIndexed(parsed.captureID) else {
+            guard let parsed = try target(info.relativePath) else {
                 result.ignored += 1
                 return nil
+            }
+            var documentInfo = info
+            switch parsed.file {
+            case .document:
+                if !seen.attempted.insert(parsed.directory).inserted { result.ignored += 1; return nil }
+            case .asset(let name):
+                // Files can arrive in any order: an asset we don't have yet may complete a document that was
+                // skipped earlier (or not listed yet). Fetch that document once.
+                let local = layout.enrichmentDirectory(.server, captureID: parsed.captureID)
+                    .appendingPathComponent("assets/" + name)
+                guard !seen.attempted.contains(parsed.directory),
+                      !FileManager.default.fileExists(atPath: local.path) else {
+                    result.ignored += 1
+                    return nil
+                }
+                seen.attempted.insert(parsed.directory)
+                guard let document = try await adapter.inspectFile(
+                    relativePath: parsed.directory + "/" + EnrichmentPaths.documentName) else {
+                    result.ignored += 1
+                    return nil
+                }
+                documentInfo = document
             }
             let work = staging.appendingPathComponent(UUID().uuidString, isDirectory: true)
             defer { try? FileManager.default.removeItem(at: work) }
             do {
-                let code = try await apply(info, parsed: parsed, adapter: adapter, work: work)
+                let code = try await apply(documentInfo, parsed: parsed, adapter: adapter, work: work)
                 result.applied += 1
                 return code
             } catch let skip as Skip {
@@ -158,7 +194,10 @@ public final class GoldPuller: Sendable {
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         let documentURL = work.appendingPathComponent(EnrichmentPaths.documentName)
         do {
-            _ = try await adapter.downloadFile(relativePath: info.relativePath, to: documentURL, maxBytes: maxDocumentBytes)
+            let got = try await adapter.downloadFile(relativePath: info.relativePath, to: documentURL,
+                                                     maxBytes: maxDocumentBytes)
+            let size = (try? fm.attributesOfItem(atPath: documentURL.path)[.size] as? Int64) ?? got.byteCount
+            guard got.byteCount <= maxDocumentBytes, size <= maxDocumentBytes else { throw Skip(code: "gold_too_large") }
         } catch StorageError.permanent(let code) {
             throw Skip(code: code == "too_large" ? "gold_too_large" : "gold_missing")
         }
