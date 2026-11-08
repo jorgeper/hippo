@@ -179,5 +179,24 @@ import CaptureCore
         #expect(DataDetectionEnricher.detect(in: "at 2", source: "s", anchor: a).filter { $0.type == "date" }.isEmpty)
     }
 
+    private func recentNoon(weekday: Int) -> Date {
+        var d = noon(daysFromToday: -13)
+        while cal.component(.weekday, from: d) != weekday { d = cal.date(byAdding: .day, value: 1, to: d)! }
+        return d
+    }
+
+    @Test func nextWeekdayOnCaptureWeekdayIsAWeekLater() async throws {
+        let cap = recentNoon(weekday: 6)  // a Friday
+        let v = try await dateValue("next Friday", capturedAt: cap)
+        #expect(v == stamp(cal.date(byAdding: .day, value: 7, to: cap)!, 12))
+        #expect(try await dateValue("Friday", capturedAt: cap) == stamp(cap, 12))
+    }
+
+    @Test func nextWeekdayOtherwiseIsFirstAfterCapture() async throws {
+        let cap = recentNoon(weekday: 2)  // a Monday
+        let v = try await dateValue("next Friday", capturedAt: cap)
+        #expect(v == stamp(cal.date(byAdding: .day, value: 4, to: cap)!, 12))
+    }
+
     @Test func versionIsThree() { #expect(DataDetectionEnricher().version == 3) }
 }

@@ -48,7 +48,7 @@ public struct DataDetectionEnricher: Enricher {
     }
 
     static func detect(in text: String, source: String, ignoresClockLine: Bool = false,
-                anchor: DateAnchor?) -> [Detection] {
+                       anchor: DateAnchor?) -> [Detection] {
         let types: NSTextCheckingResult.CheckingType = [.date, .phoneNumber, .address, .link]
         guard let detector = try? NSDataDetector(types: types.rawValue) else { return [] }
         let ns = text as NSString
@@ -62,7 +62,8 @@ public struct DataDetectionEnricher: Enricher {
             case .date:
                 guard let date = r.date else { continue }
                 if ignoresClockLine, NSMaxRange(r.range) <= NSMaxRange(firstLine), Self.isBareTime(matched) { continue }
-                out.append(Detection(type: "date", text: matched, value: dateValue(Self.reanchored(date, matched: matched, anchor: anchor), zone: r.timeZone), source: source))
+                let value = dateValue(Self.reanchored(date, matched: matched, anchor: anchor), zone: r.timeZone)
+                out.append(Detection(type: "date", text: matched, value: value, source: source))
             case .phoneNumber:
                 out.append(Detection(type: "phone", text: matched, value: r.phoneNumber ?? matched, source: source))
             case .address:
@@ -114,9 +115,8 @@ public struct DataDetectionEnricher: Enricher {
         if matches(matched, weekdayName) {
             let wd = cal.component(.weekday, from: date)
             var offset = (wd - cal.component(.weekday, from: anchorDay) + 7) % 7
-            let k = cal.dateComponents([.day], from: runDay, to: found).day ?? 0
-            // "next Friday" said on a Friday: the detector reports a week out.
-            if k >= 7, matches(matched, #"^\s*next\b"#) { offset += 7 }
+            // A plain weekday equal to the capture's weekday is the capture day; "next" means strictly after it.
+            if offset == 0, matches(matched, #"^\s*next\b"#) { offset += 7 }
             return cal.date(byAdding: .day, value: offset, to: anchorDay).map(at) ?? date
         }
         let shift = cal.dateComponents([.day], from: runDay, to: anchorDay).day ?? 0
