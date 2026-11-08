@@ -26,6 +26,7 @@ struct SyncHarness {
     let writer: PackageWriter
     let destinations: DestinationStore
     let jobs: JobStore
+    let log: ActivityLog
     let faults = FaultPlan()
     let clock = TestClock(t0)
 
@@ -41,6 +42,7 @@ struct SyncHarness {
         writer = PackageWriter(layout: layout, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"))
         destinations = DestinationStore(db: db)
         jobs = JobStore(db: db)
+        log = ActivityLog(layout: layout, process: .app)
         _ = try destinations.connect(Destination(id: "dest-fs", providerKind: "filesystem", accountIdentifier: "local",
                                                  remoteRoot: "/", displayName: "Local folder", status: .active))
     }
@@ -52,9 +54,9 @@ struct SyncHarness {
     func worker(_ adapter: (any StorageAdapter)? = nil, owner: String = "test-worker",
                 random: @escaping @Sendable () -> Double = { 1 }) -> SyncWorker {
         let a: any StorageAdapter = adapter ?? self.adapter
-        let clock = self.clock
+        let clock = self.clock, log = self.log
         return SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index,
-                          adapterFor: { _ in a }, owner: owner, now: { clock.now }, random: random)
+                          adapterFor: { _ in a }, owner: owner, now: { clock.now }, random: random, log: log)
     }
 
     /// Commits, registers and enqueues a capture with one attachment of `attachmentBytes` bytes, or a

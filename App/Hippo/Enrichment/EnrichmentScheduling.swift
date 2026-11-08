@@ -145,7 +145,7 @@ enum EnrichmentScheduling {
             producer: EnrichmentProducer(name: "hippo-ios", version: env.producer.appVersion,
                                          build: env.producer.build),
             isEnabled: { settings.isEnrichmentEnabled($0) },
-            isOnline: { network.isOnline })
+            isOnline: { network.isOnline }, log: store.log)
         runner = made
         return made
     }

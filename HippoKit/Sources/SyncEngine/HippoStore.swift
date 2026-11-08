@@ -130,7 +130,7 @@ public final class HippoStore: Sendable {
     public func makeWorker(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
                            owner: String) -> SyncWorker {
         SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index, adapterFor: adapterFor,
-                   owner: owner)
+                   owner: owner, log: log)
     }
 
     /// Uploads silver enrichment to the active destination after packages have synced, with the default
@@ -138,14 +138,14 @@ public final class HippoStore: Sendable {
     public func makeEnrichmentUploader(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
         -> EnrichmentUploader {
         EnrichmentUploader(layout: layout, destinations: destinations, enrichments: enrichments,
-                           adapterFor: adapterFor)
+                           adapterFor: adapterFor, log: log)
     }
 
     /// Pulls gold enrichment from the active destination's `enrichments/server/` tree, with the default clock.
     public func makeGoldPuller(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
         -> GoldPuller {
         GoldPuller(layout: layout, index: index, destinations: destinations, enrichments: enrichments,
-                   adapterFor: adapterFor)
+                   adapterFor: adapterFor, log: log)
     }
 
     /// Deletes the capture from this phone (spec §11): cancels its uploads, waits up to 10 s for a

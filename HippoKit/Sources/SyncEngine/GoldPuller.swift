@@ -43,10 +43,13 @@ public final class GoldPuller: Sendable {
     private let enrichments: EnrichmentStore
     private let adapterFor: @Sendable (Destination) throws -> any StorageAdapter
     private let now: @Sendable () -> Date
+    private let log: ActivityLog?
 
     public init(layout: StoreLayout, index: CaptureIndex, destinations: DestinationStore, enrichments: EnrichmentStore,
                 adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
-                softChangeLimit: Int = 200, now: @escaping @Sendable () -> Date = Date.init) {
+                softChangeLimit: Int = 200, now: @escaping @Sendable () -> Date = Date.init,
+                log: ActivityLog? = nil) {
+        self.log = log
         self.softChangeLimit = softChangeLimit
         self.layout = layout
         self.index = index
@@ -74,13 +77,13 @@ public final class GoldPuller: Sendable {
 
         var itemCode: String?
         var endCode: String?
+        var resetUsed = false
         do {
             let adapter = try adapterFor(destination)
             try FileManager.default.createDirectory(at: layout.stagingDir, withIntermediateDirectories: true)
             lock = try StagingLock.acquire(at: layout.stagingDir.appendingPathComponent("\(name).lock"))
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
             var cursor = try enrichments.goldCursor(destinationID: destination.id)
-            var resetUsed = false
             var processed = 0
             var seen = Seen()
             while true {
@@ -124,6 +127,7 @@ public final class GoldPuller: Sendable {
         } catch {
             Self.log.error("\("gold_record_failed", privacy: .public)")
         }
+        log?.append(LogEvent(event: .goldPull, code: result.code ?? "ok", count: result.applied, on: resetUsed))
         return result
     }
 
@@ -158,7 +162,10 @@ public final class GoldPuller: Sendable {
             let dir = layout.enrichmentDirectory(.server, captureID: parsed.captureID)
             let existed = FileManager.default.fileExists(atPath: dir.path)
             try enrichments.removeLayer(.server, captureID: parsed.captureID)
-            if existed { result.removed += 1 } else { result.ignored += 1 }
+            if existed {
+                result.removed += 1
+                log?.append(LogEvent(event: .goldRemoved, captureID: parsed.captureID))
+            } else { result.ignored += 1 }
             seen.attempted.remove(parsed.directory)
             return nil
         case .upserted(let info):
@@ -194,9 +201,11 @@ public final class GoldPuller: Sendable {
                 let code = try await apply(documentInfo, parsed: parsed, adapter: adapter, work: work,
                                            downloads: &downloads)
                 result.applied += 1
+                log?.append(LogEvent(event: .goldApplied, captureID: parsed.captureID))
                 return code
             } catch let skip as Skip {
                 result.skipped += 1
+                log?.append(LogEvent(event: .goldSkipped, captureID: parsed.captureID, code: skip.code))
                 return skip.code
             } catch EnrichmentStoreError.notIndexed {
                 result.ignored += 1

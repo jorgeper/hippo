@@ -64,6 +64,27 @@ private struct Harness {
 
 @MainActor
 struct SettingsTests {
+    @Test func switchChangeIsLogged() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        await h.model.setEnrichment(.transcript, on: false)
+        await h.model.setLocationEnabled(true)
+        let events = h.t.store.log.globalEvents(limit: 10, before: nil).filter { $0.event == .settingsChanged }.reversed()
+        #expect(events.map(\.kind) == ["transcript", "location"])
+        #expect(events.map(\.on) == [false, true])
+    }
+
+    @Test func syncPassIsLoggedWithTrigger() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        _ = await h.coordinator.syncNow(trigger: "launch")
+        let passes = h.t.store.log.globalEvents(limit: 10, before: nil).filter { $0.event == .syncPass }.reversed()
+        #expect(passes.map(\.phase) == ["start", "end"])
+        #expect(passes.allSatisfy { $0.trigger == "launch" })
+        #expect(passes.last?.code == "ok")
+        #expect(passes.last?.count == 0)
+    }
+
     @Test func registryUnknownKindIsProviderUnavailable() async throws {
         let h = try Harness()
         defer { h.cleanup() }

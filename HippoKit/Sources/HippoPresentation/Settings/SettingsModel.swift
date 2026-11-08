@@ -63,6 +63,7 @@ public final class SettingsModel {
     /// Stores the switch. Turning a kind on backfills existing captures through `onEnrichmentEnabled`.
     public func setEnrichment(_ kind: FacetKind, on: Bool) async {
         settings.setEnrichmentEnabled(kind, on)
+        store.log.append(LogEvent(event: .settingsChanged, kind: kind.rawValue, on: on))
         if on { await onEnrichmentEnabled(kind) }
     }
 
@@ -147,6 +148,7 @@ public final class SettingsModel {
         let enabled = on ? await requestLocationPermission() : false
         settings.locationEnabled = enabled
         locationEnabled = enabled
+        store.log.append(LogEvent(event: .settingsChanged, kind: "location", on: enabled))
     }
 
     private func syncThenRefresh() async {

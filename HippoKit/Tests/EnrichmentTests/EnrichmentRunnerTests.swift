@@ -4,6 +4,7 @@ import CaptureCore
 import LocalRepository
 import SyncEngine
 import Enrichment
+import FilesystemAdapter
 
 private let t0 = RunnerHarness.t0
 
@@ -454,6 +455,126 @@ private let t0 = RunnerHarness.t0
         #expect(facet.data == nil)
         #expect(facet.provenance == "invalid_status")
     }
+    // MARK: Activity log
+
+    private func events(_ h: RunnerHarness, _ id: String) -> [LogEvent] {
+        h.store.log.events(captureID: id, from: Date().addingTimeInterval(-86_400))
+    }
+
+    @Test func logsQueuedStartedFinished() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let id = try await h.note("hi")
+        let items: JSONValue = .object(["items": .array([.string("a"), .string("b")])])
+        let fake = FakeEnricher(kind: .dataDetection, steps: [.output(FakeEnricher.ok(items))])
+        let runner = h.runner([fake])
+        try await runner.schedule()
+        _ = await runner.runPending()
+
+        let mine = events(h, id).filter { $0.event != .captureSaved }
+        #expect(mine.map(\.event) == [.enrichQueued, .enrichStarted, .enrichFinished])
+        #expect(mine[0].kind == FacetKind.dataDetection.rawValue)
+        #expect(mine[1].attempt == 1)
+        #expect(mine[2].outcome == .ok)
+        #expect(mine[2].count == 2)
+        #expect(try #require(mine[2].ms) >= 0)
+        let global = h.store.log.globalEvents(limit: 50, before: nil).reversed()
+        let scheduled = global.filter { $0.event == .enrichScheduled }
+        #expect(scheduled.count == 1)
+        #expect(scheduled.first?.count == 1)
+        let pass = global.filter { $0.event == .enrichPass }
+        #expect(pass.map(\.phase) == ["start", "end"])
+        #expect(pass.last?.count == 1)
+        #expect(pass.last?.code == "nothing_due")
+    }
+
+    @Test func logsDeferredThenRetryingThenFailed() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let id = try await h.note("hi")
+        let fake = FakeEnricher(kind: .transcript, steps: [.error(.deferred(code: "model_missing", retryAfter: 900))])
+        let runner = h.runner([fake])
+        try await runner.schedule()
+        _ = await runner.runPending()
+        let deferred = try #require(events(h, id).first { $0.event == .enrichDeferred })
+        #expect(deferred.code == "model_missing")
+        #expect(deferred.retryAt == t0.addingTimeInterval(900))
+
+        let h2 = try RunnerHarness(); defer { h2.cleanup() }
+        let id2 = try await h2.note("hi")
+        let flaky = FakeEnricher(kind: .textRecognition)
+        for _ in 0..<5 { flaky.enqueue(.error(.transient(code: "busy"))) }
+        let runner2 = h2.runner([flaky])
+        try await runner2.schedule()
+        for _ in 1...5 {
+            _ = await runner2.runPending()
+            h2.clock.value = h2.clock.value.addingTimeInterval(86_400)
+        }
+        let all = events(h2, id2)
+        let retrying = all.filter { $0.event == .enrichRetrying }
+        #expect(retrying.count == 4)
+        #expect(retrying.map(\.attempt) == [1, 2, 3, 4])
+        #expect(retrying.allSatisfy { $0.code == "busy" })
+        let failed = all.filter { $0.event == .enrichFailed }
+        #expect(failed.count == 1)
+        #expect(failed.first?.code == "busy")
+        #expect(failed.first?.attempt == 5)
+        #expect(all.last?.event == .enrichFailed)
+    }
+
+    @Test func postsTaskFinishedPerTask() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        _ = try await h.note("one")
+        _ = try await h.note("two", minutes: 1)
+        let runner = h.runner([FakeEnricher(kind: .dataDetection)])
+        try await runner.schedule()
+        let count = Box(0)
+        let token = NotificationCenter.default.addObserver(forName: EnrichmentRunner.taskFinished, object: runner,
+                                                           queue: nil) { _ in count.value += 1 }
+        defer { NotificationCenter.default.removeObserver(token) }
+        _ = await runner.runPending()
+        #expect(count.value == 2)
+    }
+
+    @Test func notApplicableIsNotLogged() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let id = try await h.note("hi")
+        let runner = h.runner([FakeEnricher(kind: .linkPreview, applies: { _ in false })])
+        try await runner.schedule()
+        #expect(events(h, id).filter { $0.event == .enrichQueued }.isEmpty)
+        #expect(h.store.log.globalEvents(limit: 50, before: nil).filter { $0.event == .enrichScheduled }.isEmpty)
+    }
+
+    @Test func noEventCarriesContent() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let remote = h.base.appendingPathComponent("Remote")
+        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+        _ = try h.store.destinations.connect(Destination(id: "dest-fs", providerKind: "filesystem",
+                                                         accountIdentifier: "local", remoteRoot: "/",
+                                                         displayName: "Local folder", status: .active))
+        let id = try await h.store.capture(CaptureDraft(
+            captureID: UUID(), startedAt: RunnerHarness.t0, timeZone: RunnerHarness.zone, method: .shareExtension,
+            userNote: "SECRET-NOTE-TEXT", urls: [CapturedURL(url: "https://example.com/private", source: "shared")]))
+            .metadata.captureID
+        let directory = try #require(try h.store.index.relativeDirectory(captureID: id))
+        let runner = h.runner([FakeEnricher(kind: .dataDetection)])
+        try await runner.schedule()
+        _ = await runner.runPending()
+        let adapter = FilesystemAdapter(root: remote)
+        _ = await h.store.makeWorker(adapterFor: { _ in adapter }, owner: "test").runOnce()
+        _ = await h.store.makeEnrichmentUploader(adapterFor: { _ in adapter }).runOnce()
+        _ = await h.store.makeGoldPuller(adapterFor: { _ in adapter }).pull()
+
+        let files = h.store.log.segmentFiles()
+        #expect(!files.isEmpty)
+        let names = Set(events(h, id).map(\.event))
+        #expect(names.isSuperset(of: [.captureSaved, .enrichQueued, .enrichFinished, .packageUploaded, .silverUploaded]))
+        for file in files {
+            let text = String(decoding: try Data(contentsOf: file), as: UTF8.self)
+            #expect(!text.contains("SECRET"))
+            #expect(!text.contains("example.com"))
+            #expect(!text.contains(directory))
+        }
+    }
+
 }
 
 extension RunnerHarness {

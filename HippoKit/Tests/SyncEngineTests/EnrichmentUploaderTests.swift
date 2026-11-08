@@ -51,7 +51,7 @@ private struct Setup {
         let a: any StorageAdapter = adapter ?? h.adapter
         let clock = h.clock
         return EnrichmentUploader(layout: h.layout, destinations: h.destinations, enrichments: enrichments,
-                                  adapterFor: { _ in a }, now: { clock.now }, random: { 1 })
+                                  adapterFor: { _ in a }, now: { clock.now }, random: { 1 }, log: h.log)
     }
 
     var localJSON: Data {
@@ -228,5 +228,22 @@ private struct Setup {
         let s = try await Setup(); defer { s.h.cleanup() }
         try s.h.db.execute("UPDATE destinations SET status = 'disabled'")
         #expect(await s.uploader().runOnce() == SyncPassResult(synced: 0, failed: 0, idle: true))
+    }
+
+    @Test func logsSilverUploaded() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        #expect(await s.uploader().runOnce().synced == 1)
+        let logged = s.h.log.events(captureID: s.pkg.metadata.captureID, from: Date(timeIntervalSince1970: 0))
+            .filter { $0.event == .silverUploaded || $0.event == .silverUploadFailed }
+        #expect(logged.map(\.event) == [.silverUploaded])
+        #expect(logged[0].dest == "filesystem")
+
+        let f = try await Setup(); defer { f.h.cleanup() }
+        f.h.faults.failBeforeWrite("\(f.remoteDir)/\(f.assetPath)", .transient(code: "server_500"))
+        #expect(await f.uploader().runOnce().failed == 1)
+        let failed = try #require(f.h.log.events(captureID: f.pkg.metadata.captureID, from: Date(timeIntervalSince1970: 0))
+            .first { $0.event == .silverUploadFailed })
+        #expect(failed.code == "transient:server_500")
+        #expect(failed.dest == "filesystem")
     }
 }

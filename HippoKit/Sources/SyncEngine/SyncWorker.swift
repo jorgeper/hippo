@@ -34,11 +34,13 @@ public final class SyncWorker: Sendable {
     private let policy: RetryPolicy
     private let now: @Sendable () -> Date
     private let random: @Sendable () -> Double
+    private let log: ActivityLog?
 
     public init(layout: StoreLayout, jobs: JobStore, destinations: DestinationStore, index: CaptureIndex,
                 adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter, owner: String,
                 policy: RetryPolicy = .init(), now: @escaping @Sendable () -> Date = Date.init,
-                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) {
+                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }, log: ActivityLog? = nil) {
+        self.log = log
         self.layout = layout
         self.jobs = jobs
         self.destinations = destinations
@@ -97,6 +99,7 @@ public final class SyncWorker: Sendable {
         do {
             try await upload(job)
             try jobs.markSynced(jobID: job.jobID, owner: leaseOwner)
+            log?.append(LogEvent(event: .packageUploaded, captureID: job.captureID, dest: destinationKind(job)))
             return .synced
         } catch is CancellationError {
             return .stopped
@@ -224,10 +227,18 @@ public final class SyncWorker: Sendable {
         do {
             try jobs.markFailed(jobID: job.jobID, owner: leaseOwner, state: failure.state, errorCode: failure.code,
                                 nextAttemptAt: next)
+            log?.append(LogEvent(event: .packageUploadFailed, captureID: job.captureID, code: failure.code,
+                                 dest: destinationKind(job)))
             return .failed
         } catch {
             return .abandoned
         }
+    }
+
+    /// The job's destination provider kind, for the log. Nil when it can't be read.
+    private func destinationKind(_ job: UploadJob) -> String? {
+        guard log != nil else { return nil }
+        return (try? destinations.destination(id: job.destinationID))?.providerKind
     }
 
     private static func failure(for error: StorageError) -> Failure {
