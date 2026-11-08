@@ -75,7 +75,7 @@ struct NoteEditorView: View {
         }
         dismiss()
         if let coordinator = environment.coordinator {
-            Task { _ = await BackgroundActivity.run(name: "note-sync") { await coordinator.syncNow() } }
+            Task { await SyncScheduling.runPass(coordinator, name: "note-sync") }
         }
     }
 }

@@ -37,6 +37,9 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// True when the user has turned Hippo's location off in iOS Settings, or it is restricted.
+    var isDenied: Bool { manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted }
+
     /// Asks for when-in-use access if not yet decided. True when authorized.
     func requestPermission() async -> Bool {
         switch manager.authorizationStatus {

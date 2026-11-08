@@ -70,8 +70,13 @@ struct AppEnvironment: Sendable {
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: protection)
             }
             let store = try HippoStore.open(root: storeRoot, producer: producer)
-            // Task 14 adds the Dropbox provider to this registry.
-            let registry = processKind == .app ? ProviderRegistry([]) : nil
+            // Plan 3 adds Dropbox to this list.
+            #if DEBUG && !HIPPO_SHARE_EXTENSION
+            let providers: [any StorageProvider] = [DevFolderProvider()]
+            #else
+            let providers: [any StorageProvider] = []
+            #endif
+            let registry = processKind == .app ? ProviderRegistry(providers) : nil
             let coordinator = registry.map {
                 SyncCoordinator(store: store, registry: $0, ownerPrefix: "app", appVersion: producer.appVersion)
             }

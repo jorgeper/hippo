@@ -63,7 +63,7 @@ struct RecorderView: View {
                 recorder.deactivate()
                 dismiss()
                 if let coordinator = environment.coordinator {
-                    Task { _ = await BackgroundActivity.run(name: "record-sync") { await coordinator.syncNow() } }
+                    Task { await SyncScheduling.runPass(coordinator, name: "record-sync") }
                 }
             }
         }

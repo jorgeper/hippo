@@ -8,17 +8,20 @@ import UIKit
 /// lock in the shared container (`0xdead10cc`). The app uses a UIKit background task; the Share
 /// Extension, where `UIApplication.shared` is unavailable, uses `ProcessInfo.performExpiringActivity`.
 enum BackgroundActivity {
-    /// `name` is a fixed string; it shows up in system logs.
-    static func run<T: Sendable, E: Error>(name: String,
+    /// `name` is a fixed string; it shows up in system logs. `onExpire` runs when the app's background time
+    /// runs out, before the assertion ends; sync passes use it to stop. The extension ignores it, because
+    /// it never syncs.
+    static func run<T: Sendable, E: Error>(name: String, onExpire: (@Sendable () -> Void)? = nil,
                                            _ work: @escaping @Sendable () async throws(E) -> T) async throws(E) -> T {
-        let result: Result<T, E> = await withAssertion(name: name) {
+        let result: Result<T, E> = await withAssertion(name: name, onExpire: onExpire) {
             do throws(E) { return .success(try await work()) } catch { return .failure(error) }
         }
         return try result.get()
     }
 
     #if HIPPO_SHARE_EXTENSION
-    private static func withAssertion<R: Sendable>(name: String, _ work: @escaping @Sendable () async -> R) async -> R {
+    private static func withAssertion<R: Sendable>(name: String, onExpire: (@Sendable () -> Void)?,
+                                                   _ work: @escaping @Sendable () async -> R) async -> R {
         await withCheckedContinuation { continuation in
             let started = OSAllocatedUnfairLock(initialState: false)
             // The block runs on a background queue and the assertion lasts until it returns. It is called
@@ -40,8 +43,9 @@ enum BackgroundActivity {
         }
     }
     #else
-    private static func withAssertion<R: Sendable>(name: String, _ work: @escaping @Sendable () async -> R) async -> R {
-        let token = await MainActor.run { BackgroundTaskToken(name: name) }
+    private static func withAssertion<R: Sendable>(name: String, onExpire: (@Sendable () -> Void)?,
+                                                   _ work: @escaping @Sendable () async -> R) async -> R {
+        let token = await MainActor.run { BackgroundTaskToken(name: name, onExpire: onExpire) }
         let result = await work()
         await MainActor.run { token.end() }
         return result
@@ -55,9 +59,12 @@ enum BackgroundActivity {
 private final class BackgroundTaskToken {
     private var identifier: UIBackgroundTaskIdentifier = .invalid
 
-    init(name: String) {
+    init(name: String, onExpire: (@Sendable () -> Void)?) {
         identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
-            MainActor.assumeIsolated { self?.end() }
+            MainActor.assumeIsolated {
+                onExpire?()
+                self?.end()
+            }
         }
     }
 

@@ -168,7 +168,7 @@ struct CaptureDetailView: View {
         let model = model, coordinator = environment.coordinator
         Task {
             defer { retrying = false }
-            await BackgroundActivity.run(name: "detail-retry") {
+            await BackgroundActivity.run(name: "detail-retry", onExpire: coordinator.map(SyncScheduling.stopper)) {
                 await model.retry()
                 _ = await coordinator?.syncNow()
             }

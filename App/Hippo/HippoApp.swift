@@ -11,6 +11,7 @@ struct HippoApp: App {
     init() {
         startup = AppEnvironment.open(processKind: .app)
         if case .success(let environment) = startup {
+            SyncScheduling.registerBackgroundTask(environment)
             Self.startLaunchRecovery(environment)
         }
     }
@@ -38,6 +39,7 @@ struct HippoApp: App {
                     log.error("\("diagnostics_failed", privacy: .public)")
                 }
             }
+            await SyncScheduling.syncAfterLaunchRecovery(environment)
         }
     }
 }

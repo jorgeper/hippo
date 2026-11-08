@@ -11,6 +11,7 @@ struct RootView: View {
             NavigationStack(path: $path) {
                 TimelineView(environment: environment, path: $path)
             }
+            .syncScheduling(environment)
         case .failure(let error):
             ContentUnavailableView("Storage unavailable", systemImage: "exclamationmark.triangle",
                                    description: Text(LocalizedStringKey(error.message)))

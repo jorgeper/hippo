@@ -44,7 +44,10 @@ struct TimelineView: View {
                 switch destination {
                 case .detail(let id):
                     CaptureDetailView(environment: environment, captureID: id) { Task { await model.reload() } }
-                case .settings: Text("Settings").navigationTitle("Settings")
+                case .settings:
+                    if let registry = environment.registry, let coordinator = environment.coordinator {
+                        SettingsView(store: environment.store, registry: registry, coordinator: coordinator)
+                    }
                 }
             }
             .sheet(isPresented: $showingFilters) {
@@ -129,7 +132,7 @@ struct TimelineView: View {
         .listStyle(.insetGrouped)
         .refreshable {
             if let coordinator = environment.coordinator {
-                _ = await BackgroundActivity.run(name: "timeline-sync") { await coordinator.syncNow() }
+                await SyncScheduling.runPass(coordinator, name: "timeline-sync")
             }
             await model.reload()
         }
