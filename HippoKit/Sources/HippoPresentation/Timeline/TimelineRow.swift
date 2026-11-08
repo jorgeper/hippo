@@ -13,6 +13,8 @@ public struct TimelineRow: Identifiable, Equatable, Sendable {
     public var comment: String?
     public var kind: RowKind
     public var sync: SyncLabel
+    /// The capture package's directory relative to the store, for resolving `thumbnailAttachmentPaths`.
+    public var relativeDirectory: String
     /// Package-relative paths.
     public var thumbnailAttachmentPaths: [String]
     public var extraCount: Int
@@ -21,6 +23,7 @@ public struct TimelineRow: Identifiable, Equatable, Sendable {
     public static func make(_ s: CaptureSummary, metadata: CaptureMetadata?, locale: Locale) -> TimelineRow {
         var row = TimelineRow(id: s.id, time: timeText(s, locale: locale), title: s.title, subtitle: nil,
                               comment: s.noteExcerpt, kind: .file, sync: SyncLabel(s.syncBucket),
+                              relativeDirectory: s.relativeDirectory,
                               thumbnailAttachmentPaths: [], extraCount: 0)
         let hasAudio = s.contentTypes.contains(.audio)
         let hasVisual = s.contentTypes.contains(.image) || s.contentTypes.contains(.video)

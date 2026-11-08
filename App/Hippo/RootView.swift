@@ -1,17 +1,14 @@
 import SwiftUI
 
-/// The first screen. A placeholder "Captures" screen until the timeline is built; if the store could
-/// not be opened, an explanation instead of the app.
+/// The first screen: the timeline, or, if the store could not be opened, an explanation instead.
 struct RootView: View {
     let startup: Result<AppEnvironment, StartupError>
 
     var body: some View {
         switch startup {
-        case .success:
+        case .success(let environment):
             NavigationStack {
-                ContentUnavailableView("Captures", systemImage: "tray",
-                                       description: Text("The timeline is coming soon."))
-                    .navigationTitle("Captures")
+                TimelineView(environment: environment)
             }
         case .failure(let error):
             ContentUnavailableView("Storage unavailable", systemImage: "exclamationmark.triangle",

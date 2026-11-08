@@ -3,6 +3,7 @@ import os
 import CaptureCore
 import SyncEngine
 import ShareIntake
+import HippoPresentation
 
 /// Which process opened the environment. Both open the same store in the App Group.
 enum ProcessKind: Sendable {
@@ -17,7 +18,12 @@ enum StartupError: Error, Sendable, Equatable {
     case storeUnavailable
 
     /// Shown instead of the app's screens; startup never crashes.
-    var message: String { "Hippo can't open its storage. Reinstall with `make device`." }
+    var message: String {
+        switch self {
+        case .appGroupUnavailable: "Hippo can't open its storage. Reinstall with `make device`."
+        case .storeUnavailable: "Hippo couldn't open its captures database. Try restarting the app."
+        }
+    }
 }
 
 /// Everything a process needs to read and write captures: the shared store and the intake directory,
@@ -30,6 +36,10 @@ struct AppEnvironment: Sendable {
     let producer: Producer
     let store: HippoStore
     let intake: IntakeDirectory
+    /// Storage providers and the sync coordinator exist in the app process only; the Share Extension
+    /// never syncs, so both are nil there.
+    let registry: ProviderRegistry?
+    let coordinator: SyncCoordinator?
 
     /// Messages are fixed strings only: never paths or error descriptions.
     private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "startup")
@@ -60,8 +70,14 @@ struct AppEnvironment: Sendable {
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: protection)
             }
             let store = try HippoStore.open(root: storeRoot, producer: producer)
+            // Task 14 adds the Dropbox provider to this registry.
+            let registry = processKind == .app ? ProviderRegistry([]) : nil
+            let coordinator = registry.map {
+                SyncCoordinator(store: store, registry: $0, ownerPrefix: "app", appVersion: producer.appVersion)
+            }
             return .success(AppEnvironment(processKind: processKind, storeRoot: storeRoot, producer: producer,
-                                           store: store, intake: IntakeDirectory(storeRoot: storeRoot)))
+                                           store: store, intake: IntakeDirectory(storeRoot: storeRoot),
+                                           registry: registry, coordinator: coordinator))
         } catch {
             log.error("\("store_open_failed", privacy: .public)")
             return .failure(.storeUnavailable)

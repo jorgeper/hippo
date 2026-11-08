@@ -105,6 +105,12 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
         #expect(time.replacingOccurrences(of: "\u{202F}", with: " ") == "4:30 PM")
     }
 
+    @Test func rowCarriesPackageDirectory() {
+        let row = TimelineRow.make(summary(types: [.image], attachments: 1, primary: "attachments/1.jpg"),
+                                   metadata: nil, locale: locale)
+        #expect(row.relativeDirectory == "2026/11/x")
+    }
+
     @Test func voiceRowShowsDuration() {
         let s = summary(types: [.audio], method: .voiceRecording, attachments: 1)
         let m = metadata(attachments: [attachment(1, uti: "public.mpeg-4-audio", duration: 75.4)])
