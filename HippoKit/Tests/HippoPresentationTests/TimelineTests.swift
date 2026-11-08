@@ -185,4 +185,29 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
         await model.reload()
         #expect(model.sections.first?.rows.first?.subtitle == "example.com")
     }
+
+    @Test @MainActor func oldestFirstPagingIsAscendingAndUnique() async throws {
+        let t = try TestStore(); defer { t.cleanup() }
+        for i in 0..<120 { try await t.note("n\(i)", at: Date(timeIntervalSince1970: 1_794_000_000 + Double(i * 60))) }
+        let model = TimelineModel(store: t.store, pageSize: 50, now: { now }, calendar: calendar, locale: locale)
+        model.filter.sheet.sort = .oldestFirst
+        await model.settle()
+        for _ in 0..<5 {
+            guard let last = model.sections.last?.rows.last else { break }
+            await model.rowAppeared(id: last.id)
+        }
+        let titles = model.sections.flatMap(\.rows).map(\.title)
+        #expect(titles == (0..<120).map { "n\($0)" })
+    }
+
+    @Test @MainActor func failedReloadClearsRowsAndFlags() async throws {
+        let t = try TestStore(); defer { t.cleanup() }
+        try await t.note("one", at: iso("2026-11-07T18:00:00Z"))
+        let model = TimelineModel(store: t.store, now: { now }, calendar: calendar, locale: locale)
+        await model.reload()
+        #expect(model.sections.count == 1 && !model.loadFailed)
+        try Database(url: t.store.layout.databaseURL).execute("ALTER TABLE captures RENAME TO captures_gone")
+        await model.reload()
+        #expect(model.loadFailed && model.sections.isEmpty && model.isEmpty)
+    }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 import CaptureCore
 import LocalRepository
 import SyncEngine
@@ -18,6 +19,8 @@ public final class TimelineModel {
 
     public private(set) var sections: [(header: String, rows: [TimelineRow])] = []
     public private(set) var isEmpty = false
+    /// True after a failed reload or page; cleared by the next successful reload.
+    public private(set) var loadFailed = false
 
     public var filter = TimelineFilterState() {
         didSet {
@@ -46,6 +49,8 @@ public final class TimelineModel {
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
     @ObservationIgnored private var metadataCache: [String: CaptureMetadata] = [:]
     @ObservationIgnored private var metadataOrder: [String] = []
+    private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "timeline")
+    @ObservationIgnored private var activeFilter = CaptureFilter()
     private static let metadataCacheLimit = 200
     private static let prefetchDistance = 10
 
@@ -59,16 +64,34 @@ public final class TimelineModel {
         self.debounce = debounce
     }
 
+    /// Waits for a reload started by changing `filter`. Tests use it.
+    func settle() async { await reloadTask?.value }
+
     /// Reloads the first page with the current filter.
     public func reload() async {
         generation += 1
         let mine = generation
         isLoadingMore = false
-        let page = try? await Self.loadPage(store: store, filter: currentFilter(), after: nil, limit: pageSize,
-                                            locale: locale)
+        let captured = currentFilter()
+        let page: Page?
+        do {
+            page = try await Self.loadPage(store: store, filter: captured, after: nil, limit: pageSize, locale: locale)
+        } catch {
+            Self.log.error("\("reload_failed", privacy: .public)")
+            page = nil
+        }
         guard mine == generation else { return }
         reloadCount += 1
-        guard let page else { return }
+        guard let page else {
+            // Never leave the previous filter's rows on screen.
+            items = []
+            reachedEnd = true
+            loadFailed = true
+            publish()
+            return
+        }
+        loadFailed = false
+        activeFilter = captured
         items = page.items
         reachedEnd = page.reachedEnd
         publish()
@@ -84,11 +107,20 @@ public final class TimelineModel {
         isLoadingMore = true
         let mine = generation
         let cursor = PageCursor(capturedAt: last.capturedAt, captureID: last.id)
-        let page = try? await Self.loadPage(store: store, filter: currentFilter(), after: cursor, limit: pageSize,
-                                            locale: locale)
+        let page: Page?
+        do {
+            page = try await Self.loadPage(store: store, filter: activeFilter, after: cursor, limit: pageSize,
+                                           locale: locale)
+        } catch {
+            Self.log.error("\("page_failed", privacy: .public)")
+            page = nil
+        }
         guard mine == generation else { return }
         isLoadingMore = false
-        guard let page else { return }
+        guard let page else {
+            loadFailed = true
+            return
+        }
         let known = Set(items.map(\.row.id))
         items += page.items.filter { !known.contains($0.row.id) }
         reachedEnd = page.reachedEnd
@@ -114,6 +146,7 @@ public final class TimelineModel {
         let store = store
         let loaded = await Task.detached { try? store.index.metadata(captureID: id, layout: store.layout) }.value
         guard let loaded else { return nil }
+        if metadataCache[id] != nil { return loaded }
         metadataCache[id] = loaded
         metadataOrder.append(id)
         if metadataOrder.count > Self.metadataCacheLimit {
