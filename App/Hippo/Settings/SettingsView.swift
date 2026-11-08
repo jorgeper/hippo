@@ -190,7 +190,10 @@ struct SettingsView: View {
                     set: { value in
                         enrichmentOn[item.kind] = value
                         let model = model
-                        Task { await model.setEnrichment(item.kind, on: value) }
+                        Task {
+                            await model.setEnrichment(item.kind, on: value)
+                            enrichmentOn[item.kind] = nil
+                        }
                     }))
             }
         } header: {

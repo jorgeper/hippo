@@ -33,6 +33,9 @@ struct CaptureDetailView: View {
                 }
             }
             .task { await model.load() }
+            .onReceive(NotificationCenter.default.publisher(for: TimelineModel.enrichmentChanged)) { _ in
+                Task { await model.load() }
+            }
             .confirmationDialog(model.deletionPrompt?.title ?? "Delete from iPhone?", isPresented: $confirmingDelete,
                                 titleVisibility: .visible, presenting: model.deletionPrompt) { prompt in
                 Button(prompt.confirm, role: .destructive) { delete() }

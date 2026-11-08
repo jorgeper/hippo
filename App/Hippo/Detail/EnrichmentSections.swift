@@ -56,9 +56,9 @@ struct EnrichmentSections: View {
         if !detail.found.isEmpty {
             Section("Found in this capture") {
                 ForEach(Array(detail.found.enumerated()), id: \.offset) { _, item in found(item) }
-                    .sheet(item: $calendarDraft) { draft in
-                        CalendarEventEditor(title: draft.title, start: draft.start).ignoresSafeArea()
-                    }
+            }
+            .sheet(item: $calendarDraft) { draft in
+                CalendarEventEditor(title: draft.title, start: draft.start).ignoresSafeArea()
             }
         }
         if !detail.transcripts.isEmpty {
@@ -142,16 +142,19 @@ struct CalendarEventEditor: UIViewControllerRepresentable {
         controller.eventStore = store
         controller.event = event
         controller.editViewDelegate = context.coordinator
+        context.coordinator.dismiss = { dismiss() }
         return controller
     }
 
-    func updateUIViewController(_ controller: EKEventEditViewController, context: Context) {}
+    func updateUIViewController(_ controller: EKEventEditViewController, context: Context) {
+        // Environment values are only current here, so refresh the closure on every update.
+        context.coordinator.dismiss = { dismiss() }
+    }
 
-    func makeCoordinator() -> Coordinator { Coordinator(dismiss: { dismiss() }) }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, EKEventEditViewDelegate {
-        let dismiss: () -> Void
-        init(dismiss: @escaping () -> Void) { self.dismiss = dismiss }
+        var dismiss: () -> Void = {}
         func eventEditViewController(_ controller: EKEventEditViewController,
                                      didCompleteWith action: EKEventEditViewAction) { dismiss() }
     }
