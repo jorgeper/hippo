@@ -99,7 +99,7 @@ Follows the spec's future desktop-reader contract. Locate the configured Hippo r
 5. Decode `metadata.json` (version 1, unknown keys ignored). `metadata.capture_id` must equal the marker's and the directory name, and every attachment `relative_path` must be in the manifest; otherwise corrupt.
 6. Index by `capture_id` plus package digest. The same pair already indexed means nothing to do; the same ID with a new digest replaces the entry. This makes rescans idempotent.
 
-Keep your search/SQLite/vector indexes outside the synced folder; they must be rebuildable from packages alone. Store derived (AI) output separately, keyed by `capture_id`. Never modify a package.
+Keep your search/SQLite/vector indexes outside the synced folder; they must be rebuildable from packages alone. Store derived (AI) output separately, keyed by `capture_id`; see [`enrichment-format.md`](enrichment-format.md) for the format the phone and a server use for it. Never modify a package.
 
 ## Dropbox and online-only placeholders
 

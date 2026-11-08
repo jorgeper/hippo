@@ -60,6 +60,42 @@ Hippo saves a location with a capture only if you turn on "Save location with ca
 - A new install does not rebuild the library from Dropbox.
 - Background upload timing is up to iOS.
 
+## Enrichment
+
+Enrichment is derived data added to a capture after it is saved: link titles and pictures, place names, text found in images, voice note transcripts, found dates, phone numbers and addresses, and a guess at the source app. It never changes a capture package. The format is in [`docs/enrichment-format.md`](docs/enrichment-format.md); the design is in [`docs/superpowers/specs/2026-11-07-hippo-enrichment-design.md`](docs/superpowers/specs/2026-11-07-hippo-enrichment-design.md).
+
+### Layers and paths
+
+| Layer | Writer | Local path | Remote path |
+|---|---|---|---|
+| `device` (silver) | the phone, in the app only | `Library/Application Support/Hippo/enrichments/device/<capture-id>/` | `enrichments/device/YYYY/MM/DD/<capture-id>/` |
+| `server` (gold) | a server | `Library/Application Support/Hippo/enrichments/server/<capture-id>/` | `enrichments/server/YYYY/MM/DD/<capture-id>/` |
+
+Each directory holds `enrichment.json` and an optional `assets/` folder. The phone writes only silver and only reads gold. Gold for a capture that is not on the phone is ignored. Deleting a capture on the phone also deletes its local silver and gold; remote copies are never touched. Each Settings switch under "Enrichment" turns one kind off.
+
+### What leaves the phone
+
+- Link previews fetch the linked page (or YouTube's public oEmbed endpoint) from the linked site, with a 15 s timeout, for the first 5 links per capture.
+- Place names send coordinates to Apple Maps. The place line shows city and region; "near <Name>" appears only for an accurate fix.
+- Everything else (text in images, transcripts, found dates and addresses, app guesses) runs on the iPhone.
+
+### English-only transcripts
+
+Transcription runs on device only and never falls back to server recognition. It uses the phone's locale if its language is English, and `en_US` otherwise. Audio longer than an hour is skipped.
+
+### Links that are never fetched
+
+These links are recorded as empty and never requested (YouTube oEmbed excepted):
+
+- anything other than `http` or `https`;
+- IP-literal hosts, `localhost` and `.local` names;
+- URLs with a query key `token`, `code`, `key`, `sig`, `signature`, `auth`, `otp` or `magic`;
+- URLs whose path contains `unsubscribe`, `login`, `verify`, `reset` or `confirm`.
+
+### Server and Dropbox
+
+The server that produces gold is not built yet. The phone already pulls and shows gold from the Developer folder. The Dropbox adapter (Plan 3) must implement `replaceFile` (overwrite, under `enrichments/` only), `listChanges` and `downloadFile`, as `FilesystemAdapter` does.
+
 ## HippoKit
 
 `HippoKit/` is a Swift package with no third-party dependencies. It builds for iOS 27 and macOS 27, so all of its tests run on a Mac without a simulator or device.
