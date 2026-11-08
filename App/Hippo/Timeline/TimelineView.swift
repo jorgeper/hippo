@@ -52,11 +52,12 @@ struct TimelineView: View {
                     .presentationDetents([.medium, .large])
             }
             .sheet(item: $presented, onDismiss: { Task { await model.reload() } }) { compose in
-                // Task 12 replaces these with the note editor and the recorder.
-                NavigationStack {
-                    Text(compose == .note ? "Note" : "Record")
-                        .navigationTitle(compose == .note ? "Note" : "Record")
-                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } } }
+                switch compose {
+                case .note:
+                    NoteEditorView(environment: environment, location: LocationService.shared)
+                case .record:
+                    RecorderView(environment: environment, location: LocationService.shared)
+                        .presentationDetents([.medium])
                 }
             }
             .task {
