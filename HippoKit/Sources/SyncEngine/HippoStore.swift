@@ -141,6 +141,13 @@ public final class HippoStore: Sendable {
                            adapterFor: adapterFor, log: log)
     }
 
+    /// Uploads the event log's segment files to `logs/<installID>/` on the active destination.
+    public func makeLogUploader(installID: String,
+                                adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> LogUploader {
+        LogUploader(layout: layout, log: log, destinations: destinations, installID: installID, adapterFor: adapterFor)
+    }
+
     /// Pulls gold enrichment from the active destination's `enrichments/server/` tree, with the default clock.
     public func makeGoldPuller(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
         -> GoldPuller {

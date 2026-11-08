@@ -589,7 +589,8 @@ private let t0 = RunnerHarness.t0
         try EnrichmentJSON.encode(gold).write(to: goldDir.appendingPathComponent("enrichment.json"))
 
         let registry = ProviderRegistry([provider])
-        let coordinator = SyncCoordinator(store: h.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0")
+        let coordinator = SyncCoordinator(store: h.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0",
+                                          settings: AppSettings(defaults: UserDefaults(suiteName: "hippo-r-\(UUID().uuidString)")!))
         _ = await coordinator.syncNow(trigger: "launch")
         let suite = "hippo-enrich-\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }

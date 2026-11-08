@@ -32,9 +32,10 @@ private struct Harness {
         remoteB = t.base.appendingPathComponent("RemoteB", isDirectory: true)
         providerB = FakeStorageProvider(root: remoteB, id: "dev-b", kind: "filesystem-b")
         let registry = ProviderRegistry([provider, providerB])
-        coordinator = SyncCoordinator(store: t.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0")
         suite = "hippo-settings-\(UUID().uuidString)"
         settings = AppSettings(defaults: UserDefaults(suiteName: suite)!)
+        coordinator = SyncCoordinator(store: t.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0",
+                                      settings: settings)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
                               requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled)
     }
@@ -101,12 +102,39 @@ struct SettingsTests {
         _ = try h.t.store.destinations.connect(dropbox)
         let p = try await h.t.note("hello", at: start)
         let coordinator = SyncCoordinator(store: h.t.store, registry: ProviderRegistry([]), ownerPrefix: "test",
-                                          appVersion: "0.1.0")
+                                          appVersion: "0.1.0",
+                                          settings: AppSettings(defaults: UserDefaults(suiteName: "hippo-x-\(UUID().uuidString)")!))
         let result = await coordinator.syncNow()
         #expect(result.failed == 1)
         let job = try #require(try h.t.store.jobs.jobs(captureID: p.metadata.captureID).first)
         #expect(job.state == .blocked)
         #expect(job.lastErrorCode == "permanent:provider_unavailable")
+    }
+
+    @Test func installIDIsStable() throws {
+        let h = try Harness(); defer { h.cleanup() }
+        let a = h.settings.installID, b = h.settings.installID
+        #expect(a == b)
+        #expect(a == a.lowercased())
+        #expect(UUID(uuidString: a) != nil)
+    }
+
+    @Test func defaultsForNewSettings() throws {
+        let h = try Harness(); defer { h.cleanup() }
+        #expect(h.settings.showsLayerStripes)
+        #expect(!h.settings.developerMode)
+        #expect(h.settings.lastSync == nil)
+    }
+
+    @Test func syncUploadsLogsAndRecordsLastSync() async throws {
+        let h = try Harness(); defer { h.cleanup() }
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        _ = await h.coordinator.syncNow()
+        var isDir: ObjCBool = false
+        let dir = h.remote.appendingPathComponent("logs/\(h.settings.installID)").path
+        #expect(FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) && isDir.boolValue)
+        let last = try #require(h.settings.lastSync)
+        #expect(!last.failed)
     }
 
     @Test func connectBindsUnassignedAndSyncs() async throws {

@@ -23,6 +23,8 @@ public actor SyncCoordinator {
     private let worker: SyncWorker
     private let uploader: EnrichmentUploader
     private let puller: GoldPuller
+    private let logUploader: LogUploader
+    private let settings: AppSettings
     private let appVersion: String
 
     /// The current pass: running, or about to run once the pass it follows has finished.
@@ -43,12 +45,15 @@ public actor SyncCoordinator {
     /// True while a pass is running or a follow-up is waiting.
     public var isBusy: Bool { running != nil || pending != nil }
 
-    public init(store: HippoStore, registry: ProviderRegistry, ownerPrefix: String, appVersion: String) {
+    public init(store: HippoStore, registry: ProviderRegistry, ownerPrefix: String, appVersion: String,
+                settings: AppSettings) {
         self.store = store
+        self.settings = settings
         self.appVersion = appVersion
         worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix)
         uploader = store.makeEnrichmentUploader(adapterFor: { try registry.adapter(for: $0) })
         puller = store.makeGoldPuller(adapterFor: { try registry.adapter(for: $0) })
+        logUploader = store.makeLogUploader(installID: settings.installID, adapterFor: { try registry.adapter(for: $0) })
     }
 
     /// Runs a pass, or joins the follow-up pass when one is already running, and returns that pass's
@@ -127,6 +132,8 @@ public actor SyncCoordinator {
             followUps += 1
         }
         isRunning = false
+        let cancelled = Task.isCancelled || generation != self.generation
+        if !cancelled { settings.recordSync(at: Date(), failed: total.failed > 0) }
         let endCode = Task.isCancelled || generation != self.generation ? "cancelled" : total.failed > 0 ? "failed" : "ok"
         store.log.append(LogEvent(event: .syncPass, code: endCode, count: total.synced, trigger: trigger, phase: "end"))
         if generation == self.generation { running = nil }
@@ -155,6 +162,9 @@ public actor SyncCoordinator {
         }
         // Gold pulls never change the pass result or the follow-up decision either.
         if !Task.isCancelled { _ = await puller.pull() }
+        // Log uploads are not events and never change the pass result.
+        if !Task.isCancelled { _ = await logUploader.upload() }
+        store.log.prune()
         do {
             try store.writeDiagnostics(appVersion: appVersion)
         } catch {
