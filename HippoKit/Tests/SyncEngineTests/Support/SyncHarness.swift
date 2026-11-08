@@ -112,6 +112,7 @@ struct HookedAdapter: StorageAdapter {
     var hideFromInspect: @Sendable (String) -> Bool = { _ in false }
     var beforeUpload: @Sendable (String) throws -> Void = { _ in }
     var onCheckpoint: @Sendable (String) throws -> Void = { _ in }
+    var afterUpload: @Sendable (String) -> Void = { _ in }
 
     var capabilities: StorageCapabilities { inner.capabilities }
     func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
@@ -136,11 +137,13 @@ struct HookedAdapter: StorageAdapter {
                     saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt {
         try beforeUpload(relativePath)
         let hook = onCheckpoint
-        return try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
-                                          checkpoint: checkpoint, saveCheckpoint: { cp in
+        let receipt = try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
+                                                 checkpoint: checkpoint, saveCheckpoint: { cp in
             try hook(relativePath)
             try await saveCheckpoint(cp)
         })
+        afterUpload(relativePath)
+        return receipt
     }
 }
 

@@ -108,6 +108,14 @@ public final class HippoStore: Sendable {
                    owner: owner)
     }
 
+    /// Uploads silver enrichment to the active destination after packages have synced, with the default
+    /// retry policy and clock.
+    public func makeEnrichmentUploader(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> EnrichmentUploader {
+        EnrichmentUploader(layout: layout, destinations: destinations, enrichments: enrichments,
+                           adapterFor: adapterFor)
+    }
+
     /// Deletes the capture from this phone (spec §11): cancels its uploads, waits up to 10 s for a
     /// worker holding an active upload lease to let go, then removes the package and the index row
     /// (its jobs, receipts and checkpoints cascade), then its local silver and gold (their rows cascade

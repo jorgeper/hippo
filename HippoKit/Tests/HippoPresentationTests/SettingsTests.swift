@@ -106,6 +106,30 @@ struct SettingsTests {
         #expect(FileManager.default.fileExists(atPath: h.t.store.layout.diagnosticsURL.path))
     }
 
+    @Test func passUploadsSilverAfterPackagesWithoutChangingTheResult() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let p = try await h.t.note("with silver", at: start)
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        let digest = try #require(try h.t.store.index.packageDigest(captureID: p.metadata.captureID))
+        let facet = Facet(version: 1, status: .ok, generatedAt: start, provenance: "test",
+                          data: .object(["text": .string("hello")]))
+        try h.t.store.enrichments.write(
+            EnrichmentDocument(schemaVersion: 1, captureID: p.metadata.captureID, layer: .device, packageDigest: digest,
+                               producer: EnrichmentProducer(name: "t", version: "1", build: "1"), generatedAt: start,
+                               facets: [FacetKind.summary.rawValue: facet]), newAssets: [:])
+
+        let result = await h.coordinator.syncNow()
+
+        // Only the package counts toward the result.
+        #expect(result.synced == 1 && result.failed == 0)
+        let directory = try EnrichmentPaths.remoteDirectory(.device, packageDirectory: p.relativeDirectory)
+        let remoteDoc = h.remote.appendingPathComponent(directory).appendingPathComponent("enrichment.json")
+        #expect(FileManager.default.fileExists(atPath: remoteDoc.path))
+        #expect(try h.t.store.enrichments.uploadCandidates(destinationID: h.provider.destination.id, now: Date(),
+                                                           limit: 10).isEmpty)
+    }
+
     @Test func coordinatorCoalescesConcurrentCalls() async throws {
         let faults = FaultPlan()
         let h = try Harness(faults: faults)

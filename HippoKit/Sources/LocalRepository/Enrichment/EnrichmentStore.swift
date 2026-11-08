@@ -267,6 +267,15 @@ public final class EnrichmentStore: Sendable {
                   nextAttemptAt.map { .int(Self.ms($0)) } ?? .null, .text(code), .int(Self.ms(now))])
     }
 
+    /// How many failed uploads of `revision` are recorded for the capture and destination (0 if none).
+    public func uploadAttemptCount(captureID: String, destinationID: String, revision: String) throws -> Int {
+        let row = try db.query("""
+            SELECT attempt_count FROM enrichment_uploads
+            WHERE capture_id = ? AND destination_id = ? AND attempted_revision IS ?
+            """, [.text(captureID), .text(destinationID), .text(revision)]).first
+        return Int(row?.int("attempt_count") ?? 0)
+    }
+
     // MARK: Gold cursors
 
     /// The destination's saved gold `listChanges` cursor, or nil to start from the beginning.
