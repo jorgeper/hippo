@@ -68,24 +68,23 @@ public final class ActivityLog: Sendable {
         }.sorted { ($0.day, $0.segment) < ($1.day, $1.segment) }
     }
 
-    private func currentSegment(day: String) -> URL {
-        let highest = orderedSegments().last { $0.day == day }
-        if let highest { return highest.url }
-        return layout.logsDir.appendingPathComponent("\(day).jsonl")
-    }
-
     private func segmentURL(day: String, segment: Int) -> URL {
         layout.logsDir.appendingPathComponent(segment == 0 ? "\(day).jsonl" : "\(day).\(segment).jsonl")
     }
 
-    /// The cached segment for `day` if it still exists, else the highest on disk.
-    private func target(day: String) -> URL {
+    /// Today's segment: the cached one if it still exists, else the highest on disk, else segment 0 to be
+    /// created (`create`).
+    private func target(day: String) -> (url: URL, create: Bool) {
         let cached = cache.withLock { $0.day == day ? $0.url : nil }
-        if let cached, FileManager.default.fileExists(atPath: cached.path) { return cached }
+        if let cached, FileManager.default.fileExists(atPath: cached.path) { return (cached, false) }
         try? FileManager.default.createDirectory(at: layout.logsDir, withIntermediateDirectories: true)
-        let url = currentSegment(day: day)
+        if let highest = orderedSegments().last(where: { $0.day == day }) {
+            cache.withLock { $0 = Cache(day: day, url: highest.url) }
+            return (highest.url, false)
+        }
+        let url = segmentURL(day: day, segment: 0)
         cache.withLock { $0 = Cache(day: day, url: url) }
-        return url
+        return (url, true)
     }
 
     /// Takes `LOCK_EX` on `fd`, retrying every 5 ms for at most `timeout`.
@@ -98,15 +97,26 @@ public final class ActivityLog: Sendable {
         }
     }
 
-    /// Opens `url`, takes the lock, and checks the file is still the one at that path (a `clear()` may
-    /// have unlinked it while we waited). Returns the locked descriptor, or nil on failure or timeout.
-    private func openLocked(_ url: URL, timeout: Duration) -> Int32? {
-        let fd = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
-        guard fd >= 0 else { return nil }
-        guard lock(fd, timeout: timeout) else { close(fd); return nil }
+    private enum Opened { case locked(Int32), gone, failed }
+
+    /// Opens `url` and takes the lock. An existing segment is opened without `O_CREAT`, so a segment that a
+    /// `clear()` deleted is never re-created. `.gone` means look again: the file is missing, was unlinked
+    /// while we waited, or (when creating segment 0) another segment of the day has appeared.
+    private func openLocked(_ url: URL, create: Bool, timeout: Duration) -> Opened {
+        let fd = open(url.path, O_WRONLY | O_APPEND | (create ? O_CREAT : 0), 0o644)
+        guard fd >= 0 else { return errno == ENOENT ? .gone : .failed }
+        guard lock(fd, timeout: timeout) else { close(fd); return .failed }
         var st = stat()
-        guard fstat(fd, &st) == 0, st.st_nlink > 0 else { flock(fd, LOCK_UN); close(fd); return nil }
-        return fd
+        guard fstat(fd, &st) == 0 else { flock(fd, LOCK_UN); close(fd); return .failed }
+        var gone = st.st_nlink == 0
+        if create, !gone, let parsed = Self.parse(fileName: url.lastPathComponent),
+           orderedSegments().contains(where: { $0.day == parsed.day && $0.segment != parsed.segment }) {
+            // A clear created a later segment meanwhile: our empty file must not come back as segment 0.
+            if st.st_size == 0 { try? FileManager.default.removeItem(at: url) }
+            gone = true
+        }
+        if gone { flock(fd, LOCK_UN); close(fd); return .gone }
+        return .locked(fd)
     }
 
     private static func writeAll(_ fd: Int32, _ data: Data) -> Bool {
@@ -136,13 +146,14 @@ public final class ActivityLog: Sendable {
         let deadline = ContinuousClock.now + lockTimeout
         for _ in 0..<4 {
             let remaining = max(.zero, deadline - ContinuousClock.now)
-            let url = target(day: day)
-            guard let fd = openLocked(url, timeout: remaining) else {
-                // An unlinked file means a clear won the race: look again. Anything else drops the event.
-                if !FileManager.default.fileExists(atPath: url.path), ContinuousClock.now < deadline {
-                    cache.withLock { $0 = Cache(day: nil, url: nil) }
-                    continue
-                }
+            let (url, create) = target(day: day)
+            let fd: Int32
+            switch openLocked(url, create: create, timeout: remaining) {
+            case .locked(let f): fd = f
+            case .gone:
+                cache.withLock { $0 = Cache(day: nil, url: nil) }
+                continue
+            case .failed:
                 Self.osLog.error("\("append_dropped", privacy: .public)")
                 return
             }
@@ -221,28 +232,30 @@ public final class ActivityLog: Sendable {
         for s in orderedSegments() where s.day < cutoff { try? FileManager.default.removeItem(at: s.url) }
     }
 
-    /// Deletes every log file (not `upload-state.json`) and records `log.cleared` in the next segment of
-    /// today, so a remote copy of today's file is never overwritten by a near-empty one.
+    /// Records `log.cleared` in the next segment of today, then deletes every older log file (not
+    /// `upload-state.json`), so a remote copy of today's file is never overwritten by a near-empty one and
+    /// a day always has a segment for appenders to find. Today's current segment stays locked meanwhile,
+    /// so waiting appenders see it unlinked and move to the new segment.
     public func clear() {
         let date = now()
         let day = Self.dayString(date)
         let current = orderedSegments().last { $0.day == day }
         let next = (current?.segment ?? -1) + 1
         try? FileManager.default.createDirectory(at: layout.logsDir, withIntermediateDirectories: true)
-        // Hold today's current segment while deleting, so no append lands in a file about to go away.
-        let fd = current.flatMap { openLocked($0.url, timeout: .seconds(1)) }
-        defer { if let fd { flock(fd, LOCK_UN); close(fd) } }
-        for s in orderedSegments() { try? FileManager.default.removeItem(at: s.url) }
+        var held: Int32?
+        if let current, case .locked(let fd) = openLocked(current.url, create: false, timeout: lockTimeout) { held = fd }
+        defer { if let held { flock(held, LOCK_UN); close(held) } }
 
         var marker = LogEvent(event: .logCleared)
         marker.t = date; marker.proc = process
         let url = segmentURL(day: day, segment: next)
-        cache.withLock { $0 = Cache(day: day, url: url) }
         guard var line = try? marker.encodeLine() else { return }
         line.append(0x0A)
-        if let out = openLocked(url, timeout: lockTimeout) {
-            if !Self.writeAll(out, line) { Self.osLog.error("\("write_failed", privacy: .public)") }
-            flock(out, LOCK_UN); close(out)
-        }
+        let fd = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+        guard fd >= 0 else { Self.osLog.error("\("write_failed", privacy: .public)"); return }
+        defer { close(fd) }
+        if !Self.writeAll(fd, line) { Self.osLog.error("\("write_failed", privacy: .public)") }
+        cache.withLock { $0 = Cache(day: day, url: url) }
+        for s in orderedSegments() where s.url.lastPathComponent != url.lastPathComponent { try? FileManager.default.removeItem(at: s.url) }
     }
 }

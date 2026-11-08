@@ -185,6 +185,42 @@ private struct LogHarness {
         #expect(FileManager.default.fileExists(atPath: t.url("upload-state.json").path))
     }
 
+    @Test func appendWithStaleTargetAfterClearGoesToNewSegment() throws {
+        let t = try LogHarness(); defer { t.cleanup() }
+        let writer = t.log(.share)
+        writer.append(LogEvent(event: .appLaunch))          // caches segment 0
+        let other = t.log(.app)
+        other.clear()                                       // .1 holds log.cleared, segment 0 is gone
+        writer.append(LogEvent(event: .captureSaved, captureID: "c1", trigger: "note"))
+
+        #expect(writer.segmentFiles().map(\.lastPathComponent) == ["2026-11-08.1.jsonl"])
+        let lines = try t.lines("2026-11-08.1.jsonl")
+        #expect(lines.count == 2)
+        #expect(lines[0].contains("log.cleared"))
+        #expect(lines[1].contains("capture.saved"))
+    }
+
+    @Test func appendAfterCachedFileUnlinkedRecovers() throws {
+        let t = try LogHarness(); defer { t.cleanup() }
+        let log = t.log()
+        log.append(LogEvent(event: .appLaunch))
+        try FileManager.default.removeItem(at: t.url("2026-11-08.jsonl"))
+        log.append(LogEvent(event: .appLaunch))
+        #expect(try t.lines("2026-11-08.jsonl").count == 1)
+
+        // Clear racing appends from other instances: no segment 0 ever comes back.
+        let a = t.log(.app, lockTimeout: .seconds(5)), b = t.log(.share, lockTimeout: .seconds(5))
+        a.append(LogEvent(event: .appLaunch)); b.append(LogEvent(event: .appLaunch))
+        let group = DispatchGroup()
+        for _ in 0..<50 {
+            DispatchQueue.global().async(group: group) { b.append(LogEvent(event: .appLaunch)) }
+        }
+        a.clear()
+        group.wait()
+        #expect(!FileManager.default.fileExists(atPath: t.url("2026-11-08.jsonl").path))
+        #expect(!a.segmentFiles().isEmpty)
+    }
+
     @Test func fileNames() {
         #expect(ActivityLog.fileName(day: utc("2026-11-08T23:59:59Z"), segment: 0) == "2026-11-08.jsonl")
         #expect(ActivityLog.fileName(day: utc("2026-11-08T00:00:00Z"), segment: 1) == "2026-11-08.1.jsonl")
