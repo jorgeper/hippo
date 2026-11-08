@@ -172,6 +172,23 @@ struct SettingsTests {
         #expect(await h.coordinator.isBusy == false)
     }
 
+    @Test func passFinishedIsPostedOnTheMainThread() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        try await h.t.note("one", at: start)
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        let onMain = Mutex<[Bool]>([])
+        let observer = NotificationCenter.default.addObserver(forName: SyncCoordinator.passFinished,
+                                                              object: h.coordinator, queue: nil) { _ in
+            onMain.withLock { $0.append(Thread.isMainThread) }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        _ = await h.coordinator.syncNow()
+
+        #expect(onMain.withLock { $0 } == [true])
+    }
+
     @Test func followUpPassEndsAfterStop() async throws {
         let h = try Harness()
         defer { h.cleanup() }

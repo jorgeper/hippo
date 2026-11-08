@@ -139,7 +139,8 @@ public actor SyncCoordinator {
         } catch {
             Self.log.error("\("diagnostics_failed", privacy: .public)")
         }
-        NotificationCenter.default.post(name: Self.passFinished, object: self)
+        // Posted on the main actor so SwiftUI `onReceive` handlers never run off-main.
+        await MainActor.run { NotificationCenter.default.post(name: Self.passFinished, object: self) }
         return (total, moreWork)
     }
 }
