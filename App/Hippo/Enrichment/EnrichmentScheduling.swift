@@ -12,7 +12,8 @@ import Enrichment
 ///
 /// `run` is a coalescing single flight: one pass task at a time, and a call made while it runs asks for
 /// one more round and waits for it. Each round runs inside `BackgroundActivity`: it schedules, runs due
-/// tasks until a pass runs nothing, then syncs if anything ran, so new silver uploads.
+/// tasks until a pass runs nothing (bounded by `maxRoundsPerPass` and a no-progress check), then syncs
+/// if anything ran, so new silver uploads.
 @MainActor
 enum EnrichmentScheduling {
     /// Fixed strings only: never IDs, paths, URLs or content.
@@ -22,14 +23,24 @@ enum EnrichmentScheduling {
                                                  .dataDetection, .sourceAppGuess]
 
     private static var runner: EnrichmentRunner?
+    /// At most this many `runPending` rounds per pass; leftover work waits for the next trigger.
+    nonisolated static let maxRoundsPerPass = 20
+
     private static var current: Task<Void, Never>?
-    private static var rerun = false
+    /// Set when a call joins the run in flight: the `cancels` count at that moment. A rerun is dropped
+    /// only by a `cancel()` made after it was asked for.
+    private static var rerunRequestedAt: Int?
     /// False until launch recovery has finished: recovery sweeps enrichment staging, which enrichers
     /// write into, so no pass may overlap it.
     private static var ready = false
     private static var readyWaiters: [CheckedContinuation<Void, Never>] = []
-    /// The running task, for `cancel()` from any thread (expiry handlers).
-    private nonisolated static let cancelHandle = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+    /// The running task, for `cancel()` from any thread (expiry handlers), and how many times `cancel()`
+    /// has been called.
+    private struct Control {
+        var task: Task<Void, Never>?
+        var cancels = 0
+    }
+    private nonisolated static let control = OSAllocatedUnfairLock(initialState: Control())
 
     /// Call once launch recovery has finished; runs held back until then go ahead.
     static func markLaunchRecovered() {
@@ -46,28 +57,40 @@ enum EnrichmentScheduling {
         if !ready { await withCheckedContinuation { readyWaiters.append($0) } }
         log.info("\("enrichment_run", privacy: .public) \(reason, privacy: .public)")
         if let current {
-            rerun = true
+            rerunRequestedAt = control.withLock { $0.cancels }
             await current.value
             return
         }
         let runner = runner(for: env)
         let task = Task { @MainActor in
             repeat {
-                rerun = false
+                rerunRequestedAt = nil
                 await pass(runner, coordinator)
-            } while rerun && !Task.isCancelled
+            } while rerunRequestedAt != nil && !Task.isCancelled
             current = nil
-            cancelHandle.withLock { $0 = nil }
+            let cancels = control.withLock { c -> Int in
+                c.task = nil
+                return c.cancels
+            }
+            // Asked for while a cancelled run was unwinding, and not cancelled since: start afresh.
+            if let requested = rerunRequestedAt {
+                rerunRequestedAt = nil
+                if requested == cancels { Task { await run(env, reason: "rerun") } }
+            }
         }
         current = task
-        cancelHandle.withLock { $0 = task }
+        control.withLock { $0.task = task }
         await task.value
     }
 
-    /// Stops the run in flight: the runner finishes no new task, and no follow-up sync starts. Safe from
-    /// any thread.
+    /// Stops the run in flight: the runner finishes no new task, and no follow-up sync starts. Reruns
+    /// asked for before this call are dropped. Safe from any thread.
     nonisolated static func cancel() {
-        cancelHandle.withLock { $0 }?.cancel()
+        let task = control.withLock { c -> Task<Void, Never>? in
+            c.cancels += 1
+            return c.task
+        }
+        task?.cancel()
     }
 
     private static func pass(_ runner: EnrichmentRunner, _ coordinator: SyncCoordinator) async {
@@ -75,11 +98,20 @@ enum EnrichmentScheduling {
             do { try await runner.schedule() } catch {
                 log.error("\("enrichment_schedule_failed", privacy: .public)")
             }
+            // Bounded: at most `maxRoundsPerPass` rounds, and it stops after two rounds in a row where
+            // every task run failed (for example, results that can't be saved while the disk is full).
             var ranAny = false
-            while !Task.isCancelled {
+            var roundsWithoutProgress = 0
+            for _ in 0..<maxRoundsPerPass {
+                if Task.isCancelled { break }
                 let result = await runner.runPending()
                 guard result.ran > 0 else { break }
                 ranAny = true
+                roundsWithoutProgress = result.failed >= result.ran ? roundsWithoutProgress + 1 : 0
+                if roundsWithoutProgress >= 2 {
+                    log.error("\("enrichment_no_progress", privacy: .public)")
+                    break
+                }
             }
             if ranAny && !Task.isCancelled {
                 await SyncScheduling.runPass(coordinator, name: "enrichment-sync")

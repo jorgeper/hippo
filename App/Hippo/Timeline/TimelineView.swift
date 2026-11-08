@@ -48,7 +48,8 @@ struct TimelineView: View {
                     if let registry = environment.registry, let coordinator = environment.coordinator {
                         SettingsView(store: environment.store, registry: registry, coordinator: coordinator,
                                      onEnrichmentEnabled: { [environment] _ in
-                                         await EnrichmentScheduling.run(environment, reason: "setting")
+                                         // Don't hold the switch while the backfill runs.
+                                         Task { await EnrichmentScheduling.run(environment, reason: "setting") }
                                      })
                     }
                 }

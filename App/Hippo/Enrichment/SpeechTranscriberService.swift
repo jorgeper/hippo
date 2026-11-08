@@ -13,7 +13,8 @@ import Enrichment
 /// Errors are `EnrichmentError` with fixed codes; text and file names are never logged.
 struct SpeechTranscriberService: Transcribing {
     /// Matches `TranscriptEnricher.maxSeconds`. Checked here too, from the file itself, because the
-    /// enricher only skips when the metadata carries a duration.
+    /// enricher only skips when the metadata carries a duration. Longer audio is skipped (design §5.5):
+    /// it gets an empty transcript, which the enricher drops, so other attachments still transcribe.
     static let maxSeconds = 3600.0
     /// How long to wait before trying again while the model downloads.
     static let modelRetryAfter: TimeInterval = 900
@@ -38,12 +39,16 @@ struct SpeechTranscriberService: Transcribing {
         }
         let sampleRate = probe.fileFormat.sampleRate
         guard sampleRate > 0, probe.length > 0 else { throw EnrichmentError.permanent(code: "unreadable_audio") }
-        if Double(probe.length) / sampleRate > Self.maxSeconds { throw EnrichmentError.permanent(code: "too_long") }
+        if Double(probe.length) / sampleRate > Self.maxSeconds { return ("", []) }
 
         do {
             return try await analyze(fileURL, transcriber)
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            if let speech = error as? SFSpeechError, speech.code == .assetLocaleNotAllocated {
+                // Installed but not reserved for this app: reserve it so the retry can run.
+                _ = try? await AssetInventory.reserve(locale: supported)
+            }
             throw Self.map(error)
         }
     }
