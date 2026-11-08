@@ -54,6 +54,8 @@ struct RecorderView: View {
         .onAppear {
             location.beginSessionFix()
         }
+        // One tap: recording begins as soon as the sheet appears. `start()` handles permission, denial and repeats.
+        .task { await model.start() }
         .onDisappear {
             // Covers Cancel, swipe-away and anything else that leaves a recording unfinished.
             if model.state != .saved { model.discard() }

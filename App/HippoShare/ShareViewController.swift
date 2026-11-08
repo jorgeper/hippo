@@ -4,7 +4,7 @@ import ShareIntake
 import HippoPresentation
 
 /// Hosts the share sheet. The extension commits the capture before it calls `completeRequest`, never
-/// syncs, never shows sign-in UI and never waits for a location fix.
+/// syncs, never shows sign-in UI and requests a fresh fix but never waits for it.
 final class ShareViewController: UIViewController {
     /// Exactly one of `completeRequest` / `cancelRequest` runs, once.
     private var finished = false
@@ -20,6 +20,7 @@ final class ShareViewController: UIViewController {
                 self?.cancelRequest()
             })
         case .success(let environment):
+            LocationService.shared.beginSessionFix()
             let input = ShareInput.from(extensionContext?.inputItems as? [NSExtensionItem] ?? [])
             // A store read error means "no destination": the sheet then says it only saves on the iPhone.
             let destinationName = (try? environment.store.destinations.active())?.displayName

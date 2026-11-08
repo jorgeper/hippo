@@ -19,7 +19,7 @@ Scenarios that can only be checked on a real iPhone. Install with `make device`,
 | 13 | Detail: playback with the silent switch | Ring/silent switch on silent. Play a voice note, then a video. Play music in another app first. | Both are audible. After playback stops, the other app's music resumes. | not run | |
 | 14 | Detail: delete | Open a capture. Tap the menu, then "Delete from iPhone...". Tap Delete. | A confirmation dialog appears. After Delete the capture is gone from the timeline. | not run | |
 | 15 | Detail: retry failed sync | Get a row to a failed sync state. Tap Retry in Detail. | A sync starts and the state changes. | not run | |
-| 16 | Recorder: real microphone | Tap Record, speak, Stop, Save. Open the capture. | A voice note is saved and plays back with your voice. | not run | |
+| 16 | Recorder: real microphone | Tap Record (recording starts at once), speak, Stop, Save. Open the capture. | A voice note is saved and plays back with your voice. | not run | |
 | 17 | Recorder: interruption message | Record, then trigger a phone call or Siri. | "Recording stopped by an interruption..." is shown. The saved duration is non-zero. | not run | |
 | 18 | Recorder: cancel with a recording in progress or stopped | Start recording, tap Cancel. Repeat after tapping Stop. | Both times "Discard recording?" is asked. Keep recording continues it; Discard saves nothing. | not run | |
 | 19 | Share: Safari URL and Photos image | Share a web page from Safari. Share an image from Photos. | Each shows "✓ Saved on this iPhone" and appears in the timeline. | not run | |

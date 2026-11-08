@@ -61,4 +61,15 @@ final class CaptureFlowUITests: XCTestCase {
         let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone, object: row("Delete me"))], timeout: 10)
         XCTAssertEqual(result, .completed, "row still present")
     }
+
+    /// Needs microphone permission pre-granted (e.g. `xcrun simctl privacy booted grant microphone <bundle id>`),
+    /// then `HIPPO_UITEST_MIC_GRANTED=1` in the test environment; otherwise the system alert blocks the flow.
+    func testRecordStartsImmediately() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["HIPPO_UITEST_MIC_GRANTED"] == "1",
+                          "microphone permission is not pre-granted")
+        let record = app.buttons["Record"]
+        XCTAssertTrue(record.waitForExistence(timeout: 10))
+        record.tap()
+        XCTAssertTrue(app.buttons["Stop"].waitForExistence(timeout: 5))
+    }
 }
