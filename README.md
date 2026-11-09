@@ -23,10 +23,15 @@ Timeline of captures, a detail view, a note editor, a voice recorder, a Share Ex
 2. Find your team ID in Xcode under Settings > Accounts (select your team; the ID is the 10-character value shown for it), or on the Membership page of the Apple developer portal. A free Personal Team works.
 3. Keep the ID only in `Config/Local.xcconfig`. Never put it in `project.yml`, the README, or any committed file.
 
+### Dropbox setup
+
+Dropbox is optional; without it the app still builds and the Dropbox provider is simply absent. To enable it, run `make dropbox-setup` ([`scripts/setup-dropbox.sh`](scripts/setup-dropbox.sh)). It walks you through creating the app in the Dropbox App Console (scoped access, App folder "Hippo", the four permissions, the `db-<APP KEY>://2/token` redirect URI), stores the app key in the gitignored `Config/Secrets.xcconfig`, and can optionally sign in once to write a refresh token to the gitignored `.env` for integration tests. It never prints a full key or token. Afterwards run `make generate`. See [ADR 0002](docs/adr/0002-dropbox-direct-http.md) for why the adapter talks to the Dropbox HTTP API directly.
+
 ### Commands
 
 | Command | What it does |
 |---|---|
+| `make dropbox-setup` | Guided Dropbox app-key setup (writes `Config/Secrets.xcconfig`). |
 | `make device` | Build and install on a connected iPhone (needs `Config/Local.xcconfig`). |
 | `make sim` | Build, install and launch in the Simulator with the fixture captures. |
 | `make test` | HippoKit unit tests on the Mac. |
@@ -123,6 +128,7 @@ The server that produces gold is not built yet. The phone already pulls and show
 | `LocalRepository` | The on-phone SQLite store: `Database`, `CaptureIndex` (timeline, filters, full-text search), `JobStore` (upload jobs, leases, receipts, checkpoints), `DestinationStore` (accounts and binding rules), `Reconciler` (startup recovery), `Diagnostics`. |
 | `SyncEngine` | The `StorageAdapter` contract, `SyncWorker` (marker-last uploads, retry policy), and `HippoStore`, the facade the app and Share Extension use for everything. |
 | `FilesystemAdapter` | A `StorageAdapter` that writes to a local folder, with `FaultPlan` for injected failures. For development and contract tests; not a cloud provider. |
+| `DropboxAdapter` | Dropbox-specific code: the content hash today, the Dropbox `StorageAdapter` to follow. The only HippoKit module that may know about Dropbox. |
 | `HippoTestSupport` | Generates small media files (images, audio, video, PDF) for tests and fixtures. |
 | `hippo-fixtures` | Command-line tool that regenerates the committed fixture packages. |
 

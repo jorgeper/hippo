@@ -28,7 +28,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.jorgeper.hippo
     dependencies:
       - package: HippoKit
-        products: [CaptureCore, LocalRepository, SyncEngine, FilesystemAdapter, ShareIntake, HippoPresentation, Enrichment]
+        products: [CaptureCore, LocalRepository, SyncEngine, FilesystemAdapter, DropboxAdapter, ShareIntake, HippoPresentation, Enrichment]
       - target: HippoShare
     info:
       path: App/Hippo/Info.plist
@@ -36,6 +36,10 @@ targets:
         CFBundleDisplayName: Hippo
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        HippoDropboxAppKey: $(HIPPO_DROPBOX_APP_KEY)
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: ["db-$(HIPPO_DROPBOX_APP_KEY)"]
+            CFBundleURLName: com.jorgeper.hippo.dropbox
         NSMicrophoneUsageDescription: "Hippo records voice notes when you tap Record."
         NSLocationWhenInUseUsageDescription: "Hippo can save where you were when you capture something. This is off unless you turn it on in Settings."
         UIBackgroundModes: [audio, processing]
@@ -69,6 +73,7 @@ targets:
         CFBundleDisplayName: Hippo
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        HippoDropboxAppKey: $(HIPPO_DROPBOX_APP_KEY)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController

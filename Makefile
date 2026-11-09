@@ -1,4 +1,4 @@
-.PHONY: generate test uitest sim device diagnostics
+.PHONY: generate test uitest sim device diagnostics dropbox-setup
 
 # Generate Hippo.xcodeproj from project.yml (not committed).
 generate:
@@ -15,6 +15,10 @@ sim:
 # Build and install on a connected iPhone (needs Config/Local.xcconfig).
 device:
 	scripts/install-device.sh
+
+# Guided Dropbox setup: writes Config/Secrets.xcconfig (and optionally .env for integration tests).
+dropbox-setup:
+	scripts/setup-dropbox.sh
 
 # Print diagnostics.json from the app on a connected iPhone.
 diagnostics:
