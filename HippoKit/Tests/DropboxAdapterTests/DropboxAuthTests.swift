@@ -176,10 +176,34 @@ import Testing
         await capture(MemoryTokenStore(tokens(expiresIn: 30)), .failure(URLError(.notConnectedToInternet)))
         await capture(MemoryTokenStore(tokens(expiresIn: 30)), .success(DropboxResponse(status: 200, body: Data(leaky.utf8))))
         #expect(errors.count == 4)
+        let sample = tokens(expiresIn: 30)
+        let req = DropboxRequest(url: URL(string: "https://example.invalid/x")!,
+                                 headers: ["Authorization": "Bearer \(Self.oldAccess)"], body: .none)
+        for text in [String(describing: sample), String(reflecting: sample), String(describing: req), String(reflecting: req)] {
+            #expect(!text.contains(Self.oldAccess) && !text.contains(Self.refresh) && !text.contains("Bearer"))
+        }
         for e in errors {
             let text = String(describing: e) + String(reflecting: e) + e.localizedDescription
             #expect(!text.contains(Self.oldAccess) && !text.contains(Self.refresh) && !text.contains(Self.newAccess))
         }
+    }
+
+    @Test func timeoutIsTransientNotOffline() async throws {
+        let transport = ScriptedTransport()
+        transport.enqueue(.failure(URLError(.timedOut)))
+        await #expect(throws: DropboxAuthError.transient(code: "timeout")) {
+            try await auth(MemoryTokenStore(tokens(expiresIn: 30)), transport).accessToken()
+        }
+    }
+
+    @Test func unreadableTokenFileThrowsRatherThanLookingSignedOut() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-auth-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // A directory where the file should be: reading fails with something other than no-such-file.
+        let store = FileTokenStore(url: dir)
+        #expect(throws: (any Error).self) { try store.load() }
+        #expect(try FileTokenStore(url: dir.appendingPathComponent("absent.json")).load() == nil)
     }
 
     @Test func pkceVerifierAndChallengeShape() {

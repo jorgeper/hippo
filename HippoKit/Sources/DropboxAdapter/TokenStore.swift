@@ -22,7 +22,9 @@ public struct FileTokenStore: TokenStore {
     public init(url: URL) { self.url = url }
 
     public func load() throws -> DropboxTokens? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        let data: Data
+        do { data = try Data(contentsOf: url) }
+        catch let e as CocoaError where e.code == .fileNoSuchFile || e.code == .fileReadNoSuchFile { return nil }
         return try JSONDecoder().decode(DropboxTokens.self, from: data)
     }
 

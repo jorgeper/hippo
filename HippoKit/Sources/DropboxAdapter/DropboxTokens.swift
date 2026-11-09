@@ -1,7 +1,11 @@
 import Foundation
 
 /// The stored Dropbox sign-in. Secret: never log, never put in an error.
-public struct DropboxTokens: Codable, Equatable, Sendable {
+public struct DropboxTokens: Codable, Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    /// Redacted: account ID only.
+    public var description: String { "DropboxTokens(account: \(accountID))" }
+    public var debugDescription: String { description }
+
     public var accessToken: String
     public var expiresAt: Date
     public var refreshToken: String

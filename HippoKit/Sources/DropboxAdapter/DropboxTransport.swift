@@ -1,6 +1,10 @@
 import Foundation
 
-public struct DropboxRequest: Sendable {
+public struct DropboxRequest: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    /// Method and URL only: headers (Authorization) and bodies are never printed.
+    public var description: String { "DropboxRequest(\(method) \(url.absoluteString))" }
+    public var debugDescription: String { description }
+
     public enum Body: Sendable { case none, json(Data), form(Data), file(URL) }
     public var url: URL
     public var method: String
@@ -66,43 +70,22 @@ public final class URLSessionTransport: DropboxTransport {
         return DropboxResponse(status: http?.statusCode ?? 0, headers: headers, body: body)
     }
 
-    /// Cancels the task when the Swift task is cancelled, so cancellation surfaces within the request's latency.
-    private final class TaskBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var task: URLSessionTask?
-        private var cancelled = false
-        func set(_ t: URLSessionTask) {
-            lock.lock(); defer { lock.unlock() }
-            task = t
-            if cancelled { t.cancel() }
-        }
-        func cancel() {
-            lock.lock(); defer { lock.unlock() }
-            cancelled = true
-            task?.cancel()
-        }
+    /// Task cancellation surfaces from URLSession as `URLError.cancelled`; callers see `CancellationError`.
+    private static func mapped(_ error: Error) -> Error {
+        if error is CancellationError || Task.isCancelled { return CancellationError() }
+        if let e = error as? URLError, e.code == .cancelled { return CancellationError() }
+        return error
     }
 
     public func send(_ r: DropboxRequest) async throws -> DropboxResponse {
         try Task.checkCancellation()
         let req = Self.urlRequest(r)
-        let box = TaskBox()
-        let (data, resp): (Data, URLResponse) = try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { cont in
-                let handler: @Sendable (Data?, URLResponse?, Error?) -> Void = { data, resp, error in
-                    if let error { cont.resume(throwing: error) }
-                    else if let resp { cont.resume(returning: (data ?? Data(), resp)) }
-                    else { cont.resume(throwing: URLError(.badServerResponse)) }
-                }
-                let task: URLSessionTask
-                if case .file(let url) = r.body { task = session.uploadTask(with: req, fromFile: url, completionHandler: handler) }
-                else { task = session.dataTask(with: req, completionHandler: handler) }
-                box.set(task)
-                task.resume()
-            }
-        } onCancel: { box.cancel() }
-        try Task.checkCancellation()
-        return Self.response(resp, body: data)
+        do {
+            let (data, resp): (Data, URLResponse)
+            if case .file(let url) = r.body { (data, resp) = try await session.upload(for: req, fromFile: url) }
+            else { (data, resp) = try await session.data(for: req) }
+            return Self.response(resp, body: data)
+        } catch { throw Self.mapped(error) }
     }
 
     private final class ProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
@@ -118,24 +101,10 @@ public final class URLSessionTransport: DropboxTransport {
         try Task.checkCancellation()
         let req = Self.urlRequest(r)
         let delegate = progress.map { ProgressDelegate($0) }
-        let box = TaskBox()
-        let (tmp, resp): (URL, URLResponse) = try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { cont in
-                let task = session.downloadTask(with: req) { url, resp, error in
-                    if let error { cont.resume(throwing: error); return }
-                    guard let url, let resp else { cont.resume(throwing: URLError(.badServerResponse)); return }
-                    // The system deletes `url` when this handler returns, so move it now.
-                    let keep = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-                    do { try FileManager.default.moveItem(at: url, to: keep); cont.resume(returning: (keep, resp)) }
-                    catch { cont.resume(throwing: error) }
-                }
-                if let delegate { task.delegate = delegate }
-                box.set(task)
-                task.resume()
-            }
-        } onCancel: { box.cancel() }
+        let tmp: URL, resp: URLResponse
+        do { (tmp, resp) = try await session.download(for: req, delegate: delegate) }
+        catch { throw Self.mapped(error) }
         defer { try? FileManager.default.removeItem(at: tmp) }
-        try Task.checkCancellation()
         var out = Self.response(resp, body: Data())
         guard (200..<300).contains(out.status) else {
             out.body = (try? Data(contentsOf: tmp)) ?? Data()  // an error body is small JSON

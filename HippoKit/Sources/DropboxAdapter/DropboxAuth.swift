@@ -66,8 +66,9 @@ public final class DropboxAuth: Sendable {
             if e.code == .cancelled { throw CancellationError() }
             switch e.code {
             case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff,
-                 .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .timedOut:
+                 .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
                 throw DropboxAuthError.offline
+            case .timedOut: throw DropboxAuthError.transient(code: "timeout")
             default: throw DropboxAuthError.transient(code: "url_\(e.code.rawValue)")
             }
         } catch { throw DropboxAuthError.transient(code: "transport") }
@@ -120,7 +121,7 @@ public final class DropboxAuth: Sendable {
         guard resp.status == 200 else {
             if Self.isInvalidGrant(resp) {
                 current.needsReauthentication = true
-                try? tokens.save(current)
+                do { try tokens.save(current) } catch { throw DropboxAuthError.transient(code: "store") }
                 throw DropboxAuthError.needsReauthentication
             }
             throw DropboxAuthError.transient(code: "http_\(resp.status)")
@@ -152,6 +153,9 @@ public final class DropboxAuth: Sendable {
     }
 
     public func signOut() async {
+        // Under the refresh lock, so a refresh in flight cannot save after the clear and resurrect the account.
+        let fd = try? await acquireLock()
+        defer { if let fd { flock(fd, LOCK_UN); close(fd) } }
         if let t = (try? tokens.load()) ?? nil {
             let req = DropboxRequest(url: Self.revokeURL, headers: ["Authorization": "Bearer \(t.accessToken)"])
             let transport = self.transport
