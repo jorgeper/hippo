@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Guided Dropbox setup. Writes Config/Secrets.xcconfig (app key) and, optionally, .env (app key +
 # refresh token for integration tests). Needs only bash, curl, openssl and python3.
-# Never echoes the app key, the authorization code or any token; only first-4…last-4 masks.
+# Never prints tokens or codes (only first-4…last-4 masks). The app key is a public client ID
+# and appears in the sign-in URL.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -45,6 +46,12 @@ fi
 echo
 read -r -p "Also sign in once to create a refresh token for the integration tests? [y/N] " WANT_TOKEN
 if [[ "$WANT_TOKEN" =~ ^[Yy]$ ]]; then
+  if ! confirm_overwrite .env; then
+    echo "Kept the existing .env; skipping sign-in."
+    echo
+    echo "Done. Run: make generate"
+    exit 0
+  fi
   VERIFIER="$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n')"
   CHALLENGE="$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
   echo
@@ -53,11 +60,14 @@ if [[ "$WANT_TOKEN" =~ ^[Yy]$ ]]; then
   echo
   read -r -s -p "Paste the code (input is hidden): " CODE
   echo
-  RESPONSE="$(curl -s https://api.dropboxapi.com/oauth2/token \
+  if ! RESPONSE="$(curl -sS --max-time 30 https://api.dropboxapi.com/oauth2/token \
     --data-urlencode "code=${CODE}" \
     -d grant_type=authorization_code \
     --data-urlencode "code_verifier=${VERIFIER}" \
-    --data-urlencode "client_id=${APP_KEY}")" || true
+    --data-urlencode "client_id=${APP_KEY}")"; then
+    echo "error: network error talking to Dropbox; check your connection and try again." >&2
+    exit 1
+  fi
   REFRESH="$(printf '%s' "$RESPONSE" | python3 -I -c \
     'import json,sys
 try:
@@ -69,14 +79,10 @@ except Exception:
     echo "error: Dropbox did not return a refresh token. Check the code and try again." >&2
     exit 1
   fi
-  if confirm_overwrite .env; then
-    umask 077
-    printf 'HIPPO_DROPBOX_APP_KEY=%s\nHIPPO_DROPBOX_REFRESH_TOKEN=%s\n' "$APP_KEY" "$REFRESH" > .env
-    chmod 600 .env
-    echo "Wrote .env: HIPPO_DROPBOX_APP_KEY=$(mask "$APP_KEY"), HIPPO_DROPBOX_REFRESH_TOKEN=$(mask "$REFRESH")"
-  else
-    echo "Kept the existing .env."
-  fi
+  umask 077
+  printf 'HIPPO_DROPBOX_APP_KEY=%s\nHIPPO_DROPBOX_REFRESH_TOKEN=%s\n' "$APP_KEY" "$REFRESH" > .env
+  chmod 600 .env
+  echo "Wrote .env: HIPPO_DROPBOX_APP_KEY=$(mask "$APP_KEY"), HIPPO_DROPBOX_REFRESH_TOKEN=$(mask "$REFRESH")"
 fi
 
 echo

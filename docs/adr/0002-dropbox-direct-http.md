@@ -31,22 +31,35 @@ Talk to the Dropbox HTTP API v2 directly with `URLSession`, inside the `DropboxA
 
 ## API facts the adapter relies on
 
-Each is from the Dropbox HTTP documentation and should be re-checked at the linked page when the
-adapter changes. These were recorded from knowledge of the docs, not fetched at writing time.
+Checked on 2026-11-08. "Verified" names the page actually fetched. The API reference page
+(www.dropbox.com/developers/documentation/http/documentation) is a script-rendered page whose
+endpoint sections could not be fetched, so facts that only live there are marked unverified and
+should be checked in a browser before the adapter depends on them.
 
-- A single `files/upload` request carries at most 150 MiB.
-  https://www.dropbox.com/developers/documentation/http/documentation#files-upload
-- Upload-session chunks should be multiples of 4 MiB (except the last); a wrong offset returns
-  `incorrect_offset` with the `correct_offset`. At most 150 MiB per `append_v2` request.
+- Verified: `/files/upload` is meant for files under 150 MB (the docs say "MB"; Hippo treats it as
+  150 MiB at most and uses it only up to 8 MiB). Larger files use `upload_session/start`,
+  `append_v2` and `finish`.
+  https://docs.dropboxapi.com/dropbox-api/docs/performance
+- Verified: upload-session chunks should be multiples of 4 MB (Hippo uses 8 MiB, a multiple of
+  4 MiB), sent mostly through `append_v2`.
+  https://docs.dropboxapi.com/dropbox-api/docs/performance
+- Unverified: a wrong offset returns `incorrect_offset` carrying `correct_offset`; at most 150 MiB
+  per `append_v2` request.
   https://www.dropbox.com/developers/documentation/http/documentation#files-upload_session-append_v2
-- `content_hash` is SHA-256 of each 4 MiB block, then SHA-256 of the concatenated digests, hex.
-  https://www.dropbox.com/developers/documentation/http/documentation#content-hash
-- `files/list_folder` accepts `limit` up to 2000 entries per page and continues with
-  `list_folder/continue` using the cursor.
+- Verified: `content_hash` splits the file into 4 MiB (4,194,304-byte) blocks, SHA-256 of each,
+  SHA-256 of the concatenated raw digests, hex; an empty file hashes an empty byte string.
+  https://docs.dropboxapi.com/dropbox-api/docs/technical-reference/content-hash
+- Unverified: `files/list_folder` takes `limit` up to 2000 per page and continues with
+  `list_folder/continue`. (The performance page confirms only the `/continue` pattern.)
   https://www.dropbox.com/developers/documentation/http/documentation#files-list_folder
-- Rate limiting answers 429 (or 503) with a `Retry-After` header in seconds.
-  https://www.dropbox.com/developers/documentation/http/documentation#error-handling
-- PKCE refresh needs no app secret: `grant_type=refresh_token` with `refresh_token` and `client_id`.
-  https://www.dropbox.com/developers/documentation/http/documentation#oauth2-token
-- `auth/token/revoke` revokes the access token and also the refresh token it came from.
+- Verified: rate-limited responses carry `Retry-After` (seconds); `too_many_write_operations`
+  can return 0.
+  https://docs.dropboxapi.com/dropbox-api/docs/performance
+- Verified: PKCE code exchange passes `code_verifier` to `/oauth2/token` without an app secret;
+  `token_access_type=offline` on the authorize URL yields a refresh token; refresh is
+  `grant_type=refresh_token` plus the `refresh_token`. The page does not say whether `client_id`
+  is also sent on refresh; the adapter sends it, which Dropbox accepts for PKCE apps (unverified).
+  https://docs.dropboxapi.com/dropbox-api/docs/oauth
+- Unverified: `auth/token/revoke` also invalidates the refresh token. The OAuth guide only says
+  apps can revoke tokens they hold through that endpoint.
   https://www.dropbox.com/developers/documentation/http/documentation#auth-token-revoke

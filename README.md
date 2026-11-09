@@ -25,7 +25,7 @@ Timeline of captures, a detail view, a note editor, a voice recorder, a Share Ex
 
 ### Dropbox setup
 
-Dropbox is optional; without it the app still builds and the Dropbox provider is simply absent. To enable it, run `make dropbox-setup` ([`scripts/setup-dropbox.sh`](scripts/setup-dropbox.sh)). It walks you through creating the app in the Dropbox App Console (scoped access, App folder "Hippo", the four permissions, the `db-<APP KEY>://2/token` redirect URI), stores the app key in the gitignored `Config/Secrets.xcconfig`, and can optionally sign in once to write a refresh token to the gitignored `.env` for integration tests. It never prints a full key or token. Afterwards run `make generate`. See [ADR 0002](docs/adr/0002-dropbox-direct-http.md) for why the adapter talks to the Dropbox HTTP API directly.
+Dropbox is optional; without it the app still builds and the Dropbox provider is simply absent. To enable it, run `make dropbox-setup` ([`scripts/setup-dropbox.sh`](scripts/setup-dropbox.sh)). It walks you through creating the app in the Dropbox App Console (scoped access, App folder "Hippo", the four permissions, the `db-<APP KEY>://2/token` redirect URI), stores the app key in the gitignored `Config/Secrets.xcconfig`, and can optionally sign in once to write a refresh token to the gitignored `.env` for integration tests. It never prints tokens or codes; the app key is a public client ID and appears in the sign-in URL. Afterwards run `make generate`. See [ADR 0002](docs/adr/0002-dropbox-direct-http.md) for why the adapter talks to the Dropbox HTTP API directly.
 
 ### Commands
 
