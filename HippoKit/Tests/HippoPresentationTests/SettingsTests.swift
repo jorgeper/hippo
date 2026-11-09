@@ -202,6 +202,25 @@ struct SettingsTests {
         #expect(h.model.statusSummary == "Last sync never")
     }
 
+    @Test func reviewPendingInSummary() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let dest = h.provider.destination
+        _ = try h.t.store.destinations.connect(dest)
+        let p = try await h.t.note("looks different", at: start)
+        try h.t.store.remoteState.addReviewItems([
+            ReviewItem(captureID: p.metadata.captureID, destinationID: dest.id, reason: "threshold", createdAt: start)])
+        await h.model.refresh()
+        #expect(h.model.reviewPending == 1)
+        #expect(h.model.summary.hasSuffix("\(dest.displayName) looks different · review"))
+        try h.t.store.remoteState.clearReview(destinationID: dest.id)
+        await h.model.refresh()
+        #expect(h.model.reviewPending == 0)
+        #expect(!h.model.summary.contains("looks different"))
+        #expect(SettingsModel.summary(counts: [.notSynced: 1], reviewPending: 2, destinationName: "Dropbox")
+                == "1 waiting to upload · Dropbox looks different · review")
+    }
+
     @Test func connectBindsUnassignedAndSyncs() async throws {
         let h = try Harness()
         defer { h.cleanup() }

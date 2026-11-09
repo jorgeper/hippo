@@ -25,6 +25,10 @@ public final class TimelineModel {
     public private(set) var isEmpty = false
     /// True after a failed reload or page; cleared by the next successful reload.
     public private(set) var loadFailed = false
+    /// Captures waiting in the active destination's review queue; read on each `reload()`.
+    public private(set) var reviewPending = 0
+    /// The active destination's display name while `reviewPending > 0`, for the banner text.
+    public private(set) var reviewDestinationName: String?
 
     public var filter = TimelineFilterState() {
         didSet {
@@ -100,7 +104,10 @@ public final class TimelineModel {
             Self.log.error("\("reload_failed", privacy: .public)")
             page = nil
         }
+        let review = await readReview()
         guard mine == generation else { return }
+        reviewPending = review.count
+        reviewDestinationName = review.count > 0 ? review.name : nil
         reloadCount += 1
         guard let page else {
             // Never leave the previous filter's rows on screen.
@@ -115,6 +122,15 @@ public final class TimelineModel {
         items = page.items
         reachedEnd = page.reachedEnd
         publish()
+    }
+
+    private func readReview() async -> (count: Int, name: String?) {
+        let store = store
+        return await Task.detached {
+            guard let active = try? store.destinations.active() else { return (0, nil) }
+            let count = (try? store.remoteState.reviewItems(destinationID: active.id).count) ?? 0
+            return (count, active.displayName)
+        }.value
     }
 
     /// Loads the next page when `id` is among the last 10 rows.

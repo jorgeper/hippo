@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 import CaptureCore
 @testable import LocalRepository
 import SyncEngine
@@ -48,8 +49,10 @@ private let dropbox = Destination(id: "d1", providerKind: "dropbox", accountIden
 private func plain(_ s: String?) -> String? { s?.replacingOccurrences(of: "\u{202F}", with: " ") }
 
 private func make(_ m: CaptureMetadata, body: String? = nil, jobs: [UploadJob] = [],
-                  enrichment: ResolvedEnrichment = .empty) -> CaptureDetail {
+                  enrichment: ResolvedEnrichment = .empty, changed: RemoteChangedRecord? = nil,
+                  trimmedPaths: Set<String> = [], destinationName: String? = nil) -> CaptureDetail {
     CaptureDetail.make(metadata: m, packageURL: pkg, noteBody: body, jobs: jobs, enrichment: enrichment,
+                       changed: changed, trimmedPaths: trimmedPaths, destinationName: destinationName,
                        destination: { $0 == "d1" ? dropbox : nil }, now: now, locale: locale, calendar: calendar)
 }
 
@@ -298,6 +301,69 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
     func syncMessagesByCode(c: SyncCase) {
         let rows = make(meta(), jobs: [job(c.state, code: c.code)]).sync
         #expect(rows == [SyncRow(destinationName: "Dropbox", label: c.label, message: c.message, canRetry: c.retry)])
+    }
+
+    private func record(_ paths: [String]) -> RemoteChangedRecord {
+        RemoteChangedRecord(captureID: "c1", destinationID: "d1", paths: paths, detectedAt: now)
+    }
+
+    @Test func storageLinePrecedence() {
+        func storage(_ jobs: [UploadJob], changed: RemoteChangedRecord? = nil, trimmed: Set<String> = [],
+                     name: String? = "Dropbox") -> StatusLine? {
+            make(meta(), jobs: jobs, changed: changed, trimmedPaths: trimmed, destinationName: name).storage
+        }
+        let sync = Layer.sync
+        #expect(storage([job(.uploading)], changed: record(["a"]), trimmed: ["b"])
+                == StatusLine(layer: sync, text: "Changed in Dropbox", state: .failed))
+        #expect(storage([job(.uploading)], trimmed: ["b"]) == StatusLine(layer: sync, text: "Uploading…", state: .working))
+        #expect(storage([job(.synced), job(.retryableFailure, code: "offline", dest: "d2")], trimmed: ["b"])
+                == StatusLine(layer: sync, text: "Waiting for a connection", state: .waiting))
+        #expect(storage([job(.retryableFailure, code: "rate_limited")]) == nil)
+        #expect(storage([job(.synced)], trimmed: ["b"])
+                == StatusLine(layer: sync, text: "Large files in Dropbox only", state: .done))
+        #expect(storage([job(.synced)]) == StatusLine(layer: sync, text: "In Dropbox · verified", state: .done))
+        #expect(storage([job(.pending)]) == nil)
+        #expect(storage([]) == nil)
+        #expect(storage([job(.synced)], name: nil) == nil)
+        #expect(make(meta(), jobs: [job(.synced)]).storage == nil)
+    }
+
+    @Test func changedShowsUploadAgainAndUnrestorableNote() {
+        let plain = make(meta(), jobs: [job(.synced)], destinationName: "Dropbox")
+        #expect(plain.changedPaths.isEmpty && plain.unrestorableNote == nil)
+
+        let changed = make(meta(), jobs: [job(.synced)], changed: record(["content/a1.bin", "metadata.json"]),
+                           trimmedPaths: ["content/other.bin"], destinationName: "Dropbox")
+        #expect(changed.changedPaths == ["content/a1.bin", "metadata.json"])
+        #expect(changed.unrestorableNote == nil)
+
+        let gone = make(meta(), jobs: [job(.synced)], changed: record(["content/a1.bin"]),
+                        trimmedPaths: ["content/a1.bin"], destinationName: "Dropbox")
+        #expect(gone.unrestorableNote
+                == "This file was only in Dropbox and is gone there. Restore it from Dropbox's deleted files on dropbox.com.")
+    }
+
+    @Test func uploadAgainRequeuesAndSyncs() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(Destination(id: "dest-x", providerKind: "dropbox", accountIdentifier: "acct",
+                                                         remoteRoot: "/", displayName: "Dropbox", status: .active))
+        let p = try await t.note("changed remotely", at: now)
+        let id = p.metadata.captureID
+        try t.store.remoteState.markChanged(captureID: id, destinationID: "dest-x", paths: ["metadata.json"], now: now)
+        let calls = Mutex(0)
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale,
+                                             sync: { calls.withLock { $0 += 1 } })
+        await model.load()
+        #expect(await model.detail?.changedPaths == ["metadata.json"])
+        #expect(await model.detail?.storage?.text == "Changed in Dropbox")
+
+        await model.uploadAgain()
+
+        #expect(calls.withLock { $0 } == 1)
+        #expect(try t.store.remoteState.changed(captureID: id) == nil)
+        #expect(await model.detail?.changedPaths.isEmpty == true)
+        #expect(await model.detail?.storage == nil)
     }
 
     @Test func unassignedCaptureShowsConnectHint() {

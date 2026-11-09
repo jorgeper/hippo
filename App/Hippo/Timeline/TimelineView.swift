@@ -9,6 +9,7 @@ struct TimelineView: View {
     @State private var model: TimelineModel
     @State private var thumbnailer: Thumbnailer
     @State private var showingFilters = false
+    @State private var reviewing = false
     @State private var presented: Compose?
     @State private var taskReload: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
@@ -58,6 +59,9 @@ struct TimelineView: View {
                                      })
                     }
                 }
+            }
+            .sheet(isPresented: $reviewing) {
+                RemoteReviewSheet(store: environment.store, coordinator: environment.coordinator)
             }
             .sheet(isPresented: $showingFilters) {
                 FiltersSheet(filters: $model.filter.sheet)
@@ -142,6 +146,12 @@ struct TimelineView: View {
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
+            if model.reviewPending > 0, let name = model.reviewDestinationName {
+                ReviewBanner(name: name) { reviewing = true }
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
             ForEach(Array(model.sections.enumerated()), id: \.offset) { _, section in
                 Section(section.header) {
                     ForEach(section.rows) { row in

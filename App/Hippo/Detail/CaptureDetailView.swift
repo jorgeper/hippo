@@ -16,6 +16,7 @@ struct CaptureDetailView: View {
     @State private var confirmingDeleteEverywhere = false
     @State private var deleteFailed = false
     @State private var retrying = false
+    @State private var uploadingAgain = false
     @State private var developerMode = LocationService.settings.developerMode
     @State private var showsStripes = LocationService.settings.showsLayerStripes
     @State private var taskReload: Task<Void, Never>?
@@ -31,7 +32,8 @@ struct CaptureDetailView: View {
         _model = State(initialValue: CaptureDetailModel(
             store: environment.store, captureID: captureID,
             isEnabled: { LocationService.settings.isEnrichmentEnabled($0) },
-            isOnline: { EnrichmentScheduling.isOnline }))
+            isOnline: { EnrichmentScheduling.isOnline },
+            sync: { [coordinator = environment.coordinator] in _ = await coordinator?.syncNow(trigger: "manual") }))
     }
 
     var body: some View {
@@ -142,7 +144,8 @@ struct CaptureDetailView: View {
                         }
                     }
                 }
-                StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry)
+                StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry,
+                              uploadingAgain: uploadingAgain, onUploadAgain: uploadAgain)
                 if developerMode, let capturedAt = model.capturedAt {
                     Section {
                         NavigationLink("Activity") {
@@ -198,6 +201,18 @@ struct CaptureDetailView: View {
         }
         .accessibilityLabel("More")
         .accessibilityIdentifier("detail-menu")
+    }
+
+    private func uploadAgain() {
+        guard !uploadingAgain else { return }
+        uploadingAgain = true
+        let model = model, coordinator = environment.coordinator
+        Task {
+            defer { uploadingAgain = false }
+            await BackgroundActivity.run(name: "detail-upload-again", onExpire: coordinator.map(SyncScheduling.stopper)) {
+                await model.uploadAgain()
+            }
+        }
     }
 
     private func retry() {

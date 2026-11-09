@@ -33,8 +33,12 @@ public final class SettingsModel {
 
     /// One line for the Sync section.
     public var summary: String {
-        Self.summary(counts: counts, pendingRemoteDeletes: pendingRemoteDeletes, destinationName: activeDestination?.displayName)
+        Self.summary(counts: counts, pendingRemoteDeletes: pendingRemoteDeletes,
+                      reviewPending: reviewPending, destinationName: activeDestination?.displayName)
     }
+
+    /// Captures in the active destination's review queue (they look different there); set by `refresh()`.
+    public private(set) var reviewPending = 0
 
     /// Delete-everywhere requests not yet applied in the active destination; set by `refresh()`.
     public private(set) var pendingRemoteDeletes = 0
@@ -103,7 +107,7 @@ public final class SettingsModel {
     }
 
     nonisolated static func summary(counts: [SyncBucket: Int], pendingRemoteDeletes: Int = 0,
-                                    destinationName: String? = nil) -> String {
+                                    reviewPending: Int = 0, destinationName: String? = nil) -> String {
         let attention = counts[.needsAttention] ?? 0, waiting = counts[.notSynced] ?? 0
         var parts: [String] = []
         if attention > 0 { parts.append("\(attention) need attention") }
@@ -112,6 +116,7 @@ public final class SettingsModel {
             let noun = pendingRemoteDeletes == 1 ? "delete" : "deletes"
             parts.append("\(pendingRemoteDeletes) \(noun) waiting to reach \(destinationName ?? "your storage")")
         }
+        if reviewPending > 0 { parts.append("\(destinationName ?? "Your storage") looks different · review") }
         return parts.isEmpty ? "All captures synced" : parts.joined(separator: " · ")
     }
 
@@ -121,6 +126,7 @@ public final class SettingsModel {
         var bytes: Int64
         var unfinished: [EnrichmentTask]
         var pendingDeletes: Int
+        var reviewPending: Int
     }
 
     /// Re-reads the destination, sync counts, storage use and location preference.
@@ -135,6 +141,9 @@ public final class SettingsModel {
                                 unfinished: (try? store.enrichmentTasks.unfinished()) ?? [],
                                 pendingDeletes: try destination.map {
                                     try store.remoteState.pendingTombstoneCount(destinationID: $0.id)
+                                } ?? 0,
+                                reviewPending: try destination.map {
+                                    try store.remoteState.reviewItems(destinationID: $0.id).count
                                 } ?? 0)
             } catch {
                 Self.log.error("\("refresh_failed", privacy: .public)")
@@ -146,6 +155,7 @@ public final class SettingsModel {
         activeDestination = snapshot.destination
         counts = snapshot.counts
         pendingRemoteDeletes = snapshot.pendingDeletes
+        reviewPending = snapshot.reviewPending
         storageBytes = snapshot.bytes
         statusSummary = buildStatusSummary(unfinished: snapshot.unfinished)
     }

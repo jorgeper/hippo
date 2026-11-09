@@ -31,6 +31,12 @@ public struct CaptureDetail: Equatable, Sendable {
     public var captured: [DetailRow]
     public var attachments: [[DetailRow]]
     public var sync: [SyncRow]
+    /// The destination's verdict on this capture; shown first among the sync-layer rows. Nil when there is nothing to say.
+    public var storage: StatusLine?
+    /// Files changed in the destination that "Upload again from iPhone" would put back.
+    public var changedPaths: [String]
+    /// Shown when a changed file was trimmed from this iPhone and is gone from the destination too.
+    public var unrestorableNote: String?
     /// Files offered through Share/Export: every attachment's file.
     public var exportURLs: [URL]
     public var linkCards: [ResolvedLink]
@@ -51,6 +57,8 @@ public struct CaptureDetail: Equatable, Sendable {
     /// ages are measured against the capture time. `calendar.timeZone` is the current zone.
     public static func make(metadata m: CaptureMetadata, packageURL: URL, noteBody: String?, jobs: [UploadJob],
                             enrichment: ResolvedEnrichment, tasks: [EnrichmentTask] = [],
+                            changed: RemoteChangedRecord? = nil, trimmedPaths: Set<String> = [],
+                            destinationName: String? = nil,
                             isEnabled: (FacetKind) -> Bool = { _ in true }, isOnline: Bool = true,
                             goldArrivedAt: Date? = nil, destination: (String) -> Destination?, now: Date,
                             locale: Locale, calendar: Calendar) -> CaptureDetail {
@@ -74,6 +82,13 @@ public struct CaptureDetail: Equatable, Sendable {
                                placeFromServer: enrichment.fromServer.places.contains($1.attachmentID), locale: locale)
             },
             sync: sync,
+            storage: storageLine(jobs: jobs, changed: changed, hasTrimmed: !trimmedPaths.isEmpty, name: destinationName),
+            changedPaths: changed?.paths ?? [],
+            unrestorableNote: destinationName.flatMap { name in
+                (changed?.paths ?? []).contains(where: trimmedPaths.contains)
+                    ? "This file was only in \(name) and is gone there. Restore it from Dropbox's deleted files on dropbox.com."
+                    : nil
+            },
             exportURLs: files.map(\.1),
             linkCards: urls.compactMap { enrichment.links[$0.url] },
             transcripts: titled(m, enrichment.transcripts.mapValues(\.text), gold: enrichment.fromServer.transcripts),
@@ -88,6 +103,20 @@ public struct CaptureDetail: Equatable, Sendable {
             pending: steps.reduce(into: [:]) { out, step in
                 if let line = EnrichmentProgress.pendingLine(step.key, step.value) { out[step.key] = line }
             })
+    }
+
+    private static func storageLine(jobs: [UploadJob], changed: RemoteChangedRecord?, hasTrimmed: Bool,
+                                    name: String?) -> StatusLine? {
+        guard let name, !jobs.isEmpty else { return nil }
+        let line: (String, StatusState)?
+        if changed != nil { line = ("Changed in \(name)", .failed) }
+        else if jobs.contains(where: { $0.state == .uploading }) { line = ("Uploading…", .working) }
+        else if jobs.contains(where: { $0.state == .retryableFailure && $0.lastErrorCode == "offline" }) {
+            line = ("Waiting for a connection", .waiting)
+        } else if hasTrimmed { line = ("Large files in \(name) only", .done) }
+        else if jobs.allSatisfy({ $0.state == .synced }) { line = ("In \(name) · verified", .done) }
+        else { line = nil }
+        return line.map { StatusLine(layer: .sync, text: $0.0, state: $0.1) }
     }
 
     /// Kinds whose shown result came from the server.

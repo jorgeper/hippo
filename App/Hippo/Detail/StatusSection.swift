@@ -7,6 +7,8 @@ struct StatusSection: View {
     let showsStripes: Bool
     let retrying: Bool
     let onRetry: () -> Void
+    var uploadingAgain = false
+    var onUploadAgain: () -> Void = {}
 
     var body: some View {
         Section("Status") {
@@ -18,6 +20,24 @@ struct StatusSection: View {
                     symbol(line.state)
                 }
                 .layerStripe(line.layer, shown: showsStripes)
+            }
+            if let storage = detail.storage {
+                HStack(spacing: 8) {
+                    Text(storage.text).font(.subheadline)
+                    Spacer(minLength: 8)
+                    symbol(storage.state)
+                }
+                .layerStripe(storage.layer, shown: showsStripes)
+                if !detail.changedPaths.isEmpty {
+                    Button("Upload again from iPhone", action: onUploadAgain)
+                        .buttonStyle(.bordered).disabled(uploadingAgain)
+                        .layerStripe(.sync, shown: showsStripes)
+                        .accessibilityIdentifier("detail-upload-again")
+                }
+                if let note = detail.unrestorableNote {
+                    Text(note).font(.footnote).foregroundStyle(.secondary)
+                        .layerStripe(.sync, shown: showsStripes)
+                }
             }
             ForEach(Array(detail.sync.enumerated()), id: \.offset) { _, row in
                 syncRow(row).layerStripe(.sync, shown: showsStripes)

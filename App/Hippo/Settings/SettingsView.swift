@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var confirmingUpload = false
     @State private var failed = false
     @State private var busy = false
+    @State private var reviewing = false
     @State private var locationDenied = false
     /// Local mirror of the stored switches so a toggle moves at once.
     @State private var enrichmentOn: [FacetKind: Bool] = [:]
@@ -68,6 +69,7 @@ struct SettingsView: View {
                 await reconcileLocation()
             }
         }
+        .sheet(isPresented: $reviewing) { RemoteReviewSheet(store: store, coordinator: coordinator) }
         .alert("Something went wrong", isPresented: $failed) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -85,6 +87,12 @@ struct SettingsView: View {
                     Text(destination.displayName)
                 } else {
                     LabeledContent(destination.displayName, value: providerName(destination))
+                }
+                if model.reviewPending > 0 {
+                    Button { reviewing = true } label: {
+                        LabeledContent("\(destination.displayName) looks different", value: "Review")
+                    }
+                    .accessibilityIdentifier("settings-review")
                 }
                 Button("Sign out", role: .destructive) { confirmingSignOut = true }
                     .disabled(busy)

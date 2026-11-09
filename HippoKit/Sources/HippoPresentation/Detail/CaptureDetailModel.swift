@@ -24,6 +24,7 @@ public final class CaptureDetailModel {
     @ObservationIgnored private let locale: Locale
     @ObservationIgnored private let isEnabled: @Sendable (FacetKind) -> Bool
     @ObservationIgnored private let isOnline: @Sendable () -> Bool
+    @ObservationIgnored private let sync: @Sendable () async -> Void
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "detail")
     /// Runs after a load's read and before it applies. Set only by tests, to finish loads out of order.
     @ObservationIgnored var beforeApply: (@Sendable () async -> Void)?
@@ -33,7 +34,9 @@ public final class CaptureDetailModel {
     public init(store: HippoStore, captureID: String, now: @escaping @Sendable () -> Date = Date.init,
                 calendar: Calendar = .current, locale: Locale = .current,
                 isEnabled: @escaping @Sendable (FacetKind) -> Bool = { _ in true },
-                isOnline: @escaping @Sendable () -> Bool = { true }) {
+                isOnline: @escaping @Sendable () -> Bool = { true },
+                sync: @escaping @Sendable () async -> Void = {}) {
+        self.sync = sync
         self.isEnabled = isEnabled
         self.isOnline = isOnline
         self.store = store
@@ -72,8 +75,14 @@ public final class CaptureDetailModel {
                 let enrichment = ResolvedEnrichment.load(store: store, captureID: id)
                 let tasks = try store.enrichmentTasks.tasks(captureIDs: [id])
                 let goldArrivedAt = (try? store.enrichments.document(.server, captureID: id))?.generatedAt
+                let changed = try store.remoteState.changed(captureID: id)
+                let trimmedPaths = try store.trims.trimmedPaths(captureID: id)
+                // The destination the storage line speaks for: the active one, else the first job's.
+                let storageName = try store.destinations.active()?.displayName ?? jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName
                 let detail = CaptureDetail.make(metadata: metadata, packageURL: url, noteBody: package.noteBody(),
-                                                jobs: jobs, enrichment: enrichment, tasks: tasks, isEnabled: isEnabled,
+                                                jobs: jobs, enrichment: enrichment, tasks: tasks,
+                                                changed: changed, trimmedPaths: trimmedPaths,
+                                                destinationName: storageName, isEnabled: isEnabled,
                                                 isOnline: isOnline(), goldArrivedAt: goldArrivedAt, destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName)
@@ -104,6 +113,18 @@ public final class CaptureDetailModel {
         } catch {
             Self.log.error("\("retry_failed", privacy: .public)")
         }
+        await load()
+    }
+
+    /// Puts back what changed in the destination from this iPhone's copy, syncs, then reloads.
+    public func uploadAgain() async {
+        let store = store, id = captureID
+        do {
+            _ = try await Task.detached { try store.uploadAgain(captureID: id) }.value
+        } catch {
+            Self.log.error("\("upload_again_failed", privacy: .public)")
+        }
+        await sync()
         await load()
     }
 
