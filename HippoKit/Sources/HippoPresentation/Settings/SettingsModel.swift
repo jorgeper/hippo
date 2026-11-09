@@ -43,6 +43,9 @@ public final class SettingsModel {
     /// Delete-everywhere requests not yet applied in the active destination; set by `refresh()`.
     public private(set) var pendingRemoteDeletes = 0
 
+    /// Captures and bytes of the active destination's trimmed files; set by `refresh()`.
+    public private(set) var trimmedTotals: (captures: Int, bytes: Int64) = (0, 0)
+
     @ObservationIgnored private let store: HippoStore
     @ObservationIgnored private let registry: ProviderRegistry
     @ObservationIgnored private let coordinator: SyncCoordinator
@@ -120,6 +123,13 @@ public final class SettingsModel {
         return parts.isEmpty ? "All captures synced" : parts.joined(separator: " · ")
     }
 
+    /// The Disconnect confirmation's message.
+    public func disconnectPrompt(name: String) -> String {
+        var text = "Disconnect \(name)? Nothing is deleted on this iPhone or in \(name)."
+        if trimmedTotals.captures > 0 { text += " Files kept only in \(name) can't be downloaded until you reconnect." }
+        return text
+    }
+
     private struct Snapshot: Sendable {
         var destination: Destination?
         var counts: [SyncBucket: Int]
@@ -127,6 +137,7 @@ public final class SettingsModel {
         var unfinished: [EnrichmentTask]
         var pendingDeletes: Int
         var reviewPending: Int
+        var trimmed: (captures: Int, bytes: Int64)
     }
 
     /// Re-reads the destination, sync counts, storage use and location preference.
@@ -144,7 +155,8 @@ public final class SettingsModel {
                                 } ?? 0,
                                 reviewPending: try destination.map {
                                     try store.remoteState.reviewItems(destinationID: $0.id).count
-                                } ?? 0)
+                                } ?? 0,
+                                trimmed: try destination.map { try store.trims.totals(destinationID: $0.id) } ?? (0, 0))
             } catch {
                 Self.log.error("\("refresh_failed", privacy: .public)")
                 return nil
@@ -156,6 +168,7 @@ public final class SettingsModel {
         counts = snapshot.counts
         pendingRemoteDeletes = snapshot.pendingDeletes
         reviewPending = snapshot.reviewPending
+        trimmedTotals = snapshot.trimmed
         storageBytes = snapshot.bytes
         statusSummary = buildStatusSummary(unfinished: snapshot.unfinished)
     }

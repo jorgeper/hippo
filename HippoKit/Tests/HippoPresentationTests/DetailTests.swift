@@ -343,6 +343,81 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
                 == "This file was only in Dropbox and is gone there. Restore it from Dropbox's deleted files on dropbox.com.")
     }
 
+    @Test func trimmedAttachmentRowsAndPreview() {
+        let other = Destination(id: "d2", providerKind: "filesystem", accountIdentifier: "x", remoteRoot: "/",
+                                displayName: "Developer folder", status: .active)
+        func detail(_ state: TrimState, dest: String = "d1", active: Destination? = dropbox,
+                    thumb: URL? = nil) -> CaptureDetail {
+            let t = TrimmedAttachment(captureID: "c1", attachmentID: "a1", relativePath: "content/a1.bin",
+                                      byteCount: 2_500_000, sha256: "x", destinationID: dest, state: state, trimmedAt: now)
+            return CaptureDetail.make(metadata: meta(attachments: [att()]), packageURL: pkg, noteBody: nil,
+                                      jobs: [job(.synced, dest: dest)], enrichment: .empty,
+                                      trimmed: [t], thumbnailURL: { _ in thumb }, activeDestination: active,
+                                      destination: { ["d1": dropbox, "d2": other][$0] }, now: now,
+                                      locale: locale, calendar: calendar)
+        }
+        let thumb = URL(fileURLWithPath: "/t/a1.jpg")
+        let available = detail(.trimmed, thumb: thumb)
+        let expected = RemoteOnlyAttachment(attachmentID: "a1", relativePath: "content/a1.bin", byteCount: 2_500_000,
+                                            thumbnailURL: thumb, symbol: "photo", state: .available(destinationName: "Dropbox"))
+        #expect(available.preview == .remoteOnly(expected))
+        #expect(available.remoteOnly["a1"] == expected)
+        #expect(available.attachments[0].contains(DetailRow(label: "Storage", value: "In Dropbox · Download (2.5 MB)")))
+        #expect(available.exportURLs.isEmpty)
+
+        let elsewhere = detail(.trimmed, dest: "d2", active: dropbox)
+        let message = "Connect Developer folder (account Developer folder) to download"
+        #expect(elsewhere.remoteOnly["a1"]?.state == .unavailable(message: message))
+        #expect(elsewhere.attachments[0].contains(DetailRow(label: "Storage", value: message)))
+        #expect(detail(.trimmed, dest: "d2", active: nil).remoteOnly["a1"]?.state == .unavailable(message: message))
+
+        let mismatch = detail(.mismatch)
+        let changed = "Changed in Dropbox: this file no longer matches"
+        #expect(mismatch.remoteOnly["a1"]?.state == .mismatch(message: changed))
+        #expect(mismatch.attachments[0].contains(DetailRow(label: "Storage", value: changed)))
+
+        let plainDetail = make(meta(attachments: [att()]))
+        #expect(plainDetail.remoteOnly.isEmpty)
+        #expect(plainDetail.exportURLs.count == 1)
+    }
+
+    @Test func trimmedSymbolsFollowType() {
+        func symbol(_ uti: String) -> String? {
+            let t = TrimmedAttachment(captureID: "c1", attachmentID: "a1", relativePath: "content/a1.bin", byteCount: 1,
+                                      sha256: "x", destinationID: "d1", state: .trimmed, trimmedAt: now)
+            return CaptureDetail.make(metadata: meta(attachments: [att(uti: uti)]), packageURL: pkg, noteBody: nil,
+                                      jobs: [], enrichment: .empty, trimmed: [t], activeDestination: dropbox,
+                                      destination: { _ in dropbox }, now: now, locale: locale,
+                                      calendar: calendar).remoteOnly["a1"]?.symbol
+        }
+        #expect(symbol("public.jpeg") == "photo")
+        #expect(symbol("public.mpeg-4") == "video")
+        #expect(symbol("com.apple.quicktime-movie") == "video")
+        #expect(symbol("com.adobe.pdf") == "doc")
+    }
+
+    @Test func restoreErrorsSetMessageAndDownloadReloads() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(Destination(id: "dest-x", providerKind: "dropbox", accountIdentifier: "acct",
+                                                         remoteRoot: "/", displayName: "Dropbox", status: .active))
+        let p = try await t.note("will be trimmed", at: now)
+        let id = p.metadata.captureID
+        let a = try #require(p.metadata.attachments.first)
+        try t.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: a.attachmentID, relativePath: a.relativePath,
+                                                   byteCount: a.byteCount, sha256: a.sha256, destinationID: "dest-x",
+                                                   state: .trimmed, trimmedAt: now))
+        try FileManager.default.removeItem(at: t.store.layout.packageURL(relativeDirectory: p.relativeDirectory)
+            .appendingPathComponent(a.relativePath))
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale,
+                                             adapterFor: { _ in throw StorageError.offline })
+        await model.load()
+        #expect(await model.detail?.remoteOnly[a.attachmentID]?.state == .available(destinationName: "Dropbox"))
+        await model.restore(attachmentID: a.attachmentID)
+        #expect(await model.restoreMessage == "Connect to the internet to download")
+        #expect(await model.restoreProgress[a.attachmentID] == nil)
+    }
+
     @Test func storageLineNamesTheBoundDestinationNotTheActiveOne() async throws {
         let t = try TestStore()
         defer { t.cleanup() }

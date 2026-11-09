@@ -221,6 +221,26 @@ struct SettingsTests {
                 == "1 waiting to upload · Dropbox looks different · review")
     }
 
+    @Test func trimmedTotalsFeedDisconnectPrompt() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let dest = h.provider.destination
+        _ = try h.t.store.destinations.connect(dest)
+        let p = try await h.t.note("big", at: start)
+        await h.model.refresh()
+        #expect(h.model.trimmedTotals.captures == 0)
+        #expect(h.model.disconnectPrompt(name: "Dropbox")
+                == "Disconnect Dropbox? Nothing is deleted on this iPhone or in Dropbox.")
+        let a = try #require(p.metadata.attachments.first)
+        try h.t.store.trims.record(TrimmedAttachment(captureID: p.metadata.captureID, attachmentID: a.attachmentID,
+                                                     relativePath: a.relativePath, byteCount: 4_000, sha256: "x",
+                                                     destinationID: dest.id, state: .trimmed, trimmedAt: start))
+        await h.model.refresh()
+        #expect(h.model.trimmedTotals.captures == 1 && h.model.trimmedTotals.bytes == 4_000)
+        #expect(h.model.disconnectPrompt(name: "Dropbox")
+                == "Disconnect Dropbox? Nothing is deleted on this iPhone or in Dropbox. Files kept only in Dropbox can't be downloaded until you reconnect.")
+    }
+
     @Test func connectBindsUnassignedAndSyncs() async throws {
         let h = try Harness()
         defer { h.cleanup() }

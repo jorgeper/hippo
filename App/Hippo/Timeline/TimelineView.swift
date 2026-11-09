@@ -32,7 +32,8 @@ struct TimelineView: View {
             isEnabled: { LocationService.settings.isEnrichmentEnabled($0) },
             isOnline: { EnrichmentScheduling.isOnline }))
         let layout = environment.store.layout
-        _thumbnailer = State(initialValue: Thumbnailer(layoutURL: { layout.packageURL(relativeDirectory: $0) }))
+        _thumbnailer = State(initialValue: Thumbnailer(layoutURL: { layout.packageURL(relativeDirectory: $0) },
+                                                                thumbnailURL: { layout.thumbnailURL(attachmentID: $0) }))
     }
 
     var body: some View {

@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var failed = false
     @State private var busy = false
     @State private var reviewing = false
+    @State private var savingSpace = false
     @State private var locationDenied = false
     /// Local mirror of the stored switches so a toggle moves at once.
     @State private var enrichmentOn: [FacetKind: Bool] = [:]
@@ -70,6 +71,9 @@ struct SettingsView: View {
             }
         }
         .sheet(isPresented: $reviewing) { RemoteReviewSheet(store: store, coordinator: coordinator) }
+        .sheet(isPresented: $savingSpace, onDismiss: { Task { await model.refresh() } }) {
+            SaveSpaceSheet(store: store, registry: registry, coordinator: coordinator)
+        }
         .alert("Something went wrong", isPresented: $failed) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -94,6 +98,9 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier("settings-review")
                 }
+                Button("Save space…") { savingSpace = true }
+                    .disabled(busy)
+                    .accessibilityIdentifier("settings-save-space")
                 Button("Sign out", role: .destructive) { confirmingSignOut = true }
                     .disabled(busy)
                     .confirmationDialog("Sign out of \(destination.displayName)? Captures stay on this iPhone; uploads pause until you sign in again.",

@@ -1,6 +1,8 @@
 import SwiftUI
 import os
 import CaptureCore
+import LocalRepository
+import SyncEngine
 import HippoPresentation
 import Enrichment
 
@@ -29,11 +31,15 @@ struct CaptureDetailView: View {
         self.environment = environment
         self.captureID = captureID
         self.onDeleted = onDeleted
+        let adapterFor: (@Sendable (Destination) throws -> any StorageAdapter)? = environment.registry.map { registry in
+            { @Sendable destination in try registry.adapter(for: destination) }
+        }
         _model = State(initialValue: CaptureDetailModel(
             store: environment.store, captureID: captureID,
             isEnabled: { LocationService.settings.isEnrichmentEnabled($0) },
             isOnline: { EnrichmentScheduling.isOnline },
-            sync: { [coordinator = environment.coordinator] in _ = await coordinator?.syncNow(trigger: "manual") }))
+            sync: { [coordinator = environment.coordinator] in _ = await coordinator?.syncNow(trigger: "manual") },
+            adapterFor: adapterFor))
     }
 
     var body: some View {
@@ -93,11 +99,24 @@ struct CaptureDetailView: View {
             }
     }
 
+    /// Trimmed attachments the large preview isn't already showing.
+    private func otherRemoteOnly(_ detail: CaptureDetail) -> [RemoteOnlyAttachment] {
+        var shown: String?
+        if case .remoteOnly(let first) = detail.preview { shown = first.attachmentID }
+        return detail.remoteOnly.values.filter { $0.attachmentID != shown }.sorted { $0.relativePath < $1.relativePath }
+    }
+
     @ViewBuilder private var content: some View {
         if let detail = model.detail {
             List {
                 if detail.preview != .none {
-                    AttachmentPreview(kind: detail.preview)
+                    AttachmentPreview(kind: detail.preview, model: model)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+                ForEach(otherRemoteOnly(detail), id: \.attachmentID) { attachment in
+                    RemoteOnlyAttachmentView(attachment: attachment, model: model, large: false)
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)

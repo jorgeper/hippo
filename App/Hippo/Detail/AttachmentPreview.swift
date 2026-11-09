@@ -6,6 +6,7 @@ import HippoPresentation
 /// The large preview at the top of the details screen.
 struct AttachmentPreview: View {
     let kind: PreviewKind
+    let model: CaptureDetailModel
     @State private var quickLook: QuickLookItem?
     @Environment(\.openURL) private var openURL
 
@@ -36,6 +37,7 @@ struct AttachmentPreview: View {
             .buttonStyle(.plain)
         case .file(let url, let previewable, let name):
             fileCard(url: url, symbol: "doc", previewable: previewable, name: name)
+        case .remoteOnly(let attachment): RemoteOnlyAttachmentView(attachment: attachment, model: model, large: true)
         case .none: EmptyView()
         }
     }
