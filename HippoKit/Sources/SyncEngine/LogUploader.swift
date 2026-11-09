@@ -113,7 +113,10 @@ public final class LogUploader: Sendable {
             return LogUploadResult(uploaded: 0, code: "no_destination")
         }
         var state = Self.readState(layout)
-        if isConstrained(), let last = state.lastAt, now().timeIntervalSince(last) < constrainedMinInterval {
+        // A `last_at` in the future (clock set back) does not throttle.
+        let current = now()
+        if isConstrained(), let last = state.lastAt, last <= current,
+           current.timeIntervalSince(last) < constrainedMinInterval {
             return LogUploadResult(uploaded: 0, code: "throttled")
         }
         let fm = FileManager.default

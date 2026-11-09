@@ -132,11 +132,12 @@ public final class JobStore: Sendable {
             """, [.text(state.rawValue), .text(errorCode), nextAttemptAt.map { .int(Self.ms($0)) } ?? .null])
     }
 
-    /// The earliest `next_attempt_at` among the destination's `retryable_failure` jobs, or nil if none is waiting.
+    /// The earliest `next_attempt_at` among the destination's `retryable_failure` jobs that are not being cancelled, or nil if none is waiting.
     public func nextAttemptAt(destinationID: String) throws -> Date? {
         try db.query("""
             SELECT MIN(next_attempt_at_ms) AS next_ms FROM jobs
             WHERE destination_id = ? AND state = 'retryable_failure' AND next_attempt_at_ms IS NOT NULL
+              AND cancel_requested = 0
             """, [.text(destinationID)]).first?.date("next_ms")
     }
 

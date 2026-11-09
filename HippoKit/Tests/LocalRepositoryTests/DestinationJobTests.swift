@@ -515,6 +515,11 @@ private struct Stores {
         try set(ids[2], "blocked", 1_800_000_000_000)
         #expect(try s.jobs.nextAttemptAt(destinationID: "dest-a") == Date(timeIntervalSince1970: 1_800_000_100))
         #expect(try s.jobs.nextAttemptAt(destinationID: "other") == nil)
+        // A due job being cancelled is never claimed, so it must not drive the retry timer.
+        let cancelled = try await s.capture("d")
+        try set(cancelled, "retryable_failure", 1_700_000_000_000)
+        try s.jobs.requestCancel(captureID: cancelled)
+        #expect(try s.jobs.nextAttemptAt(destinationID: "dest-a") == Date(timeIntervalSince1970: 1_800_000_100))
         try s.h.db.execute("UPDATE jobs SET state = 'synced' WHERE state = 'retryable_failure'")
         #expect(try s.jobs.nextAttemptAt(destinationID: "dest-a") == nil)
     }

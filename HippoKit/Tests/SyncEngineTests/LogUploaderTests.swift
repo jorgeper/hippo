@@ -176,6 +176,11 @@ private struct Setup {
         let later = s.uploader(isConstrained: { true }, now: { t0.addingTimeInterval(1000) })
         #expect(await later.upload() == LogUploadResult(uploaded: 1, code: nil))
 
+        // A last_at in the future (clock set back) does not throttle.
+        try s.append("2026-11-08.jsonl", "{\"z\":0}\n")
+        let skewed = s.uploader(isConstrained: { true }, now: { t0 })
+        #expect(await skewed.upload() == LogUploadResult(uploaded: 1, code: nil))
+
         // Unconstrained passes are never throttled.
         try s.append("2026-11-08.jsonl", "{\"c\":3}\n")
         let free = s.uploader(isConstrained: { false }, now: { t0.addingTimeInterval(1001) })

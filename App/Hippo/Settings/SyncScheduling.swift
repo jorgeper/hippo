@@ -137,14 +137,23 @@ enum SyncScheduling {
     private static let minRetryDelay: TimeInterval = 5
     private static let maxRetryDelay: TimeInterval = 3600
 
+    /// The due time the last scheduled retry pass was for.
+    @MainActor private static var lastRetryDue: Date?
+
     /// Replaces the pending retry: sleeps until the earliest waiting `retryable_failure` job is due
     /// (clamped to 5 s ... 1 h), then runs a pass. Call on activation and after every pass.
-    @MainActor static func scheduleForegroundRetry(_ environment: AppEnvironment) {
+    /// A due time that is already past and not later than the one a retry was last scheduled for is not
+    /// scheduled again: a pass that did not move it will not next time either, so this stops a 5 s loop.
+    /// Activation (`afterActivation`) or a later due time lifts that.
+    @MainActor static func scheduleForegroundRetry(_ environment: AppEnvironment, afterActivation: Bool = false) {
         retryTask?.cancel()
         retryTask = nil
+        if afterActivation { lastRetryDue = nil }
         guard let coordinator = environment.coordinator else { return }
         retryTask = Task {
             guard let due = await coordinator.nextRetryAt() else { return }
+            if due <= Date(), let last = lastRetryDue, due <= last { return }
+            lastRetryDue = due
             let delay = max(minRetryDelay, min(maxRetryDelay, due.timeIntervalSinceNow))
             guard (try? await Task.sleep(for: .seconds(delay))) != nil else { return }
             // Unstructured, so the `passFinished` that follows rescheduling cannot cancel the pass itself.
@@ -179,7 +188,7 @@ private struct SyncSchedulingModifier: ViewModifier {
                 if let coordinator = environment.coordinator {
                     Task { await SyncScheduling.runPass(coordinator, name: "foreground-sync", trigger: "activation") }
                 }
-                SyncScheduling.scheduleForegroundRetry(environment)
+                SyncScheduling.scheduleForegroundRetry(environment, afterActivation: true)
                 // Picks up anything pending, including captures saved by the Share Extension.
                 Task { await EnrichmentScheduling.run(environment, reason: "foreground") }
             default:
