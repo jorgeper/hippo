@@ -103,7 +103,11 @@ My view, given to Jorge:
   - It's the same machinery as the download window.
   - It's the "remove older captures" half of that question.
 
-Open: confirm that phone storage space is what this is for.
+**Decided (Jorge):** yes, phone storage is the point. Add an option to **keep large files only in Dropbox**.
+- Once a capture's upload is verified, the phone may drop its large attachment bytes, keeping metadata, enrichment and a thumbnail, and download the original on tap.
+- It's a setting.
+- Never before the upload is verified.
+- Open: when a file counts as "large", and whether it is dropped as soon as it's verified or only after an age.
 
 ## Already decided: from v0 §3.1 and the parked follow-ups
 
