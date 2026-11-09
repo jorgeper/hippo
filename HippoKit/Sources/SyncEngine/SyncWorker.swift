@@ -160,14 +160,24 @@ public final class SyncWorker: Sendable {
             throw Failure(state: .blocked, code: "local_package_invalid")
         }
         let files = package.marker.files.filter { $0.relativePath != Self.markerName }
-        let receipted = Set(try jobs.receipts(jobID: job.jobID).map(\.relativePath))
-        // A trimmed file that still needs uploading is gone from this phone too: nothing here can restore it.
-        let fm = FileManager.default
-        if files.contains(where: { !receipted.contains($0.relativePath) && trimmed.contains($0.relativePath)
-            && !fm.fileExists(atPath: package.directoryURL.appendingPathComponent($0.relativePath).path) }) {
-            throw Failure(state: .blocked, code: "trimmed_file_missing")
-        }
+        var receipted = Set(try jobs.receipts(jobID: job.jobID).map(\.relativePath))
         let adapter = try adapterFor(destination)
+        // A trimmed file without a receipt (a downloaded capture, or "Upload again") is only in the destination.
+        // It is receipted from there before anything is uploaded; one gone there too blocks the job.
+        let fm = FileManager.default
+        let remoteOnly = files.filter { !receipted.contains($0.relativePath) && trimmed.contains($0.relativePath)
+            && !fm.fileExists(atPath: package.directoryURL.appendingPathComponent($0.relativePath).path) }
+        if !remoteOnly.isEmpty {
+            let rows = try trims.trimmed(captureID: job.captureID)
+            for entry in remoteOnly {
+                let row = rows.first { $0.relativePath == entry.relativePath }
+                try await receiptRemoteOnly(entry.relativePath,
+                                            expected: FileIntegrity(byteCount: row?.byteCount ?? entry.byteCount,
+                                                                    sha256: row?.sha256 ?? entry.sha256),
+                                            directory: directory, job: job, adapter: adapter)
+                receipted.insert(entry.relativePath)
+            }
+        }
 
         try await adapter.ensureContainer(relativePath: directory)
         // Mirror the local layout: a package without attachments has no content/ folder.
@@ -246,6 +256,30 @@ public final class SyncWorker: Sendable {
             throw Failure(state: .retryableFailure, code: "verify_failed")
         }
         try saveReceipt(path, remote: uploaded, evidence: evidence, job: job)
+    }
+
+    /// Receipts a trimmed file from the destination's copy alone: it must be there with the trimmed size and,
+    /// when the provider reports a SHA-256, that hash; any other provider hash is recorded as the evidence.
+    /// Absent there: `trimmed_file_missing`; different: `remote_conflict` (both blocked).
+    private func receiptRemoteOnly(_ path: String, expected: FileIntegrity, directory: String, job: UploadJob,
+                                   adapter: any StorageAdapter) async throws {
+        try Task.checkCancellation()
+        guard let current = try jobs.job(jobID: job.jobID) else { throw JobError.notFound }
+        if current.cancelRequested { throw Failure(state: .paused, code: "cancelled") }
+        guard try jobs.renewLease(jobID: job.jobID, owner: leaseOwner, now: now(), lease: Self.lease) else {
+            throw JobError.leaseLost
+        }
+        guard let remote = try await adapter.inspectFile(relativePath: directory + "/" + path) else {
+            throw Failure(state: .blocked, code: "trimmed_file_missing")
+        }
+        let hash = remote.providerHash
+        guard remote.byteCount == expected.byteCount, hash?.algorithm != "sha256" || hash?.value == expected.sha256 else {
+            throw Failure(state: .blocked, code: "remote_conflict")
+        }
+        try saveReceipt(path, remote: remote,
+                        evidence: VerificationEvidence(kind: hash?.algorithm ?? "size_only",
+                                                       value: hash?.value ?? String(expected.byteCount)),
+                        job: job)
     }
 
     private func saveReceipt(_ path: String, remote: RemoteFileInfo, evidence: VerificationEvidence,

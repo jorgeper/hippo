@@ -340,6 +340,38 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.path))
     }
 
+    @Test func deleteEverywhereBindsTheActiveDestinationWhenItHasAJob() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        func dest(_ id: String) -> Destination {
+            Destination(id: id, providerKind: "filesystem", accountIdentifier: "acct-\(id)", remoteRoot: "/",
+                        displayName: id, status: .active)
+        }
+        _ = try t.store.destinations.connect(dest("a"))
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        // B becomes active (A is disabled) and gets a job for the same capture.
+        _ = try t.store.destinations.connect(dest("b"))
+        #expect(try t.store.destinations.backfill(destinationID: "b") == 1)
+        #expect(try Set(t.store.jobs.jobs(captureID: id).map(\.destinationID)) == ["a", "b"])
+        #expect(HippoStore.boundDestinationID(jobs: try t.store.jobs.jobs(captureID: id), activeID: "b") == "b")
+
+        _ = try await t.store.deleteEverywhere(captureID: id)
+
+        let due = { (d: String) in
+            try t.store.remoteState.dueTombstones(destinationID: d, accountIdentifier: "acct-\(d)", now: Date(), limit: 10)
+        }
+        #expect(try due("b").map(\.captureID) == [id])
+        #expect(try due("a").isEmpty)
+
+        // Without a job for the active destination, the lowest destination ID is bound.
+        #expect(HippoStore.boundDestinationID(jobs: [], activeID: "b") == nil)
+        let other = try await t.store.capture(t.blobDraft(bytes: 10))
+        _ = try t.store.destinations.connect(dest("c"))
+        #expect(HippoStore.boundDestinationID(jobs: try t.store.jobs.jobs(captureID: other.metadata.captureID),
+                                              activeID: "c") == "b")
+    }
+
     @Test func deleteFromIPhoneRecordsLocalDeleteOnly() async throws {
         let t = try StoreHarness()
         defer { t.cleanup() }

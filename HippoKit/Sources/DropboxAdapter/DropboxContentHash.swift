@@ -6,12 +6,14 @@ import CryptoKit
 public enum DropboxContentHash {
     public static let blockSize = 4 * 1024 * 1024
 
-    /// Streams the file one block at a time; never holds more than one block in memory.
+    /// Streams the file one block at a time; never holds more than one block in memory. Throws
+    /// `CancellationError` between blocks once the calling task is cancelled.
     public static func of(_ url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var overall = SHA256()
         while true {
+            try Task.checkCancellation()
             let block: Data? = try autoreleasepool { try handle.read(upToCount: blockSize) }
             guard let block, !block.isEmpty else { break }
             overall.update(data: Data(SHA256.hash(data: block)))

@@ -288,8 +288,9 @@ public final class RemoteChangeDetector: Sendable {
     // MARK: - Applying
 
     /// Applies the pass. Every database write (receipts, changed records, review items) happens before the
-    /// first removal, and cancellation is honoured only between removals. Returns false when a removal was
-    /// interrupted by cancellation: the cursor must then not be saved.
+    /// first removal, and cancellation is honoured only between removals. A capture whose removal fails is
+    /// queued for review (reason `threshold`) instead. Returns false when a removal was interrupted by
+    /// cancellation: the cursor must then not be saved.
     private func apply(_ pass: Pass, complete: Bool, destination: Destination,
                        report: inout RemoteChangeReport) async throws -> Bool {
         let synced = try jobs.capturesFullySynced(destinationID: destination.id)
@@ -304,6 +305,7 @@ public final class RemoteChangeDetector: Sendable {
             try queueReview(eligible, reason: "threshold", destination: destination, report: &report)
             return true
         }
+        var failed: [String] = []
         for id in eligible {
             if Task.isCancelled { return false }
             do {
@@ -314,8 +316,13 @@ public final class RemoteChangeDetector: Sendable {
             } catch {
                 Self.osLog.error("\("remote_remove_failed", privacy: .public)")
                 report.code = "remove_failed"
+                failed.append(id)
+                log?.append(LogEvent(event: .remoteChanged, captureID: id, code: "remove_failed",
+                                     dest: destination.providerKind))
             }
         }
+        // Still on this phone though gone in the destination: the review sheet shows it, and the cursor moves on.
+        try queueReview(failed, reason: "threshold", destination: destination, report: &report)
         return true
     }
 

@@ -156,7 +156,15 @@ struct RemoteDeleterTests {
         let id = pkg.metadata.captureID
         let deletion = Task { try await store.deleteEverywhere(captureID: id) }
         // Deletion waits for the worker's lease; wait until its cancel request is visible, then let go.
+        let deadline = ContinuousClock.now + .seconds(5)
         while try !store.jobs.jobs(captureID: id).contains(where: \.cancelRequested) {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("the deletion's cancel request never appeared")
+                pausing.release.open()
+                _ = try? await deletion.value
+                _ = await run.value
+                return
+            }
             try await Task.sleep(for: .milliseconds(5))
         }
         pausing.release.open()

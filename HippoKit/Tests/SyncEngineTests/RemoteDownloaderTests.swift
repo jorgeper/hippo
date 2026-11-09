@@ -293,6 +293,72 @@ private struct Phones {
         #expect(try s.b.index.relativeDirectory(captureID: p.metadata.captureID) == p.relativeDirectory)
     }
 
+    /// A downloaded capture whose large attachment stayed remote-only, with its synced job and no receipts.
+    private func downloadedRemoteOnly(_ s: Phones) async throws -> CommittedPackage {
+        let png = try noisyPNG(side: 64)
+        let p = try await s.capture(daysAgo: 10, image: png)
+        await s.uploadFromA()
+        let d = s.downloader(limit: 4096)
+        let e = try await s.estimate(30 * day, d)
+        #expect(await d.run(e.candidates, window: DownloadWindow(seconds: 30 * day), progress: { _, _ in }).downloaded == 1)
+        let local = s.b.layout.packageURL(relativeDirectory: p.relativeDirectory)
+        try #require(!FileManager.default.fileExists(atPath: local.appendingPathComponent(p.metadata.attachments[0].relativePath).path))
+        return p
+    }
+
+    /// "Upload again" as `HippoStore.uploadAgain` does it with no changed record: every non-trimmed path and the
+    /// marker lose their receipts (a download stored none), and the job is requeued.
+    private func uploadAgain(_ s: Phones, _ p: CommittedPackage) throws -> UploadJob {
+        let job = try #require(try s.b.jobs.jobs(captureID: p.metadata.captureID).first)
+        try s.b.jobs.clearReceipts(jobID: job.jobID, paths: ["metadata.json", "complete.json"])
+        try s.b.jobs.requeue(jobID: job.jobID)
+        return job
+    }
+
+    @Test func uploadAgainOfDownloadedCaptureReceiptsTheRemoteOnlyFile() async throws {
+        let s = try Phones(); defer { s.cleanup() }
+        let p = try await downloadedRemoteOnly(s)
+        let attachment = p.metadata.attachments[0]
+        // Its metadata and marker went missing in the destination.
+        let remote = s.a.remote.appendingPathComponent(p.relativeDirectory)
+        try FileManager.default.removeItem(at: remote.appendingPathComponent("metadata.json"))
+        try FileManager.default.removeItem(at: remote.appendingPathComponent("complete.json"))
+        let job = try uploadAgain(s, p)
+
+        let result = await s.b.worker(s.bAdapter).runOnce()
+
+        #expect(result == SyncPassResult(synced: 1, failed: 0, idle: false))
+        let after = try #require(try s.b.jobs.job(jobID: job.jobID))
+        #expect(after.state == .synced && after.lastErrorCode == nil)
+        let uploads = s.b.faults.operations.filter { $0.hasPrefix("upload ") }
+        #expect(uploads == ["upload \(p.metadataPath)", "upload \(p.markerPath)"])
+        #expect(FileManager.default.fileExists(atPath: remote.appendingPathComponent("complete.json").path))
+        // The remote-only file was checked where it is and receipted with the destination's own evidence.
+        let receipt = try #require(try s.b.jobs.receipts(jobID: job.jobID).first { $0.relativePath == attachment.relativePath })
+        #expect(receipt.byteCount == attachment.byteCount)
+        #expect(receipt.evidenceKind == "sha256" && receipt.evidenceValue == attachment.sha256)
+    }
+
+    @Test func uploadAgainOfDownloadedCaptureBlocksWhenTheRemoteOnlyFileIsGoneOrDifferent() async throws {
+        let s = try Phones(); defer { s.cleanup() }
+        let p = try await downloadedRemoteOnly(s)
+        let attachment = p.metadata.attachments[0]
+        let remoteFile = s.a.remote.appendingPathComponent(p.relativeDirectory).appendingPathComponent(attachment.relativePath)
+
+        try Data("other bytes".utf8).write(to: remoteFile)
+        var job = try uploadAgain(s, p)
+        #expect(await s.b.worker(s.bAdapter).runOnce().failed == 1)
+        job = try #require(try s.b.jobs.job(jobID: job.jobID))
+        #expect(job.state == .blocked && job.lastErrorCode == "remote_conflict")
+
+        try FileManager.default.removeItem(at: remoteFile)
+        job = try uploadAgain(s, p)
+        #expect(await s.b.worker(s.bAdapter).runOnce().failed == 1)
+        job = try #require(try s.b.jobs.job(jobID: job.jobID))
+        #expect(job.state == .blocked && job.lastErrorCode == "trimmed_file_missing")
+        #expect(!s.b.faults.operations.contains { $0.hasPrefix("upload ") })
+    }
+
     @Test func failedTrimRecordUndoesTheCapture() async throws {
         let s = try Phones(); defer { s.cleanup() }
         let p = try await s.capture(daysAgo: 10, image: try noisyPNG(side: 64))

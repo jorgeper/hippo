@@ -124,6 +124,10 @@ public struct DropboxAdapter: StorageAdapter {
     private func trimmed(_ prefix: String) -> String { prefix.hasSuffix("/") ? String(prefix.dropLast()) : prefix }
 
     private func isNotFound(_ e: DropboxCallError) -> Bool { e.status == 409 && e.tags.last == "not_found" }
+    /// `path/not_found` or `path_lookup/not_found`: on `list_folder/continue`, the listed folder is gone.
+    private func isListedRootGone(_ e: DropboxCallError) -> Bool {
+        e.status == 409 && (e.tags.first == "path" || e.tags.first == "path_lookup") && e.tags.last == "not_found"
+    }
     private func isPathConflict(_ e: DropboxCallError) -> Bool { e.status == 409 && e.tags.starts(with: ["path", "conflict"]) }
 
     private func isHidden(_ rel: String) -> Bool { rel.split(separator: "/").contains { $0.hasPrefix(".") } }
@@ -335,7 +339,10 @@ public struct DropboxAdapter: StorageAdapter {
                           emptyIfMissing: Bool = false) async throws -> ListResult? {
         if let cursor {
             do { return try decode(ListResult.self, try await client.rpc("files/list_folder/continue", CursorArg(cursor: cursor))) }
-            catch let e as DropboxCallError where e.tags.contains("reset") || e.status == 400 { throw StorageError.cursorReset }
+            catch let e as DropboxCallError where e.tags.contains("reset") || e.status == 400 || isListedRootGone(e) {
+                // The listed folder itself was deleted (say, all of `captures/`): the caller re-baselines.
+                throw StorageError.cursorReset
+            }
         }
         let arg = ListArg(path: path, recursive: recursive)
         do { return try decode(ListResult.self, try await client.rpc("files/list_folder", arg)) }

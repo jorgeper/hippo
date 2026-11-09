@@ -752,5 +752,22 @@ extension RunnerHarness {
         // The terminal row means the capture is no longer listed, so no pass is left to schedule it.
         #expect(try h.store.enrichmentTasks.capturesNeeding(kind: .textRecognition, version: 1, limit: 10).isEmpty)
         #expect(try await runner.schedule() == 0)
+
+        // A newer version of the kind: the existing row moves to it in place, keeping its status, so the
+        // capture isn't listed again every pass.
+        try h.store.enrichmentTasks.set(captureID: id, kind: .textRecognition, version: 1, status: "ok", now: t0)
+        let newer = h.runner([FakeEnricher(kind: .textRecognition, version: 2, readsAttachmentBytes: true), other])
+        #expect(try await newer.schedule() == 0)
+        #expect(try h.task(id, .textRecognition)?.status == "ok")
+        #expect(try h.task(id, .textRecognition)?.version == 2)
+        #expect(try h.store.enrichmentTasks.capturesNeeding(kind: .textRecognition, version: 2, limit: 10).isEmpty)
+
+        // A pending row stays pending, at the new version.
+        try h.store.enrichmentTasks.set(captureID: id, kind: .textRecognition, version: 2, status: "pending", now: t0)
+        #expect(try await h.runner([FakeEnricher(kind: .textRecognition, version: 3, readsAttachmentBytes: true), other])
+            .schedule() == 0)
+        #expect(try h.task(id, .textRecognition)?.status == "pending")
+        #expect(try h.task(id, .textRecognition)?.version == 3)
+        #expect(try h.store.enrichmentTasks.capturesNeeding(kind: .textRecognition, version: 3, limit: 10).isEmpty)
     }
 }

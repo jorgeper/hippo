@@ -25,7 +25,8 @@ private struct Harness {
 
     init(faults: FaultPlan = FaultPlan(), adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil,
          permission: @escaping () async -> Bool = { true }, online: Bool = true,
-         onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) throws {
+         onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in },
+         random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) throws {
         t = try TestStore()
         remote = t.base.appendingPathComponent("Remote", isDirectory: true)
         provider = FakeStorageProvider(root: remote, faults: faults, adapter: adapter)
@@ -35,7 +36,7 @@ private struct Harness {
         suite = "hippo-settings-\(UUID().uuidString)"
         settings = AppSettings(defaults: UserDefaults(suiteName: suite)!)
         coordinator = SyncCoordinator(store: t.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0",
-                                      settings: settings)
+                                      settings: settings, random: random)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
                               requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled,
                               isOnline: { online }, now: { Date(timeIntervalSince1970: 1_800_000_000) }, locale: Locale(identifier: "en_US"))
@@ -637,7 +638,8 @@ struct SettingsTests {
 
     @Test func coordinatorExposesNextRetry() async throws {
         let faults = FaultPlan()
-        let h = try Harness(faults: faults)
+        // Full jitter: the retry delay is the policy's whole first-attempt ceiling, never a near-zero draw.
+        let h = try Harness(faults: faults, random: { 1 })
         defer { h.cleanup() }
         #expect(await h.coordinator.nextRetryAt() == nil)
         let p = try await h.t.note("offline", at: start)
@@ -647,7 +649,7 @@ struct SettingsTests {
         _ = await h.coordinator.syncNow()
         #expect(try h.states(p) == [.retryableFailure])
         let next = try #require(await h.coordinator.nextRetryAt())
-        #expect(next > Date())
+        #expect(next > Date().addingTimeInterval(RetryPolicy().base / 2))
     }
 
     @Test func uploadExistingCopiesToNewDestination() async throws {

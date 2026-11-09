@@ -27,6 +27,17 @@ private func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
         #expect(try DropboxContentHash.of(url) == DropboxContentHash.of(data))
     }
 
+    @Test func fileHashStopsWhenCancelled() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("hash-\(UUID().uuidString).bin")
+        try Data(count: 2 * DropboxContentHash.blockSize).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try DropboxContentHash.of(url)
+        }
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
     @Test func emptyFileHashIsSHA256OfNothing() throws {
         #expect(DropboxContentHash.of(Data()) == hex(SHA256.hash(data: Data())))
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("hash-\(UUID().uuidString).bin")

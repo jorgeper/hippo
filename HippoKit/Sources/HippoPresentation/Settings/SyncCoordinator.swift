@@ -47,12 +47,14 @@ public actor SyncCoordinator {
     /// True while a pass is running or a follow-up is waiting.
     public var isBusy: Bool { running != nil || pending != nil }
 
+    /// `random` draws the upload retry jitter (0...1); tests pass a constant.
     public init(store: HippoStore, registry: ProviderRegistry, ownerPrefix: String, appVersion: String,
-                settings: AppSettings, isConstrained: @escaping @Sendable () -> Bool = { false }) {
+                settings: AppSettings, isConstrained: @escaping @Sendable () -> Bool = { false },
+                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) {
         self.store = store
         self.settings = settings
         self.appVersion = appVersion
-        worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix)
+        worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix, random: random)
         deleter = store.makeRemoteDeleter(adapterFor: { try registry.adapter(for: $0) })
         uploader = store.makeEnrichmentUploader(adapterFor: { try registry.adapter(for: $0) })
         puller = store.makeGoldPuller(adapterFor: { try registry.adapter(for: $0) })

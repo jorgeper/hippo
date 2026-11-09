@@ -131,11 +131,15 @@ public actor EnrichmentRunner {
                                     nextAttemptAt: nil, incrementAttempts: true, now: t)
             return false
         }
-        // The local originals are gone, so a kind that reads their bytes can't run; its row stays as it is.
-        // A capture with no row for the kind gets a terminal one, so it isn't listed again every pass; the
-        // restorer clears it after a download.
+        // The local originals are gone, so a kind that reads their bytes can't run; its row keeps its status.
+        // A capture with no row for the kind gets a terminal one, and a row at another version moves to this
+        // one in place, so it isn't listed again every pass; the restorer clears it after a download.
         if e.readsAttachmentBytes, !(try trimmedPaths(id)).isEmpty {
-            if try tasks.task(captureID: id, kind: e.kind) == nil {
+            if let existing = try tasks.task(captureID: id, kind: e.kind) {
+                if existing.version != e.version {
+                    try tasks.set(captureID: id, kind: e.kind, version: e.version, status: existing.status, now: t)
+                }
+            } else {
                 try tasks.set(captureID: id, kind: e.kind, version: e.version, status: "not_applicable", now: t)
             }
             return false

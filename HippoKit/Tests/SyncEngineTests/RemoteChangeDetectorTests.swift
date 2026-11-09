@@ -313,6 +313,33 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(s.cursor == "after")
     }
 
+    @Test func failedRemovalGoesToReviewAndTheCursorIsSaved() async throws {
+        struct DiskFull: Error {}
+        let s = try await Setup(captures: 30); defer { s.h.cleanup() }
+        await s.baseline()
+        let start = try #require(s.cursor)
+        let deletions = (0..<2).map { RemoteChange.deleted(relativePath: s.pkgs[$0].relativeDirectory) }
+        let adapter = HookedAdapter(inner: s.h.adapter, changes: { _, cursor in
+            ChangePage(changes: cursor == start ? deletions : [], cursor: "after", hasMore: false)
+        })
+        let failing = s.id(0), store = s.store
+        let detector = s.detector(adapter, removeLocally: { id in
+            if id == failing { throw DiskFull() }
+            try await store.removeAfterRemoteDelete(captureID: id)
+        })
+
+        let r = await detector.run()
+
+        #expect(r == RemoteChangeReport(removed: 1, reviewQueued: 1, code: "remove_failed"))
+        #expect(s.isIndexed(0) && !s.isIndexed(1))
+        // The capture it couldn't remove is still shown to the person, as a review item.
+        let items = try s.reviewItems()
+        #expect(items.map(\.captureID) == [failing])
+        #expect(items.map(\.reason) == ["threshold"])
+        #expect(s.events(0, .remoteChanged).map(\.code) == ["remove_failed"])
+        #expect(s.cursor == "after")
+    }
+
     @Test func thresholdQueuesReviewInsteadOfDeleting() async throws {
         let s = try await Setup(captures: 25); defer { s.h.cleanup() }
         await s.baseline()

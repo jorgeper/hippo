@@ -149,11 +149,13 @@ public final class HippoStore: Sendable {
 
     /// A sync worker over this store's database and files, with the default retry policy and clock.
     /// `owner` is a prefix (e.g. "app"); the worker's `leaseOwner` makes it unique per worker.
+    /// `random` draws the retry jitter (0...1).
     public func makeWorker(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
-                           owner: String) -> SyncWorker {
+                           owner: String,
+                           random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) -> SyncWorker {
         SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index, trims: trims,
                    remoteState: remoteState, adapterFor: adapterFor,
-                   owner: owner, log: log)
+                   owner: owner, random: random, log: log)
     }
 
     /// Uploads silver enrichment to the active destination after packages have synced, with the default
@@ -232,8 +234,8 @@ public final class HippoStore: Sendable {
 
     /// "Delete everywhere": the same local removal as `delete`, plus a durable tombstone that the next sync
     /// pass applies in the destination (`RemoteDeleter`). The tombstone is written, bound to the capture's
-    /// destination and that destination's account, just before the index row goes. A capture with no job
-    /// has nothing remote to delete and behaves exactly like `delete`.
+    /// destination (`boundDestinationID`) and that destination's account, just before the index row goes.
+    /// A capture with no job has nothing remote to delete and behaves exactly like `delete`.
     public func deleteEverywhere(captureID: String) async throws -> DeletionResult {
         try await remove(captureID: captureID, mode: .everywhere)
     }
@@ -246,13 +248,21 @@ public final class HippoStore: Sendable {
 
     private enum RemovalMode { case iPhoneOnly, everywhere, remote }
 
+    /// The destination a capture's "Delete everywhere" (and its prompts) speaks for: the active destination when
+    /// the capture has a job for it, otherwise the lowest destination ID among its jobs; nil without jobs.
+    public static func boundDestinationID(jobs: [UploadJob], activeID: String?) -> String? {
+        if let activeID, jobs.contains(where: { $0.destinationID == activeID }) { return activeID }
+        return jobs.map(\.destinationID).min()
+    }
+
     private func remove(captureID: String, mode: RemovalMode) async throws -> DeletionResult {
         guard let directory = try index.relativeDirectory(captureID: captureID) else {
             return DeletionResult(wasSynced: false, hadActiveUpload: false)
         }
         let existing = try jobs.jobs(captureID: captureID)
         let wasSynced = !existing.isEmpty && existing.allSatisfy { $0.state == .synced }
-        let bound = try existing.map(\.destinationID).min().flatMap { try destinations.destination(id: $0) }
+        let boundID = Self.boundDestinationID(jobs: existing, activeID: try destinations.active()?.id)
+        let bound = try boundID.flatMap { try destinations.destination(id: $0) }
         let thumbnailIDs = (try? trims.trimmed(captureID: captureID).map(\.attachmentID)) ?? []
 
         // After this no worker can claim the capture's jobs, so only a lease already held can be active.

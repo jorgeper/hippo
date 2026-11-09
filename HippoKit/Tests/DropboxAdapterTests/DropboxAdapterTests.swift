@@ -330,6 +330,20 @@ private final class Saved: @unchecked Sendable {
         await #expect(throws: StorageError.cursorReset) { _ = try await h.adapter.listChanges(under: "captures/", cursor: "C1") }
     }
 
+    @Test func continuingOnADeletedListedRootIsACursorReset() async throws {
+        // The whole `captures/` folder was deleted: the detector must re-baseline (and queue review), not fail.
+        let h = Harness(root: "r")
+        h.on("files/list_folder/continue", h.apiError(notFound))
+        await #expect(throws: StorageError.cursorReset) { _ = try await h.adapter.listChanges(under: "captures/", cursor: "C1") }
+        h.on("files/list_folder/continue", h.apiError([".tag": "path_lookup", "path_lookup": [".tag": "not_found"]]))
+        await #expect(throws: StorageError.cursorReset) { _ = try await h.adapter.listChanges(under: "captures/", cursor: "C1") }
+        // Any other not-found stays what it was.
+        h.on("files/list_folder/continue", h.apiError([".tag": "other", "other": [".tag": "not_found"]]))
+        await #expect(throws: StorageError.permanent(code: "api:other.not_found")) {
+            _ = try await h.adapter.listChanges(under: "captures/", cursor: "C1")
+        }
+    }
+
     @Test func listChangesCreatesAMissingFolderAndRetriesOnce() async throws {
         let h = Harness()
         h.on("files/list_folder", h.apiError(notFound))

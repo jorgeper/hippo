@@ -95,9 +95,12 @@ public final class CaptureDetailModel {
                 let goldArrivedAt = (try? store.enrichments.document(.server, captureID: id))?.generatedAt
                 let changed = (try? store.remoteState.changed(captureID: id)) ?? nil
                 let trimmedPaths = (try? store.trims.trimmedPaths(captureID: id)) ?? []
-                // The destination the storage line speaks for: the changed record's, else the lowest job
-                // destination ID (as `deleteEverywhere` binds) -- never merely the active one.
-                let storageID = changed?.destinationID ?? jobs.map(\.destinationID).min()
+                // The destination `deleteEverywhere` binds to: the active one when this capture has a job for it,
+                // else the lowest job destination ID -- never an active one the capture has no job for.
+                let boundID = HippoStore.boundDestinationID(jobs: jobs, activeID: active?.id)
+                let boundName = boundID.flatMap { names[$0] ?? nil }?.displayName
+                // The destination the storage line speaks for: the changed record's, else the bound one.
+                let storageID = changed?.destinationID ?? boundID
                 let storageName = storageID.flatMap { names[$0] ?? nil }?.displayName
                 let detail = CaptureDetail.make(metadata: metadata, packageURL: url, noteBody: package.noteBody(),
                                                 jobs: jobs, enrichment: enrichment, tasks: tasks,
@@ -110,9 +113,7 @@ public final class CaptureDetailModel {
                                                 activeDestination: active, accountName: { accountNames[$0] }, isEnabled: isEnabled,
                                                 isOnline: isOnline(), goldArrivedAt: goldArrivedAt, destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
-                let prompt = DeletionPrompt.make(jobs: jobs, destinationName: jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName)
-                // The destination `deleteEverywhere` binds to: the job with the lowest destination ID.
-                let boundName = jobs.map(\.destinationID).min().flatMap { names[$0] ?? nil }?.displayName
+                let prompt = DeletionPrompt.make(jobs: jobs, destinationName: boundName)
                 let everywhere = boundName.map { DeletionPrompt.everywhere(destinationName: $0) }
                 return Loaded(detail: detail, prompt: prompt, everywherePrompt: everywhere, capturedAt: metadata.capturedAt,
                               accountNames: trimmed.reduce(into: [:]) { $0[$1.attachmentID] = accountNames[$1.destinationID] })

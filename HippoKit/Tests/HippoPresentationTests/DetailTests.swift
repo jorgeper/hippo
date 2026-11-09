@@ -480,6 +480,34 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(await model.detail?.storage?.text == "In Alpha · verified")
     }
 
+    @Test func promptsAndStorageLineNameTheActiveDestinationWhenItHasAJob() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        func dest(_ id: String, _ name: String) -> Destination {
+            Destination(id: id, providerKind: "dropbox", accountIdentifier: id, remoteRoot: "/", displayName: name,
+                        status: .active)
+        }
+        _ = try t.store.destinations.connect(dest("dest-a", "Alpha"))
+        let p = try await t.note("bound to both", at: now)
+        let id = p.metadata.captureID
+        func syncAll() throws {
+            while let j = try t.store.jobs.claimNext(owner: "o", now: Date(), lease: 60) {
+                try t.store.jobs.markSynced(jobID: j.jobID, owner: "o")
+            }
+        }
+        try syncAll()
+        _ = try t.store.destinations.connect(dest("dest-b", "Beta"))
+        _ = try t.store.destinations.backfill(destinationID: "dest-b")
+        try syncAll()
+        #expect(try t.store.jobs.jobs(captureID: id).count == 2)
+
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale)
+        await model.load()
+        #expect(await model.everywherePrompt == DeletionPrompt.everywhere(destinationName: "Beta"))
+        #expect(await model.detail?.storage?.text == "In Beta · verified")
+        #expect(await model.deletionPrompt?.message == "This removes the capture from this iPhone. The copy in Beta stays.")
+    }
+
     @Test func uploadAgainRequeuesAndSyncs() async throws {
         let t = try TestStore()
         defer { t.cleanup() }
