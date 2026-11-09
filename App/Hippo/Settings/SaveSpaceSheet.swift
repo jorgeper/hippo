@@ -63,29 +63,11 @@ struct SaveSpaceSheet: View {
 
     private func start() {
         guard runTask == nil else { return }
-        let coordinator = coordinator
-        // `runTask` is assigned before any expiry can fire; the box lets the expiry handler reach it.
-        let box = TaskBox()
-        let task = Task {
-            await BackgroundActivity.run(name: "save-space", onExpire: {
-                box.task?.cancel()
-                coordinator.map(SyncScheduling.stopper)?()
-            }) {
-                await model.run()
-            }
+        runTask = TaskBox.runInBackground(name: "save-space", coordinator: coordinator, finished: {
             runTask = nil
             NotificationCenter.default.post(name: SyncCoordinator.passFinished, object: nil)
+        }) {
+            await model.run()
         }
-        box.task = task
-        runTask = task
-    }
-}
-
-private final class TaskBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stored: Task<Void, Never>?
-    var task: Task<Void, Never>? {
-        get { lock.lock(); defer { lock.unlock() }; return stored }
-        set { lock.lock(); stored = newValue; lock.unlock() }
     }
 }

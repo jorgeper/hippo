@@ -12,6 +12,8 @@ public final class DownloadModel {
     public var includeLocallyDeleted = false
     public private(set) var estimate: DownloadEstimate?
     public private(set) var estimating = false
+    /// The window `estimate` was computed for; `run` uses this, not the live `window`.
+    public private(set) var estimateWindow: DownloadWindow?
     public private(set) var estimateFailed = false
     /// "Downloading <done> of <total>…" while running.
     public private(set) var progress: (done: Int, total: Int)?
@@ -22,6 +24,7 @@ public final class DownloadModel {
     @ObservationIgnored private let store: HippoStore
     @ObservationIgnored private let adapterFor: @Sendable (Destination) throws -> any StorageAdapter
     @ObservationIgnored private let isOnline: @Sendable () -> Bool
+    @ObservationIgnored private var generation = 0
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "download")
 
     public init(store: HippoStore, adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
@@ -44,7 +47,16 @@ public final class DownloadModel {
         }
     }
 
-    public static func resultText(_ r: DownloadResult) -> String {
+    /// A failure line when nothing downloaded and a code says why; otherwise the count, plus failures.
+    public static func resultText(_ r: DownloadResult, destinationName name: String = "") -> String {
+        if r.downloaded == 0, let code = r.code {
+            switch code {
+            case "cancelled": return "Download stopped"
+            case "offline": return "Connect to the internet to download"
+            case "needs_authentication", "unavailable", "no_destination": return "Connect \(name) to download"
+            default: return "Couldn't download from \(name)"
+            }
+        }
         var text = "Downloaded \(r.downloaded) \(r.downloaded == 1 ? "capture" : "captures")"
         if r.failed > 0 { text += " · \(r.failed) couldn't be downloaded" }
         return text
@@ -61,12 +73,14 @@ public final class DownloadModel {
         return "Skipping \(n) you removed from this iPhone"
     }
 
-    public var canRun: Bool { (estimate?.count ?? 0) > 0 && isOnline() && !isRunning }
-    public var resultText: String? { result.map(Self.resultText) }
+    public var canRun: Bool { (estimate?.count ?? 0) > 0 && !estimating && isOnline() && !isRunning }
+    public var resultText: String? { result.map { Self.resultText($0, destinationName: destinationName) } }
 
     /// Re-reads what the current window would bring in.
     public func refreshEstimate() async {
         let store = store, adapterFor = adapterFor, window = window, include = includeLocallyDeleted
+        generation += 1
+        let mine = generation
         estimating = true
         estimateFailed = false
         let loaded: (DownloadEstimate, String)? = await Task.detached {
@@ -80,15 +94,17 @@ public final class DownloadModel {
                 return nil
             }
         }.value
-        // A newer refresh owns the flags when the inputs changed meanwhile.
-        guard window == self.window, include == includeLocallyDeleted else { return }
+        // A newer refresh owns the state; an older result never lands after it.
+        guard mine == generation else { return }
         estimating = false
         guard let loaded else {
             estimateFailed = true
             estimate = nil
+            estimateWindow = nil
             return
         }
         estimate = loaded.0
+        estimateWindow = window
         destinationName = loaded.1
     }
 
@@ -98,7 +114,7 @@ public final class DownloadModel {
         isRunning = true
         result = nil
         progress = (0, candidates.count)
-        let downloader = store.makeDownloader(adapterFor: adapterFor), window = window
+        let downloader = store.makeDownloader(adapterFor: adapterFor), window = estimateWindow ?? window
         let task = Task.detached {
             await downloader.run(candidates, window: window, progress: { done, total in
                 Task { @MainActor [weak self] in
@@ -111,6 +127,7 @@ public final class DownloadModel {
         let outcome = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         isRunning = false
         progress = nil
+        if let name = try? store.destinations.active()?.displayName { destinationName = name }
         result = outcome
         NotificationCenter.default.post(name: SyncCoordinator.passFinished, object: nil)
         await refreshEstimate()

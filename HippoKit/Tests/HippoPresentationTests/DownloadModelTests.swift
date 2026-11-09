@@ -26,6 +26,67 @@ private final class Posts: @unchecked Sendable {
     var total: Int { counter.total }
 }
 
+/// What a `HookedAdapter` does: fail every download offline, and/or hold the next folder listing.
+private final class Hooks: Sendable {
+    let failDownloads: Bool
+    private let holdNext = Mutex(false)
+    private let (startedStream, startedSignal) = AsyncStream<Void>.makeStream()
+    private let (releaseStream, releaseSignal) = AsyncStream<Void>.makeStream()
+
+    init(failDownloads: Bool = false) { self.failDownloads = failDownloads }
+
+    func holdNextListing() { holdNext.withLock { $0 = true } }
+    func started() async { for await _ in startedStream { return } }
+    func release() { releaseSignal.finish() }
+
+    func beforeListing() async {
+        guard holdNext.withLock({ let was = $0; $0 = false; return was }) else { return }
+        startedSignal.yield()
+        for await _ in releaseStream {}
+    }
+}
+
+private final class HookedAdapter: StorageAdapter {
+    private let base: any StorageAdapter
+    private let hooks: Hooks
+    init(_ base: any StorageAdapter, _ hooks: Hooks) { self.base = base; self.hooks = hooks }
+
+    var capabilities: StorageCapabilities { base.capabilities }
+    func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
+        try await base.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
+    }
+    func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
+        try await base.listChanges(under: prefix, cursor: cursor)
+    }
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
+                      progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {
+        if hooks.failDownloads { throw StorageError.offline }
+        return try await base.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes, progress: progress)
+    }
+    func deleteFolder(relativePath: String) async throws { try await base.deleteFolder(relativePath: relativePath) }
+    func latestCursor(under prefix: String) async throws -> String { try await base.latestCursor(under: prefix) }
+    func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
+        await hooks.beforeListing()
+        return try await base.listFolder(relativePath: relativePath, recursive: recursive, cursor: cursor)
+    }
+    func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data? {
+        try await base.thumbnail(relativePath: relativePath, maxPixelSize: maxPixelSize)
+    }
+    func validateDestination() async throws { try await base.validateDestination() }
+    func ensureContainer(relativePath: String) async throws { try await base.ensureContainer(relativePath: relativePath) }
+    func inspectFile(relativePath: String) async throws -> RemoteFileInfo? {
+        try await base.inspectFile(relativePath: relativePath)
+    }
+    func verify(remote: RemoteFileInfo, localURL: URL, expected: FileIntegrity) async throws -> VerificationEvidence? {
+        try await base.verify(remote: remote, localURL: localURL, expected: expected)
+    }
+    func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
+                    saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt {
+        try await base.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
+                                  checkpoint: checkpoint, saveCheckpoint: saveCheckpoint)
+    }
+}
+
 /// Two phones sharing one destination folder: A uploads two captures; this phone (B) uploaded one of its own
 /// and then removed it, so the folder holds three and B holds none.
 @MainActor
@@ -72,9 +133,12 @@ private struct Harness {
         b.cleanup()
     }
 
-    func model(online: Bool = true) -> DownloadModel {
+    func model(online: Bool = true, hooks: Hooks? = nil) -> DownloadModel {
         let provider = providerB
-        return DownloadModel(store: b.store, adapterFor: { try provider.makeAdapter(for: $0) }, isOnline: { online })
+        return DownloadModel(store: b.store, adapterFor: {
+            let base = try provider.makeAdapter(for: $0)
+            return hooks.map { HookedAdapter(base, $0) } ?? base
+        }, isOnline: { online })
     }
 }
 
@@ -139,7 +203,7 @@ struct DownloadModelTests {
         #expect(m.progress == nil)
         #expect(try h.b.store.index.count() == 2)
         for id in h.aIDs { #expect(try h.b.store.index.relativeDirectory(captureID: id) != nil) }
-        #expect(posts.total == 1)
+        #expect(posts.total >= 1)  // other tests post the same name in parallel
         #expect(m.estimate?.count == 0)
         #expect(!m.canRun)
     }
@@ -157,5 +221,68 @@ struct DownloadModelTests {
         await m.refreshEstimate()
         #expect(m.estimate?.count == 2)
         #expect(!m.canRun)
+    }
+
+    @Test func failureLines() {
+        func text(_ code: String) -> String {
+            DownloadModel.resultText(DownloadResult(downloaded: 0, skipped: 0, failed: 0, code: code), destinationName: "Dropbox")
+        }
+        #expect(text("cancelled") == "Download stopped")
+        #expect(text("offline") == "Connect to the internet to download")
+        for code in ["needs_authentication", "unavailable", "no_destination"] { #expect(text(code) == "Connect Dropbox to download") }
+        #expect(text("invalid_package") == "Couldn't download from Dropbox")
+        #expect(DownloadModel.resultText(DownloadResult(downloaded: 1, skipped: 0, failed: 1, code: "offline"), destinationName: "Dropbox")
+                == "Downloaded 1 capture · 1 couldn't be downloaded")
+    }
+
+    @Test func offlineFailureShowsConnectLine() async throws {
+        let h = try await Harness()
+        defer { h.cleanup() }
+        let m = h.model(hooks: Hooks(failDownloads: true))
+        await m.refreshEstimate()
+        await m.run()
+        #expect(m.result?.downloaded == 0)
+        #expect(m.result?.code == "offline")
+        #expect(m.resultText == "Connect to the internet to download")
+        #expect(try h.b.store.index.count() == 0)
+    }
+
+    @Test func cancelledRunShowsStopped() async throws {
+        let h = try await Harness()
+        defer { h.cleanup() }
+        let m = h.model()
+        await m.refreshEstimate()
+        let task = Task { await m.run() }
+        task.cancel()
+        await task.value
+        #expect(m.result?.downloaded == 0)
+        #expect(m.resultText == "Download stopped")
+    }
+
+    @Test func staleEstimateIsDroppedAndBlocksRun() async throws {
+        let h = try await Harness()
+        defer { h.cleanup() }
+        let hooks = Hooks()
+        let m = h.model(hooks: hooks)
+        await m.refreshEstimate()
+        #expect(m.canRun)
+        #expect(m.estimateWindow == .default)
+
+        hooks.holdNextListing()
+        let first = Task { await m.refreshEstimate() }
+        await hooks.started()
+        #expect(m.estimating)
+        #expect(!m.canRun)
+
+        let twoWeeks = DownloadWindow(seconds: 14 * 86_400)
+        m.window = twoWeeks
+        await m.refreshEstimate()
+        #expect(m.estimateWindow == twoWeeks)
+        #expect(!m.estimating)
+
+        hooks.release()
+        await first.value
+        #expect(m.estimateWindow == twoWeeks)
+        #expect(!m.estimating)
     }
 }
