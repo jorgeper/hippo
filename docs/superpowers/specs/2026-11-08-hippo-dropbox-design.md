@@ -1,6 +1,6 @@
 # Hippo Plan 3 design: Dropbox
 
-Date: 2026-11-08. Branch: `feat/dropbox`. Brainstorm notes, with Jorge's own words and how each decision was reached: `2026-11-08-hippo-dropbox-brainstorm.md`.
+Date: 2026-11-08. Branch: `feat/dropbox`. **Status: approved by Jorge on 2026-11-08 ("follow your recommendations … start building"), including the builder-check rulings in §4.4, §4.3 and §4.5.** Brainstorm notes, with Jorge's own words and how each decision was reached: `2026-11-08-hippo-dropbox-brainstorm.md`.
 
 This builds on, and doesn't repeat:
 - `2026-11-07-hippo-v0-design.md` §3.1: the Dropbox adapter requirements. They stand except where §3 below changes them.
@@ -167,7 +167,9 @@ Everything else in v0 §3.1 stands:
   - **From the last:** 2 weeks, 1 month (the default), 3 months, 6 months, 1 year, everything. My call on the steps.
   - An estimate after a listing pass: "About 120 captures, 340 MB".
   - A "Download" button.
-- **Which captures:** complete remote captures in the window that aren't on the phone, and aren't pending remote deletes.
+- **Which captures:** complete remote captures in the window that aren't on the phone, aren't pending remote deletes, and **weren't removed with "Delete from iPhone" on this phone** (Jorge decided, following my recommendation).
+  - The sheet says "Skipping 12 you removed from this iPhone" and has an "Include them" switch, off by default.
+  - A new install has no such records, so a new phone gets everything in the window.
   - For each one Hippo downloads `metadata.json`, `complete.json` and every attachment **at or under 10 MB**. My call; it's the Save space default size.
   - It also downloads the capture's `enrichments/device/` and `enrichments/server/` documents, if present.
   - Larger attachments arrive as **in Dropbox only**, with a thumbnail from the adapter's thumbnail operation if it has one, else a type icon. They download on tap, as in §4.4.
@@ -219,6 +221,10 @@ These are added to `StorageAdapter`. Dropbox specifics stay inside the Dropbox a
 - They're processed by the sync worker before uploads.
 - They're bound to an account like jobs, so a tombstone never runs against another account.
 - Download from Dropbox skips any capture with a pending tombstone.
+- **Local-delete records:** "Delete from iPhone" writes a durable row (capture ID, relative directory, account ID, deleted-at) with no remote effect.
+  - Download from Dropbox excludes these captures unless "Include them" is on. Including one that is then downloaded removes its record.
+  - The records never lapse on their own (my call). They're local to this install, so a reinstall or new phone starts with none.
+  - "Delete everywhere" writes a tombstone instead.
 
 ### 6.3 Trimmed attachments
 - Trimmed state lives in the index (or a sidecar in the store), **never inside the package**: packages stay immutable, and the package format says nothing mutable goes in them.
@@ -285,6 +291,7 @@ Still parked: the timeline time-zone filter, recording-orphan recovery UI, and t
 - Trimmed-state survival across Reconciler runs.
 - Download validation: a bad hash means the capture is skipped, never half-indexed.
 - Downloaded captures are never re-uploaded.
+- Captures removed with "Delete from iPhone" are skipped by Download unless "Include them" is on.
 - No tokens or emails in log files: extend `noEventCarriesContent`.
 - The cellular log throttle.
 
@@ -297,6 +304,7 @@ Still parked: the timeline time-zone filter, recording-orphan recovery UI, and t
 - D6. Edit or delete one attachment on the Mac. Detail shows "Changed in Dropbox", and "Upload again" restores the missing file.
 - D7. Save space with 1 month and 10 MB. The estimate matches, the videos show thumbnails and "Download", and tapping one restores it.
 - D8. Download from Dropbox (1 month) after deleting the app and reinstalling. Recent captures appear, large files show "Download", and nothing is re-uploaded.
+- D13. On the same phone, "Delete from iPhone" a capture, then run Download from Dropbox. The sheet says it skips 1 and the capture doesn't come back. With "Include them" on, it does.
 - D9. Disconnect. Nothing is deleted anywhere. Connect a second account: nothing from the first is uploaded there.
 - D10. Revoke Hippo's access on dropbox.com. Settings shows "Reconnect Dropbox", and reconnecting resumes.
 - D11. Background sync uploads after a BG task, with no 0xdead10cc in the crash logs.

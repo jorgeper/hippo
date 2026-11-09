@@ -1,6 +1,6 @@
 # Hippo Dropbox phase: brainstorm notes (handoff)
 
-Status, 2026-11-08: the brainstorm is complete, and the playback below is confirmed. Next: the design doc. Nothing below is approved for building yet. These notes are where to resume: settle the open questions with Jorge, write the design doc (`docs/superpowers/specs/YYYY-MM-DD-hippo-dropbox-design.md`), run the builder check, get approval, then write the plan and build with subagent-driven development, as in the enrichment and visibility phases.
+Status, 2026-11-08: the brainstorm is complete. The design `2026-11-08-hippo-dropbox-design.md` is written, has had its builder check, and is **approved by Jorge**. Next: the plan, then subagent-driven development. Nothing below is approved for building yet. These notes are where to resume: settle the open questions with Jorge, write the design doc (`docs/superpowers/specs/YYYY-MM-DD-hippo-dropbox-design.md`), run the builder check, get approval, then write the plan and build with subagent-driven development, as in the enrichment and visibility phases.
 
 Background reading, in this order:
 - `docs/superpowers/specs/2026-11-07-hippo-v0-design.md` §3.1 already specifies most of the Dropbox adapter: auth, uploads, integrity, errors, SDK-vs-HTTP choice. It still stands unless something below reopens it.
