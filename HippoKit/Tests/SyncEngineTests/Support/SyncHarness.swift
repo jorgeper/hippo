@@ -116,6 +116,7 @@ struct HookedAdapter: StorageAdapter {
     var onCheckpoint: @Sendable (String) throws -> Void = { _ in }
     var afterUpload: @Sendable (String) -> Void = { _ in }
     var beforeDownload: @Sendable (String) throws -> Void = { _ in }
+    var beforeDelete: @Sendable (String) throws -> Void = { _ in }
 
     var capabilities: StorageCapabilities { inner.capabilities }
     func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
@@ -129,7 +130,10 @@ struct HookedAdapter: StorageAdapter {
         try beforeDownload(relativePath)
         return try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes, progress: progress)
     }
-    func deleteFolder(relativePath: String) async throws { try await inner.deleteFolder(relativePath: relativePath) }
+    func deleteFolder(relativePath: String) async throws {
+        try beforeDelete(relativePath)
+        try await inner.deleteFolder(relativePath: relativePath)
+    }
     func latestCursor(under prefix: String) async throws -> String { try await inner.latestCursor(under: prefix) }
     func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
         try await inner.listFolder(relativePath: relativePath, recursive: recursive, cursor: cursor)

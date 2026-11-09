@@ -323,6 +323,72 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(try t.stagingContents().isEmpty)
     }
 
+    @Test func deleteEverywhereQueuesTombstoneAndRemovesLocally() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        _ = try await t.store.deleteEverywhere(captureID: id)
+        #expect(try t.store.remoteState.hasTombstone(captureID: id))
+        let due = try t.store.remoteState.dueTombstones(destinationID: "dest-fs", accountIdentifier: "local",
+                                                        now: Date(), limit: 10)
+        #expect(due.map(\.relativeDirectory) == [pkg.relativeDirectory])
+        #expect(try t.store.index.count() == 0)
+        #expect(try t.store.remoteState.localDeletedCaptureIDs().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.path))
+    }
+
+    @Test func deleteFromIPhoneRecordsLocalDeleteOnly() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        _ = try await t.store.delete(captureID: id)
+        #expect(try t.store.remoteState.localDeletedCaptureIDs() == [id])
+        #expect(try !t.store.remoteState.hasTombstone(captureID: id))
+    }
+
+    @Test func deleteEverywhereWithoutJobBehavesLikeDelete() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        #expect(try t.store.jobs.jobs(captureID: id).isEmpty)
+        _ = try await t.store.deleteEverywhere(captureID: id)
+        #expect(try !t.store.remoteState.hasTombstone(captureID: id))
+        #expect(try t.store.remoteState.localDeletedCaptureIDs() == [id])
+        #expect(try t.store.index.count() == 0)
+    }
+
+    @Test func removeAfterRemoteDeleteWritesNoLocalDeleteRecord() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        try await t.store.removeAfterRemoteDelete(captureID: id)
+        #expect(try t.store.remoteState.localDeletedCaptureIDs().isEmpty)
+        #expect(try t.store.index.count() == 0)
+    }
+
+    @Test func deleteRemovesThumbnailsOfTrimmedAttachments() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        let thumb = t.store.layout.thumbnailURL(attachmentID: "att-1")
+        try FileManager.default.createDirectory(at: thumb.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("jpeg".utf8).write(to: thumb)
+        try t.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: "att-1", relativePath: "content/a",
+                                                   byteCount: 1, sha256: "x", destinationID: "dest-fs",
+                                                   state: .trimmed, trimmedAt: Date()))
+        _ = try await t.store.delete(captureID: id)
+        #expect(!FileManager.default.fileExists(atPath: thumb.path))
+    }
+
     @Test func deleteReportsSyncedAndIsIdempotent() async throws {
         let t = try StoreHarness(); defer { t.cleanup() }
         _ = try t.store.destinations.connect(t.destination)

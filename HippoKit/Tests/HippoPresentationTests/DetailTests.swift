@@ -322,6 +322,29 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(p.message == "This capture hasn't finished uploading. Deleting it removes the only copy. The upload in progress will be stopped.")
     }
 
+    @Test func everywherePromptCopy() async throws {
+        let p = DeletionPrompt.everywhere(destinationName: "Dropbox")
+        #expect(p.title == "Delete everywhere?" && p.confirm == "Delete everywhere")
+        #expect(p.message == "Delete from this iPhone and from Dropbox? Dropbox keeps deleted files for a while, so you can restore them on dropbox.com.")
+
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let unbound = try await t.note("no job", at: now)
+        let model = await CaptureDetailModel(store: t.store, captureID: unbound.metadata.captureID)
+        await model.load()
+        #expect(await model.everywherePrompt == nil)
+
+        _ = try t.store.destinations.connect(Destination(id: "dest-x", providerKind: "dropbox", accountIdentifier: "acct",
+                                                         remoteRoot: "/", displayName: "Dropbox", status: .active))
+        let bound = try await t.note("with job", at: now)
+        let boundModel = await CaptureDetailModel(store: t.store, captureID: bound.metadata.captureID)
+        await boundModel.load()
+        #expect(await boundModel.everywherePrompt == DeletionPrompt.everywhere(destinationName: "Dropbox"))
+        _ = try await boundModel.deleteEverywhere()
+        #expect(await boundModel.everywherePrompt == nil)
+        #expect(try t.store.remoteState.hasTombstone(captureID: bound.metadata.captureID))
+    }
+
     @Test func htmlIsNotPreviewable() {
         let url = pkg.appendingPathComponent("content/a1.bin")
         #expect(make(meta(attachments: [att(uti: "public.html")])).preview == .file(url, previewable: false, name: "a.jpg"))

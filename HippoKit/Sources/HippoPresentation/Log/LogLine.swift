@@ -116,6 +116,13 @@ public struct LogLine: Equatable, Sendable, Identifiable {
         case .silverUploadFailed, .packageUploadFailed:
             let d = destination(e.dest).map { "Upload to \($0) failed" } ?? "Upload failed"
             return join([d, e.code])
+        case .remoteDelete:
+            let d = destination(e.dest) ?? "storage"
+            switch e.outcome {
+            case nil: return "Delete queued for \(d)"
+            case .ok?: return "Deleted in \(d)"
+            default: return join(["Delete in \(d) failed", e.code])
+            }
         case .goldApplied: return "Server results applied"
         case .goldRemoved: return "Server results removed"
         case .goldSkipped: return join(["Server results skipped", e.code])

@@ -25,4 +25,11 @@ public struct DeletionPrompt: Equatable, Sendable {
         }
         return DeletionPrompt(title: "Delete from iPhone?", message: message, confirm: "Delete")
     }
+
+    /// The confirmation before "Delete everywhere…": the capture goes from this iPhone and from `destinationName`.
+    public static func everywhere(destinationName: String) -> DeletionPrompt {
+        DeletionPrompt(title: "Delete everywhere?",
+                       message: "Delete from this iPhone and from \(destinationName)? \(destinationName) keeps deleted files for a while, so you can restore them on dropbox.com.",
+                       confirm: "Delete everywhere")
+    }
 }

@@ -33,6 +33,14 @@ struct LogLineTests {
                 == "Sync finished (activation) · 3 uploaded")
     }
 
+    @Test func remoteDeleteLines() {
+        #expect(line(LogEvent(event: .remoteDelete, dest: "dropbox")).text == "Delete queued for Dropbox")
+        #expect(line(LogEvent(event: .remoteDelete, outcome: .ok, dest: "dropbox")).text == "Deleted in Dropbox")
+        #expect(line(LogEvent(event: .remoteDelete, outcome: .failed, code: "offline", dest: "dropbox")).text
+                == "Delete in Dropbox failed · offline")
+        #expect(line(LogEvent(event: .remoteDelete, dest: "filesystem")).text == "Delete queued for the Developer folder")
+    }
+
     @Test func unknownCombinationFallsBack() {
         #expect(line(LogEvent(event: .bgTask, outcome: .skipped, code: "stale")).text == "bg.task · skipped · stale")
         #expect(line(LogEvent(event: .goldSkipped, code: "stale")).text == "Server results skipped · stale")

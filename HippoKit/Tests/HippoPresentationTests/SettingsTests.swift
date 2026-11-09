@@ -221,6 +221,26 @@ struct SettingsTests {
         #expect(FileManager.default.fileExists(atPath: h.t.store.layout.diagnosticsURL.path))
     }
 
+    @Test func pendingDeletesInSummary() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        let dest = h.provider.destination
+        for id in ["a", "b"] {
+            try h.t.store.remoteState.addTombstone(captureID: id, relativeDirectory: "captures/2026/11/08/\(id)",
+                                                   destinationID: dest.id, accountIdentifier: dest.accountIdentifier,
+                                                   now: Date())
+        }
+        await h.model.refresh()
+        #expect(h.model.pendingRemoteDeletes == 2)
+        #expect(h.model.summary == "2 deletes waiting to reach \(dest.displayName)")
+        try h.t.store.remoteState.removeTombstone(captureID: "b")
+        await h.model.refresh()
+        #expect(h.model.summary == "1 delete waiting to reach \(dest.displayName)")
+        #expect(SettingsModel.summary(counts: [.notSynced: 1], pendingRemoteDeletes: 1, destinationName: "Dropbox")
+                == "1 waiting to upload · 1 delete waiting to reach Dropbox")
+    }
+
     @Test func passUploadsSilverAfterPackagesWithoutChangingTheResult() async throws {
         let h = try Harness()
         defer { h.cleanup() }

@@ -12,6 +12,8 @@ public final class CaptureDetailModel {
     public private(set) var loadFailed = false
     /// The confirmation to show before `delete()`; refreshed by `load()`.
     public private(set) var deletionPrompt: DeletionPrompt?
+    /// The confirmation to show before `deleteEverywhere()`; nil unless the capture has an upload job.
+    public private(set) var everywherePrompt: DeletionPrompt?
     /// When the capture was taken; set by `load()`.
     public private(set) var capturedAt: Date?
 
@@ -44,6 +46,7 @@ public final class CaptureDetailModel {
     private struct Loaded: Sendable {
         var detail: CaptureDetail
         var prompt: DeletionPrompt
+        var everywherePrompt: DeletionPrompt?
         var capturedAt: Date
     }
 
@@ -74,7 +77,9 @@ public final class CaptureDetailModel {
                                                 isOnline: isOnline(), goldArrivedAt: goldArrivedAt, destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName)
-                return Loaded(detail: detail, prompt: prompt, capturedAt: metadata.capturedAt)
+                let name = jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName
+                let everywhere = jobs.isEmpty ? nil : DeletionPrompt.everywhere(destinationName: name ?? "your storage")
+                return Loaded(detail: detail, prompt: prompt, everywherePrompt: everywhere, capturedAt: metadata.capturedAt)
             } catch {
                 Self.log.error("\("load_failed", privacy: .public)")
                 return nil
@@ -86,6 +91,7 @@ public final class CaptureDetailModel {
         loadFailed = false
         detail = loaded.detail
         deletionPrompt = loaded.prompt
+        everywherePrompt = loaded.everywherePrompt
         capturedAt = loaded.capturedAt
     }
 
@@ -106,6 +112,17 @@ public final class CaptureDetailModel {
         generation += 1  // a load still in flight must not bring the deleted capture back
         detail = nil
         deletionPrompt = nil
+        everywherePrompt = nil
+        return result
+    }
+
+    /// Deletes the capture from this iPhone and queues its deletion in the destination.
+    public func deleteEverywhere() async throws -> HippoStore.DeletionResult {
+        let result = try await store.deleteEverywhere(captureID: captureID)
+        generation += 1
+        detail = nil
+        deletionPrompt = nil
+        everywherePrompt = nil
         return result
     }
 }

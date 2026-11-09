@@ -21,6 +21,7 @@ public actor SyncCoordinator {
 
     private let store: HippoStore
     private let worker: SyncWorker
+    private let deleter: RemoteDeleter
     private let uploader: EnrichmentUploader
     private let puller: GoldPuller
     private let logUploader: LogUploader
@@ -51,6 +52,7 @@ public actor SyncCoordinator {
         self.settings = settings
         self.appVersion = appVersion
         worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix)
+        deleter = store.makeRemoteDeleter(adapterFor: { try registry.adapter(for: $0) })
         uploader = store.makeEnrichmentUploader(adapterFor: { try registry.adapter(for: $0) })
         puller = store.makeGoldPuller(adapterFor: { try registry.adapter(for: $0) })
         logUploader = store.makeLogUploader(installID: settings.installID, adapterFor: { try registry.adapter(for: $0) },
@@ -154,6 +156,9 @@ public actor SyncCoordinator {
     private func runPass() async -> (result: SyncPassResult, moreWork: Bool) {
         var total = Self.nothingDone
         var moreWork = true
+        // Delete-everywhere tombstones go first, so a deleted capture is never uploaded again. They never
+        // change the pass result or the follow-up decision.
+        if !Task.isCancelled { _ = await deleter.runOnce() }
         for _ in 0..<Self.maxRounds {
             if Task.isCancelled { moreWork = false; break }
             let round = await worker.runOnce()

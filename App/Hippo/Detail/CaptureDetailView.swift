@@ -13,6 +13,7 @@ struct CaptureDetailView: View {
 
     @State private var model: CaptureDetailModel
     @State private var confirmingDelete = false
+    @State private var confirmingDeleteEverywhere = false
     @State private var deleteFailed = false
     @State private var retrying = false
     @State private var developerMode = LocationService.settings.developerMode
@@ -71,6 +72,14 @@ struct CaptureDetailView: View {
             .confirmationDialog(model.deletionPrompt?.title ?? "Delete from iPhone?", isPresented: $confirmingDelete,
                                 titleVisibility: .visible, presenting: model.deletionPrompt) { prompt in
                 Button(prompt.confirm, role: .destructive) { delete() }
+                Button("Cancel", role: .cancel) {}
+            } message: { prompt in
+                Text(prompt.message)
+            }
+            .confirmationDialog(model.everywherePrompt?.title ?? "Delete everywhere?",
+                                isPresented: $confirmingDeleteEverywhere, titleVisibility: .visible,
+                                presenting: model.everywherePrompt) { prompt in
+                Button(prompt.confirm, role: .destructive) { delete(everywhere: true) }
                 Button("Cancel", role: .cancel) {}
             } message: { prompt in
                 Text(prompt.message)
@@ -181,6 +190,9 @@ struct CaptureDetailView: View {
             if !items.isEmpty { ShareLink("Share…", items: items) }
             Button("Delete from iPhone…", role: .destructive) { confirmingDelete = true }
                 .disabled(model.deletionPrompt == nil)
+            if model.everywherePrompt != nil {
+                Button("Delete everywhere…", role: .destructive) { confirmingDeleteEverywhere = true }
+            }
         } label: {
             Image(systemName: "ellipsis.circle")
         }
@@ -202,11 +214,13 @@ struct CaptureDetailView: View {
         }
     }
 
-    private func delete() {
+    private func delete(everywhere: Bool = false) {
         let model = model
         Task {
             do {
-                _ = try await BackgroundActivity.run(name: "detail-delete") { try await model.delete() }
+                _ = try await BackgroundActivity.run(name: "detail-delete") {
+                    everywhere ? try await model.deleteEverywhere() : try await model.delete()
+                }
                 onDeleted()
                 dismiss()
             } catch {

@@ -68,6 +68,7 @@ Per capture (carry `capture_id`):
 | `enrich.failed` | A task failed for good (`kind`, `code`, `attempt`) |
 | `silver.uploaded`, `silver.upload_failed` | Silver enrichment uploaded or failed (`dest`, `code`) |
 | `package.uploaded`, `package.upload_failed` | Capture package uploaded or failed (`dest`, `code`) |
+| `remote.delete` | "Delete everywhere": no `outcome` when queued, `ok` once removed in the destination, `failed` with `code` (`dest`) |
 | `gold.applied`, `gold.removed`, `gold.skipped` | Server enrichment applied, removed, or skipped (`code`) |
 
 Global (no `capture_id`):

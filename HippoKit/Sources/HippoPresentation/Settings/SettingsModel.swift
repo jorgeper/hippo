@@ -32,7 +32,12 @@ public final class SettingsModel {
     public private(set) var statusSummary: String?
 
     /// One line for the Sync section.
-    public var summary: String { Self.summary(counts: counts) }
+    public var summary: String {
+        Self.summary(counts: counts, pendingRemoteDeletes: pendingRemoteDeletes, destinationName: activeDestination?.displayName)
+    }
+
+    /// Delete-everywhere requests not yet applied in the active destination; set by `refresh()`.
+    public private(set) var pendingRemoteDeletes = 0
 
     @ObservationIgnored private let store: HippoStore
     @ObservationIgnored private let registry: ProviderRegistry
@@ -97,11 +102,16 @@ public final class SettingsModel {
         if on { await onEnrichmentEnabled(kind) }
     }
 
-    nonisolated static func summary(counts: [SyncBucket: Int]) -> String {
+    nonisolated static func summary(counts: [SyncBucket: Int], pendingRemoteDeletes: Int = 0,
+                                    destinationName: String? = nil) -> String {
         let attention = counts[.needsAttention] ?? 0, waiting = counts[.notSynced] ?? 0
         var parts: [String] = []
         if attention > 0 { parts.append("\(attention) need attention") }
         if waiting > 0 { parts.append("\(waiting) waiting to upload") }
+        if pendingRemoteDeletes > 0 {
+            let noun = pendingRemoteDeletes == 1 ? "delete" : "deletes"
+            parts.append("\(pendingRemoteDeletes) \(noun) waiting to reach \(destinationName ?? "your storage")")
+        }
         return parts.isEmpty ? "All captures synced" : parts.joined(separator: " · ")
     }
 
@@ -110,6 +120,7 @@ public final class SettingsModel {
         var counts: [SyncBucket: Int]
         var bytes: Int64
         var unfinished: [EnrichmentTask]
+        var pendingDeletes: Int
     }
 
     /// Re-reads the destination, sync counts, storage use and location preference.
@@ -118,9 +129,13 @@ public final class SettingsModel {
         locationEnabled = settings.locationEnabled
         let snapshot: Snapshot? = await Task.detached {
             do {
-                return Snapshot(destination: try store.destinations.active(), counts: try store.index.counts(),
+                let destination = try store.destinations.active()
+                return Snapshot(destination: destination, counts: try store.index.counts(),
                                 bytes: StorageUsage.bytes(under: store.layout.root),
-                                unfinished: (try? store.enrichmentTasks.unfinished()) ?? [])
+                                unfinished: (try? store.enrichmentTasks.unfinished()) ?? [],
+                                pendingDeletes: try destination.map {
+                                    try store.remoteState.pendingTombstoneCount(destinationID: $0.id)
+                                } ?? 0)
             } catch {
                 Self.log.error("\("refresh_failed", privacy: .public)")
                 return nil
@@ -130,6 +145,7 @@ public final class SettingsModel {
         loadFailed = false
         activeDestination = snapshot.destination
         counts = snapshot.counts
+        pendingRemoteDeletes = snapshot.pendingDeletes
         storageBytes = snapshot.bytes
         statusSummary = buildStatusSummary(unfinished: snapshot.unfinished)
     }

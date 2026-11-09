@@ -166,6 +166,12 @@ public final class HippoStore: Sendable {
                    adapterFor: adapterFor, log: log)
     }
 
+    /// Pushes queued remote deletes (tombstones) to the active destination. Runs before uploads.
+    public func makeRemoteDeleter(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> RemoteDeleter {
+        RemoteDeleter(destinations: destinations, remoteState: remoteState, adapterFor: adapterFor, log: log)
+    }
+
     /// Deletes the capture from this phone (spec §11): cancels its uploads, waits up to 10 s for a
     /// worker holding an active upload lease to let go, then removes the package and the index row
     /// (its jobs, receipts and checkpoints cascade), then its local silver and gold (their rows cascade
@@ -177,11 +183,33 @@ public final class HippoStore: Sendable {
     /// `staging/<id>.deleted`, so it can never be re-registered. An interruption leaves at worst an
     /// orphan index row and a staged directory, and `recover()` removes both.
     public func delete(captureID: String) async throws -> DeletionResult {
+        try await remove(captureID: captureID, mode: .iPhoneOnly)
+    }
+
+    /// "Delete everywhere": the same local removal as `delete`, plus a durable tombstone that the next sync
+    /// pass applies in the destination (`RemoteDeleter`). The tombstone is written, bound to the capture's
+    /// destination and that destination's account, just before the index row goes. A capture with no job
+    /// has nothing remote to delete and behaves exactly like `delete`.
+    public func deleteEverywhere(captureID: String) async throws -> DeletionResult {
+        try await remove(captureID: captureID, mode: .everywhere)
+    }
+
+    /// Removes the capture locally after its remote copy was deleted elsewhere: `delete` without the
+    /// local-delete record. The `capture.deleted` event carries `trigger: "remote"`.
+    public func removeAfterRemoteDelete(captureID: String) async throws {
+        _ = try await remove(captureID: captureID, mode: .remote)
+    }
+
+    private enum RemovalMode { case iPhoneOnly, everywhere, remote }
+
+    private func remove(captureID: String, mode: RemovalMode) async throws -> DeletionResult {
         guard let directory = try index.relativeDirectory(captureID: captureID) else {
             return DeletionResult(wasSynced: false, hadActiveUpload: false)
         }
         let existing = try jobs.jobs(captureID: captureID)
         let wasSynced = !existing.isEmpty && existing.allSatisfy { $0.state == .synced }
+        let bound = try existing.map(\.destinationID).min().flatMap { try destinations.destination(id: $0) }
+        let thumbnailIDs = (try? trims.trimmed(captureID: captureID).map(\.attachmentID)) ?? []
 
         // After this no worker can claim the capture's jobs, so only a lease already held can be active.
         try jobs.requestCancel(captureID: captureID)
@@ -207,9 +235,34 @@ public final class HippoStore: Sendable {
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             // Already moved or gone.
         }
-        try index.remove(captureID: captureID)
+        var tombstoned = false, recordedLocalDelete = false
+        switch mode {
+        case .everywhere where bound != nil:
+            let destination = bound!
+            try remoteState.addTombstone(captureID: captureID, relativeDirectory: directory,
+                                         destinationID: destination.id,
+                                         accountIdentifier: destination.accountIdentifier, now: now())
+            tombstoned = true
+        case .iPhoneOnly, .everywhere:
+            try remoteState.recordLocalDelete(captureID: captureID, relativeDirectory: directory,
+                                              accountIdentifier: bound?.accountIdentifier, now: now())
+            recordedLocalDelete = true
+        case .remote: break
+        }
+        do {
+            try index.remove(captureID: captureID)
+        } catch {
+            // The capture stays, so nothing may claim it was deleted.
+            if tombstoned { try? remoteState.removeTombstone(captureID: captureID) }
+            if recordedLocalDelete { try? remoteState.removeLocalDelete(captureID: captureID) }
+            throw error
+        }
         removed = true
-        log.append(LogEvent(event: .captureDeleted, captureID: captureID))
+        log.append(LogEvent(event: .captureDeleted, captureID: captureID, trigger: mode == .remote ? "remote" : nil))
+        if tombstoned, let bound {
+            log.append(LogEvent(event: .remoteDelete, captureID: captureID, dest: bound.providerKind))
+        }
+        for id in thumbnailIDs { try? Self.removeIfPresent(layout.thumbnailURL(attachmentID: id)) }
         // Without the index row these are orphans, and the next recover() sweeps whatever is left.
         do { try enrichments.removeAll(captureID: captureID) } catch {
             Self.osLog.error("\("delete_enrichment_cleanup_failed", privacy: .public)")
