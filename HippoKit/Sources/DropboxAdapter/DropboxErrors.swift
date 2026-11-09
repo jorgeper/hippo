@@ -31,7 +31,10 @@ public struct DropboxCallError: Error, Equatable, Sendable {
                 tags.append(tag)
                 if let n = current["correct_offset"] as? NSNumber { correct = n.int64Value }
                 if let n = current["retry_after"] as? NSNumber { bodyRetry = n.doubleValue }
-                node = (current[tag] as? [String: Any]) ?? current.values.compactMap { $0 as? [String: Any] }.first
+                // `reason` (UploadWriteFailed) then `path`, then the tag's own key, then any nested object.
+                // Only `.tag` strings are collected, so fields like `upload_session_id` never reach a tag.
+                node = (current["reason"] as? [String: Any]) ?? (current["path"] as? [String: Any])
+                    ?? (current[tag] as? [String: Any]) ?? current.values.compactMap { $0 as? [String: Any] }.first
             }
             if let n = error["retry_after"] as? NSNumber { bodyRetry = n.doubleValue }
         }

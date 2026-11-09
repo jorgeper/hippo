@@ -107,6 +107,13 @@ private func tagError(_ tags: Any, status: Int = 409, headers: [String: String] 
         #expect(str.tags.isEmpty)
     }
 
+    @Test func uploadWriteFailedUsesReasonAndNeverLeaksTheSessionID() {
+        let body = Data(#"{"error":{".tag":"path","reason":{".tag":"conflict","conflict":{".tag":"file"}},"upload_session_id":"SECRET-SESSION"}}"#.utf8)
+        let e = DropboxCallError(status: 409, headers: [:], body: body)
+        #expect(e.tags == ["path", "conflict", "file"])
+        #expect(!"\(e.tags) \(e.storageError())".contains("SECRET"))
+    }
+
     @Test func urlErrorMapping() {
         let offline: [URLError.Code] = [.notConnectedToInternet, .networkConnectionLost, .dnsLookupFailed, .cannotFindHost,
                                         .cannotConnectToHost, .internationalRoamingOff, .dataNotAllowed]

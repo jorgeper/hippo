@@ -7,7 +7,7 @@ import DropboxAdapter
 private struct DeletePath: Encodable { var path: String }
 
 /// Runs against a real Dropbox app folder when `.env` holds credentials; skipped otherwise.
-@Suite struct DropboxAdapterContractTests {
+@Suite(.serialized) struct DropboxAdapterContractTests {
     private struct Rig {
         let client: DropboxClient
         let adapter: DropboxAdapter
@@ -15,7 +15,8 @@ private struct DeletePath: Encodable { var path: String }
         let scratch: URL
 
         func cleanup() async {
-            _ = try? await client.rpc("files/delete_v2", DeletePath(path: rootPath))
+            do { _ = try await client.rpc("files/delete_v2", DeletePath(path: rootPath)) }
+            catch { Issue.record("live test cleanup failed to delete the run root: \(error)") }
             try? FileManager.default.removeItem(at: scratch)
         }
     }
@@ -35,7 +36,7 @@ private struct DeletePath: Encodable { var path: String }
         let root = "_hippo-test/\(UUID().uuidString.lowercased())"
         let adapter = DropboxAdapter(client: client, accountID: accountID, rootPrefix: root,
                                      scratchDirectory: scratch.appendingPathComponent("chunks"),
-                                     singleRequestCutoff: 1 << 20, chunkSize: 4 << 20)
+                                     singleRequestCutoff: 1 << 20, chunkSize: 1 << 20)
         return Rig(client: client, adapter: adapter, rootPath: "/" + root, scratch: scratch)
     }
 

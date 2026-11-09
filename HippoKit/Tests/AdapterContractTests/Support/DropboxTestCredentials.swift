@@ -16,10 +16,14 @@ enum DropboxTestCredentials {
     private static func parse(_ text: String) -> [String: String] {
         var out: [String: String] = [:]
         for raw in text.split(whereSeparator: \.isNewline) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("export ") { line = String(line.dropFirst(7)).trimmingCharacters(in: .whitespaces) }
             guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { continue }
             let key = line[..<eq].trimmingCharacters(in: .whitespaces)
             var value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+            if let q = value.first, q != "\"", q != "'", let hash = value.range(of: " #") {
+                value = value[..<hash.lowerBound].trimmingCharacters(in: .whitespaces)
+            }
             if value.count >= 2, let q = value.first, q == "\"" || q == "'", value.last == q { value = String(value.dropFirst().dropLast()) }
             if !value.isEmpty { out[key] = value }
         }

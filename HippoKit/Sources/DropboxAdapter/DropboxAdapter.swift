@@ -79,7 +79,8 @@ public struct DropboxAdapter: StorageAdapter {
     }
 
     private struct Meta: Decodable {
-        var tag: String
+        /// Only the `Metadata` union (get_metadata, list_folder entries) carries it; upload responses do not.
+        var tag: String?
         var path_display: String?
         var size: Int64?
         var content_hash: String?
@@ -294,7 +295,7 @@ public struct DropboxAdapter: StorageAdapter {
             guard data.count == Int(length) else { throw StorageError.permanent(code: "local_file_changed") }
             try data.write(to: slice)
         } catch let e as StorageError { throw e }
-        catch { throw StorageError.transient(code: "local_io") }
+        catch { try? FileManager.default.removeItem(at: slice); throw StorageError.transient(code: "local_io") }
         return slice
     }
 
@@ -309,7 +310,7 @@ public struct DropboxAdapter: StorageAdapter {
             for entry in result.entries {
                 guard let display = entry.path_display, let rel = DropboxPaths.relative(display, root: root),
                       !isHidden(rel) else { continue }
-                switch entry.tag {
+                switch entry.tag ?? "" {
                 case "file": changes.append(.upserted(info(rel, entry)))
                 case "deleted": changes.append(.deleted(relativePath: rel))
                 default: break
@@ -391,12 +392,13 @@ public struct DropboxAdapter: StorageAdapter {
             let temp = localURL.deletingLastPathComponent()
                 .appendingPathComponent(".\(localURL.lastPathComponent).part-\(UUID().uuidString.lowercased())")
             defer { try? fm.removeItem(at: temp) }
-            _ = try await client.download("files/download", arg: PathArg(path: path), to: temp, progress: progress)
+            let header = try await client.download("files/download", arg: PathArg(path: path), to: temp, progress: progress)
+            let result: RemoteFileInfo = (try? JSONDecoder().decode(Meta.self, from: header)).flatMap { $0.size == nil ? nil : info(relativePath, $0) } ?? existing
             let written = (try fm.attributesOfItem(atPath: temp.path)[.size] as? NSNumber)?.int64Value ?? 0
             guard written <= maxBytes else { throw StorageError.permanent(code: "too_large") }
-            try? fm.removeItem(at: localURL)
-            try fm.moveItem(at: temp, to: localURL)
-            return existing
+            if fm.fileExists(atPath: localURL.path) { _ = try fm.replaceItemAt(localURL, withItemAt: temp) }
+            else { try fm.moveItem(at: temp, to: localURL) }
+            return result
         }
     }
 

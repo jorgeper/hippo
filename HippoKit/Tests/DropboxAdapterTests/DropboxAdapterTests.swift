@@ -30,9 +30,12 @@ private struct Harness {
     }
 
     func meta(_ url: URL, path: String = "/captures/x") throws -> [String: Any] {
-        [".tag": "file", "path_display": path, "size": try Data(contentsOf: url).count,
+        ["path_display": path, "size": try Data(contentsOf: url).count,
          "content_hash": try DropboxContentHash.of(url)]
     }
+
+    /// `get_metadata` returns the `Metadata` union, which carries `.tag`; upload responses do not.
+    func tagged(_ m: [String: Any]) -> [String: Any] { m.merging([".tag": "file"]) { a, _ in a } }
 
     func apiError(_ tags: Any, status: Int = 409) -> Result<DropboxResponse, Error> {
         ScriptedTransport.json(["error": tags, "error_summary": "x"], status: status)
@@ -131,7 +134,7 @@ private final class Saved: @unchecked Sendable {
     @Test func existingMatchingFileIsAReceiptWithoutUploading() async throws {
         let h = Harness()
         let (url, integrity) = try h.file("a.bin", bytes: 300)
-        h.on("files/get_metadata", ScriptedTransport.json(try h.meta(url)))
+        h.on("files/get_metadata", ScriptedTransport.json(h.tagged(try h.meta(url))))
         _ = try await h.adapter.uploadFile(localURL: url, relativePath: "captures/x", expected: integrity,
                                            checkpoint: nil, saveCheckpoint: noCheckpoint)
         #expect(h.paths("files/upload").isEmpty)
@@ -141,8 +144,8 @@ private final class Saved: @unchecked Sendable {
         let h = Harness()
         let (url, integrity) = try h.file("a.bin", bytes: 500)
         h.on("files/get_metadata", h.apiError(notFound))
-        h.on("files/upload", h.apiError([".tag": "path", "path": [".tag": "conflict", "conflict": [".tag": "file"]]]))
-        h.on("files/get_metadata", ScriptedTransport.json(try h.meta(url)))
+        h.on("files/upload", h.apiError([".tag": "path", "reason": [".tag": "conflict", "conflict": [".tag": "file"]], "upload_session_id": "SECRET-SESSION"]))
+        h.on("files/get_metadata", ScriptedTransport.json(h.tagged(try h.meta(url))))
         let receipt = try await h.adapter.uploadFile(localURL: url, relativePath: "captures/x", expected: integrity,
                                                      checkpoint: nil, saveCheckpoint: noCheckpoint)
         #expect(receipt.byteCount == 500)
@@ -154,8 +157,8 @@ private final class Saved: @unchecked Sendable {
         let (other, _) = try h.file("b.bin", bytes: 500)
         try Data(repeating: 1, count: 500).write(to: other)
         h.on("files/get_metadata", h.apiError(notFound))
-        h.on("files/upload", h.apiError([".tag": "path", "path": [".tag": "conflict", "conflict": [".tag": "file"]]]))
-        h.on("files/get_metadata", ScriptedTransport.json(try h.meta(other)))
+        h.on("files/upload", h.apiError([".tag": "path", "reason": [".tag": "conflict", "conflict": [".tag": "file"]], "upload_session_id": "SECRET-SESSION"]))
+        h.on("files/get_metadata", ScriptedTransport.json(h.tagged(try h.meta(other))))
         do {
             _ = try await h.adapter.uploadFile(localURL: url, relativePath: "captures/x", expected: integrity,
                                                checkpoint: nil, saveCheckpoint: noCheckpoint)
@@ -373,9 +376,9 @@ private final class Saved: @unchecked Sendable {
         }
         h.on("files/get_metadata", ScriptedTransport.json([".tag": "file", "size": 3, "content_hash": "h"]))
         h.api.enqueue(matching: { $0.url.path == "/2/files/download" },
-                      .success(DropboxResponse(status: 200, headers: ["dropbox-api-result": "{}"], body: Data([1, 2, 3]))))
+                      .success(DropboxResponse(status: 200, headers: ["dropbox-api-result": #"{"size":3,"content_hash":"fromheader"}"#], body: Data([1, 2, 3]))))
         let info = try await h.adapter.downloadFile(relativePath: "a/x", to: dest, maxBytes: 100)
-        #expect(info.byteCount == 3)
+        #expect(info.byteCount == 3 && info.providerHash?.value == "fromheader")
         #expect(try Data(contentsOf: dest) == Data([1, 2, 3]))
         let siblings = try FileManager.default.contentsOfDirectory(atPath: h.scratch.path).filter { $0.contains(".part-") }
         #expect(siblings.isEmpty)
