@@ -38,6 +38,7 @@ In his words, lightly cleaned up:
   - Picking broader access must make it plain that Hippo can then see and change everything in their Dropbox, not just the chosen folder.
   - Dropbox fixes an app's access type at registration (confirmed in Dropbox forum answers by Dropbox staff), so this means **two registered Dropbox apps**, one per access type. Hippo signs in through whichever one the user picks.
   - Folder picking needs a folder browser, using `files.metadata.read` listing.
+- **Scope of the folder choice (Jorge, later the same day):** start with **Hippo's own folder only** (`Apps/Hippo`, one App-folder registration). Broader access, with the folder picker and the warning, comes later. Design the connect screen so that option can be added without rework.
 - **Registration (Jorge):** he accepts registering in the Dropbox App Console. He'd rather keep it minimal, and wants a guided script.
   - **The "Hippo Dev" test app from v0 §3.1 is dropped.** Real-Dropbox integration tests write to a clearly named test subfolder (for example `Apps/Hippo/_hippo-test/`) or run only on request. The design decides which.
   - Jorge was told and agreed that the alternative, writing through the Dropbox iPhone app via Files, gives weaker guarantees: no verification, sync timing set by the Dropbox app, and unreliable background writes.
@@ -71,6 +72,21 @@ Ask one at a time. Each has my recommendation, which Jorge has not confirmed.
    - Captures saved before connecting upload after connecting.
    - Nothing bound to account A is uploaded to account B.
    - Confirm that disconnecting keeps local captures and stops sync, and doesn't delete anything.
+
+## Raised by Jorge, in discussion: reading from the Hippo folder into the phone
+
+Jorge's idea: a setting that picks N days, weeks or months, and the phone downloads captures in that window from the Hippo folder, so the sync is explicit about what the phone holds. This is the answer to Q5 (new phone).
+
+My view, given to Jorge:
+- **Worth doing.** It turns "the phone is a subset" into a defined subset, and a new phone gets recent memories instead of starting empty.
+- **Cost:**
+  - Downloading whole packages: attachments can be large videos, so Wi-Fi by default, with big files fetched on tap.
+  - Validating each package against `package-format.md` before indexing it.
+  - Marking downloaded captures as already in Dropbox, so they're never re-uploaded.
+  - Making it play well with remote deletes and Delete everywhere.
+- **Sizing:** it's a second substantial feature next to connect, upload and deletes. Recommendation: design both together, but build the download window as its own follow-on plan, or as the last tasks of this one if it stays small.
+
+Open: whether the window also **removes** older captures from the phone to save space, or only **fetches** missing ones. Removing touches the "never lose a capture that isn't safely in Dropbox" rule.
 
 ## Already decided: from v0 §3.1 and the parked follow-ups
 
