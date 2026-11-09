@@ -115,8 +115,12 @@ public final class URLSessionTransport: DropboxTransport {
             out.body = (try? Data(contentsOf: tmp)) ?? Data()  // an error body is small JSON
             return out
         }
+        // The delegate's last callback may be short or arrive after this call returns, so the final value is
+        // always the file's size.
+        let size = (try? FileManager.default.attributesOfItem(atPath: tmp.path)[.size] as? NSNumber)?.int64Value
         try? FileManager.default.removeItem(at: localURL)
         try FileManager.default.moveItem(at: tmp, to: localURL)
+        if let size { progress?(size) }
         return out
     }
 }

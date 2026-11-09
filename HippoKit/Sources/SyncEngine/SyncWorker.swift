@@ -174,6 +174,7 @@ public final class SyncWorker: Sendable {
                 try await receiptRemoteOnly(entry.relativePath,
                                             expected: FileIntegrity(byteCount: row?.byteCount ?? entry.byteCount,
                                                                     sha256: row?.sha256 ?? entry.sha256),
+                                            mismatched: row?.state == .mismatch,
                                             directory: directory, job: job, adapter: adapter)
                 receipted.insert(entry.relativePath)
             }
@@ -260,8 +261,10 @@ public final class SyncWorker: Sendable {
 
     /// Receipts a trimmed file from the destination's copy alone: it must be there with the trimmed size and,
     /// when the provider reports a SHA-256, that hash; any other provider hash is recorded as the evidence.
-    /// Absent there: `trimmed_file_missing`; different: `remote_conflict` (both blocked).
-    private func receiptRemoteOnly(_ path: String, expected: FileIntegrity, directory: String, job: UploadJob,
+    /// Absent there: `trimmed_file_missing`; different, or already proven different (a mismatched trim row):
+    /// `remote_conflict` (both blocked).
+    private func receiptRemoteOnly(_ path: String, expected: FileIntegrity, mismatched: Bool, directory: String,
+                                   job: UploadJob,
                                    adapter: any StorageAdapter) async throws {
         try Task.checkCancellation()
         guard let current = try jobs.job(jobID: job.jobID) else { throw JobError.notFound }
@@ -273,7 +276,7 @@ public final class SyncWorker: Sendable {
             throw Failure(state: .blocked, code: "trimmed_file_missing")
         }
         let hash = remote.providerHash
-        guard remote.byteCount == expected.byteCount, hash?.algorithm != "sha256" || hash?.value == expected.sha256 else {
+        guard !mismatched, remote.byteCount == expected.byteCount, hash?.algorithm != "sha256" || hash?.value == expected.sha256 else {
             throw Failure(state: .blocked, code: "remote_conflict")
         }
         try saveReceipt(path, remote: remote,

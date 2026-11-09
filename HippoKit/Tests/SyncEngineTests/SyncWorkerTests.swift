@@ -76,6 +76,30 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(!h.uploads.contains("upload \(pkg.markerPath)"))
     }
 
+    @Test func mismatchedTrimRowBlocksReceiptingARemoteOnlyFile() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        #expect(await h.worker().runOnce().synced == 1)  // the remote now holds a same-size copy
+        let job = try h.job(pkg)
+        let attachment = pkg.metadata.attachments[0]
+        try h.trims.record(TrimmedAttachment(captureID: pkg.metadata.captureID, attachmentID: attachment.attachmentID,
+                                             relativePath: attachment.relativePath, byteCount: attachment.byteCount,
+                                             sha256: attachment.sha256, destinationID: "dest-fs", state: .trimmed,
+                                             trimmedAt: t0))
+        try h.trims.setState(captureID: pkg.metadata.captureID, attachmentID: attachment.attachmentID, state: .mismatch)
+        try FileManager.default.removeItem(at: pkg.directoryURL.appendingPathComponent(attachment.relativePath))
+        try h.jobs.clearReceipts(jobID: job.jobID, paths: nil)
+        try h.jobs.requeue(jobID: job.jobID)
+
+        let result = await h.worker().runOnce()
+
+        #expect(result == SyncPassResult(synced: 0, failed: 1, idle: false))
+        let after = try h.job(pkg)
+        #expect(after.state == .blocked)
+        #expect(after.lastErrorCode == "remote_conflict")
+        #expect(try !h.jobs.receipts(jobID: job.jobID).map(\.relativePath).contains(attachment.relativePath))
+    }
+
     @Test func markSyncedClearsChanged() async throws {
         let h = try SyncHarness(); defer { h.cleanup() }
         let pkg = try await h.capture()
