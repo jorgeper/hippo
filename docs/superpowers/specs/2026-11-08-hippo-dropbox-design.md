@@ -118,8 +118,9 @@ Everything else in v0 §3.1 stands:
   - Detail offers **"Upload again from iPhone"**, which re-uploads missing files with `mode: add` and never overwrites. A file that exists with different content stays a content conflict, shown as such.
   - This keeps "everything on the phone is in Dropbox" true without ever overwriting.
 - **Detection** uses `listChanges(under: "captures/", cursor:)`.
-  - The cursor is baselined when the destination connects, with a new `latestCursor(under:)`, so connecting never enumerates history.
-  - The cursor is per destination.
+  - The cursor is per destination, meaning per `account_id`, and is **kept across Disconnect and reconnecting the same account**. My call; otherwise deletes made while disconnected would be missed.
+  - It is baselined with a new `latestCursor(under:)` only when no cursor exists yet, which means the first connect of that account. So the first connect never enumerates history.
+  - If a kept cursor has expired, the `cursorReset` path below runs, and that can show the review sheet after a reconnect.
   - It runs on each sync pass after uploads, like the gold pull.
 - **Unverified captures are protected.** A remote change never removes a capture whose upload isn't verified. Its jobs aren't all `synced`. That case is logged and ignored, and the next upload recreates the remote copy.
 
@@ -149,6 +150,16 @@ Everything else in v0 §3.1 stands:
   - Tapping it downloads the file over any connection, with progress, verifies its SHA-256 against `metadata.json`, and restores it locally. It stays restored until trimmed again.
   - If it's offline, signed out or connected to a different account, it says so: "Connect Dropbox (account …) to download".
 - Save space runs in the foreground, with a progress line. It stops cleanly if the app is backgrounded, and whatever it already trimmed stays valid.
+- **Trimming makes Dropbox the only copy of those files. My call on everything in this list.**
+  - **The sheet says so plainly:** "These files will then be only in Dropbox."
+  - **Fresh remote check before trimming:** just before trimming a file, Save space checks the remote copy with `inspectFile`. The size and provider hash must still match the upload receipt; a file that fails is skipped and counted. So Save space needs a connection, and the sheet's button is disabled offline.
+  - **The review sheet (§4.3):** it lists captures with trimmed files separately ("N of these have large files only in Dropbox"). For those, "Keep and upload again" can't restore the trimmed files. It re-uploads what the phone still has and leaves the package without `complete.json`.
+    - Their choices are "Remove them from iPhone" and "Keep on iPhone as they are".
+    - Either way, the sheet points to Dropbox's deleted-files restore on dropbox.com.
+    - A package is never published with files missing from its own manifest.
+  - **"Upload again from iPhone" (changed in Dropbox)** can't restore a trimmed file. Detail says "This file was only in Dropbox and is gone there. Restore it from Dropbox's deleted files on dropbox.com."
+  - **A trimmed file whose remote copy no longer matches** fails the SHA-256 check on download. It's shown as "Changed in Dropbox: this file no longer matches", with the thumbnail kept and nothing restored. It's never accepted unverified.
+  - **Remote deletes under the safety-valve threshold** apply to trimmed captures too, because the user deleted them in Dropbox.
 
 ### 4.5 Download from Dropbox (Jorge's idea; manual)
 
