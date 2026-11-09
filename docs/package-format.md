@@ -109,4 +109,6 @@ Sync clients (Dropbox online-only, OneDrive Files On-Demand, iCloud) may show a 
 - Do not assume the marker arrives last, or that other files are local when it is.
 - Treat read failures and size/hash mismatches as pending first (step 4), not corrupt.
 
+A reader may see `captures/` packages written by several phones sharing one folder, and should expect packages to be deleted at any time (from the phone, from the Dropbox folder, or by another phone).
+
 The phone also keeps a content-free event log in `logs/` (locally, and per install on the destination); it is not part of any package. See `docs/log-format.md`.
