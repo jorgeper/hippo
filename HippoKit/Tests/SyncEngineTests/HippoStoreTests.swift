@@ -240,6 +240,36 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(try t.stagingContents().isEmpty)
     }
 
+    @Test func recoveryRemovesOnlyOldTransferFiles() throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let fm = FileManager.default
+        let layout = t.store.layout
+        #expect(fm.fileExists(atPath: layout.thumbnailsDir.path))
+        #expect(fm.fileExists(atPath: layout.transfersDir.path))
+        let old = layout.transfersDir.appendingPathComponent("old.part")
+        let fresh = layout.transfersDir.appendingPathComponent("fresh.part")
+        let nested = layout.transfersDir.appendingPathComponent("dir", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        let nestedOld = nested.appendingPathComponent("inner.part")
+        let thumb = layout.thumbnailURL(attachmentID: "att")
+        for url in [old, fresh, nestedOld, thumb] { try Data("x".utf8).write(to: url) }
+        let eightDaysAgo = Date().addingTimeInterval(-8 * 86_400)
+        for url in [old, nestedOld, thumb, nested] {
+            try fm.setAttributes([.modificationDate: eightDaysAgo], ofItemAtPath: url.path)
+        }
+
+        let report = try t.store.recover()
+
+        #expect(report.removedStaging == 1)
+        #expect(!fm.fileExists(atPath: old.path))
+        #expect(fm.fileExists(atPath: fresh.path))
+        #expect(fm.fileExists(atPath: nestedOld.path))
+        #expect(fm.fileExists(atPath: thumb.path))
+        // A missing transfers directory is not an error.
+        try fm.removeItem(at: layout.transfersDir)
+        #expect(try t.store.recover().removedStaging == 0)
+    }
+
     // Crash after the package was parked in staging but before the index row was removed.
     @Test func recoveryFinishesDeletionInterruptedAfterRename() async throws {
         let t = try StoreHarness(); defer { t.cleanup() }
@@ -350,7 +380,7 @@ private func isComplete(_ r: ValidationResult) -> Bool {
                                    "recent_error_codes", "destinations",
                                    "enrichment_tasks", "enrichment_uploads_pending", "gold"])
         #expect(json["app_version"] as? String == "1.4.2")
-        #expect(json["schema_version"] as? Int == 3)
+        #expect(json["schema_version"] as? Int == 4)
         #expect(json["capture_count"] as? Int == 1)
         #expect(json["jobs_by_state"] as? [String: Int] == [
             "pending": 0, "uploading": 0, "synced": 0, "retryable_failure": 1, "needs_authentication": 0,

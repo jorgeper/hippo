@@ -560,4 +560,55 @@ private struct Stores {
         try s.jobs.clearCancel(captureID: id)
         #expect(try s.jobs.claimNext(owner: "w", now: t0, lease: 60)?.captureID == id)
     }
+
+    @Test func insertSyncedAndClearReceipts() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("d", account: "a"))
+        let id = try await s.capture()
+        let other = try await s.h.add(note: "second").metadata.captureID
+        try s.jobs.insertSynced(captureID: other, destinationID: "d")
+        let synced = try #require(try s.jobs.jobs(captureID: other).first)
+        #expect(synced.state == .synced)
+        #expect(try s.jobs.receipts(jobID: synced.jobID).isEmpty)
+        // An existing pair is left alone.
+        try s.jobs.insertSynced(captureID: id, destinationID: "d")
+        #expect(try s.jobs.jobs(captureID: id).map(\.state) == [.pending])
+
+        let job = try #require(try s.jobs.jobs(captureID: id).first)
+        for path in ["a", "b", "c"] {
+            try s.jobs.saveReceipt(jobID: job.jobID, StoredReceipt(relativePath: path, byteCount: 1, evidenceKind: "k", evidenceValue: "v"))
+        }
+        try s.jobs.clearReceipts(jobID: job.jobID, paths: ["a", "c"])
+        #expect(try s.jobs.receipts(jobID: job.jobID).map(\.relativePath) == ["b"])
+        try s.jobs.clearReceipts(jobID: job.jobID, paths: nil)
+        #expect(try s.jobs.receipts(jobID: job.jobID).isEmpty)
+
+        // requeue: any state back to pending, lease and retry time cleared, cancel flag kept.
+        let claimed = try #require(try s.jobs.claimNext(owner: "w", now: t0, lease: 60))
+        try s.jobs.requestCancel(captureID: claimed.captureID)
+        try s.jobs.requeue(jobID: claimed.jobID)
+        let after = try #require(try s.jobs.job(jobID: claimed.jobID))
+        #expect(after.state == .pending)
+        #expect(after.nextAttemptAt == nil)
+        #expect(after.cancelRequested)
+        #expect(try s.lease(claimed.jobID).owner == nil)
+        #expect(try s.lease(claimed.jobID).expires == nil)
+    }
+
+    @Test func capturesFullySynced() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("d", account: "a"))
+        let done = try await s.capture("done")
+        let partial = try await s.capture("partial")
+        let unbound = try await s.h.add(note: "unbound").metadata.captureID
+        try s.h.db.execute("UPDATE jobs SET state = 'synced' WHERE capture_id = ?", [.text(done)])
+        // A second destination's unfinished job doesn't count against `d`.
+        _ = try s.destinations.connect(destination("e", account: "b"))
+        try s.h.db.execute("UPDATE jobs SET state = 'pending' WHERE capture_id = ? AND destination_id = 'e'", [.text(done)])
+        _ = unbound
+        #expect(try s.jobs.capturesFullySynced(destinationID: "d") == [done])
+        try s.jobs.insertSynced(captureID: unbound, destinationID: "d")
+        #expect(try s.jobs.capturesFullySynced(destinationID: "d") == [done, unbound])
+        _ = partial
+    }
 }

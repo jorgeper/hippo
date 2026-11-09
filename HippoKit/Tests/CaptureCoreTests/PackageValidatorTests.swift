@@ -56,6 +56,22 @@ import CryptoKit
         #expect(PackageValidator.validate(directory: pkg.directoryURL) == .incomplete("missing \(path)"))
     }
 
+    @Test func trimmedAttachmentMayBeMissing() async throws {
+        let pkg = try await makePackage()
+        let path = pkg.metadata.attachments[0].relativePath
+        let file = pkg.directoryURL.appendingPathComponent(path)
+        try FileManager.default.removeItem(at: file)
+        #expect(PackageValidator.validate(directory: pkg.directoryURL) == .incomplete("missing \(path)"))
+        guard case .complete = PackageValidator.validate(directory: pkg.directoryURL, trimmed: [path]) else {
+            Issue.record("a trimmed attachment may be absent")
+            return
+        }
+        // Present but wrong bytes is still a mismatch, trimmed or not.
+        try Data("tampered".utf8).write(to: file)
+        #expect(PackageValidator.validate(directory: pkg.directoryURL, trimmed: [path]) == .incomplete("mismatch \(path)"))
+        #expect(CommittedPackage.load(directory: pkg.directoryURL, layout: layout, trimmed: [path]) == nil)
+    }
+
     @Test func hashMismatchIsIncomplete() async throws {
         let pkg = try await makePackage()
         let path = pkg.metadata.attachments[0].relativePath

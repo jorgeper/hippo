@@ -11,18 +11,21 @@ public enum ValidationResult: Equatable, Sendable {
 /// The desktop-reader contract (spec §12): a package is usable only when its completion marker is present,
 /// supported, safe, and every manifest file is available with the right size and hash.
 public enum PackageValidator {
-    public static func validate(directory: URL) -> ValidationResult {
-        validateReturningMarker(directory: directory).result
+    /// `trimmed` lists manifest paths whose files may be absent (their originals live only in the
+    /// destination). A listed file that is present is still hashed and must match.
+    public static func validate(directory: URL, trimmed: Set<String> = []) -> ValidationResult {
+        validateReturningMarker(directory: directory, trimmed: trimmed).result
     }
 
     /// Like `validate`, also returning the marker decoded from the very bytes that were validated.
-    static func validateReturningMarker(directory: URL) -> (result: ValidationResult, marker: CompletionMarker?) {
+    static func validateReturningMarker(directory: URL, trimmed: Set<String> = [])
+        -> (result: ValidationResult, marker: CompletionMarker?) {
         var marker: CompletionMarker?
-        let result = check(directory: directory, marker: &marker)
+        let result = check(directory: directory, trimmed: trimmed, marker: &marker)
         return (result, marker)
     }
 
-    private static func check(directory: URL, marker decodedMarker: inout CompletionMarker?) -> ValidationResult {
+    private static func check(directory: URL, trimmed: Set<String>, marker decodedMarker: inout CompletionMarker?) -> ValidationResult {
         let markerURL = directory.appendingPathComponent("complete.json")
         guard let markerBytes = try? Data(contentsOf: markerURL) else { return .incomplete("no completion marker") }
 
@@ -44,6 +47,7 @@ public enum PackageValidator {
         for entry in marker.files {
             let url = directory.appendingPathComponent(entry.relativePath)
             var isDirectory: ObjCBool = false
+            if trimmed.contains(entry.relativePath), !fm.fileExists(atPath: url.path) { continue }
             guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
                 return .incomplete("missing \(entry.relativePath)")
             }
@@ -74,12 +78,12 @@ public enum PackageValidator {
 
 extension CommittedPackage {
     /// Non-nil only when `directory` (under `layout.root`) validates `.complete`.
-    public static func load(directory: URL, layout: StoreLayout) -> CommittedPackage? {
+    public static func load(directory: URL, layout: StoreLayout, trimmed: Set<String> = []) -> CommittedPackage? {
         let rootPath = layout.root.resolvingSymlinksInPath().standardizedFileURL.path
         let dirPath = directory.resolvingSymlinksInPath().standardizedFileURL.path
         guard dirPath.hasPrefix(rootPath + "/") else { return nil }
         let relative = String(dirPath.dropFirst(rootPath.count + 1))
-        let (result, marker) = PackageValidator.validateReturningMarker(directory: directory)
+        let (result, marker) = PackageValidator.validateReturningMarker(directory: directory, trimmed: trimmed)
         guard case .complete(let metadata, _) = result, let marker else { return nil }
         // Structural check from the recorded local date (spec §6), never from time-zone math.
         let date = metadata.localDatetime.prefix(10)

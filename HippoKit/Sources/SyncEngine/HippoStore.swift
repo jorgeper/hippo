@@ -34,6 +34,10 @@ public final class HippoStore: Sendable {
     public let enrichments: EnrichmentStore
     /// Silver enrichment work per (capture, kind).
     public let enrichmentTasks: EnrichmentTaskStore
+    /// Remote-delete tombstones, local-delete records, change cursors, review items and changed records.
+    public let remoteState: RemoteStateStore
+    /// Attachments whose local originals were trimmed after verification in the destination.
+    public let trims: TrimStore
     /// The content-free event log, in `logs/` beside the store. Shared by the app and the extension.
     public let log: ActivityLog
     private let db: Database
@@ -53,6 +57,8 @@ public final class HippoStore: Sendable {
         destinations = DestinationStore(db: db)
         enrichments = EnrichmentStore(db: db, layout: layout)
         enrichmentTasks = EnrichmentTaskStore(db: db)
+        remoteState = RemoteStateStore(db: db)
+        trims = TrimStore(db: db)
         writer = PackageWriter(layout: layout, producer: producer)
         log = ActivityLog(layout: layout, process: process)
     }
@@ -67,7 +73,7 @@ public final class HippoStore: Sendable {
     static func open(root: URL, producer: Producer, process: LogProcess = .app,
                      leaseWaitLimit: Duration, now: @escaping @Sendable () -> Date = Date.init) throws -> HippoStore {
         let layout = StoreLayout(root: root)
-        for dir in [root, layout.stagingDir, layout.capturesDir] {
+        for dir in [root, layout.stagingDir, layout.capturesDir, layout.thumbnailsDir, layout.transfersDir] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return HippoStore(layout: layout, db: try Database(url: layout.databaseURL), producer: producer,

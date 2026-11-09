@@ -201,6 +201,44 @@ public final class JobStore: Sendable {
         try db.query("SELECT * FROM jobs WHERE job_id = ?", [.text(jobID)]).first.map(Self.job)
     }
 
+    /// Records the pair as already `synced`, with no receipts (the destination was verified to hold it).
+    /// Does nothing if the pair already has a job.
+    public func insertSynced(captureID: String, destinationID: String) throws {
+        try db.execute("""
+            INSERT OR IGNORE INTO jobs(job_id, capture_id, destination_id, state, updated_at_ms)
+            VALUES (?, ?, ?, 'synced', ?)
+            """, [.text(Self.newJobID()), .text(captureID), .text(destinationID), .int(Self.ms(Date()))])
+    }
+
+    /// Deletes the job's receipts for `paths`, or all of them when `paths` is nil.
+    public func clearReceipts(jobID: String, paths: [String]?) throws {
+        guard let paths else {
+            try db.execute("DELETE FROM receipts WHERE job_id = ?", [.text(jobID)])
+            return
+        }
+        try db.transaction { tx in
+            for path in paths {
+                try tx.execute("DELETE FROM receipts WHERE job_id = ? AND relative_path = ?", [.text(jobID), .text(path)])
+            }
+        }
+    }
+
+    /// Captures with at least one job for the destination, all of whose jobs for it are `synced`.
+    public func capturesFullySynced(destinationID: String) throws -> Set<String> {
+        Set(try db.query("""
+            SELECT DISTINCT capture_id FROM jobs WHERE destination_id = ?
+              AND capture_id NOT IN (SELECT capture_id FROM jobs WHERE destination_id = ? AND state <> 'synced')
+            """, [.text(destinationID), .text(destinationID)]).compactMap { $0.string("capture_id") })
+    }
+
+    /// Returns the job to `pending` from any state: lease and retry time cleared, `cancel_requested` untouched.
+    public func requeue(jobID: String) throws {
+        try db.execute("""
+            UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at_ms = NULL,
+              next_attempt_at_ms = NULL, updated_at_ms = ? WHERE job_id = ?
+            """, [.int(Self.ms(Date())), .text(jobID)])
+    }
+
     // MARK: Receipts and checkpoints
 
     public func saveReceipt(jobID: String, _ r: StoredReceipt) throws {

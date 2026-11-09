@@ -13,9 +13,9 @@ private func prepared() throws -> URL {
     @Test func migratesOnceAndIsIdempotent() throws {
         let url = try prepared()
         let first = try Database(url: url)
-        #expect(try first.query("PRAGMA user_version")[0].int("user_version") == 3)
+        #expect(try first.query("PRAGMA user_version")[0].int("user_version") == 4)
         let second = try Database(url: url)
-        #expect(try second.query("PRAGMA user_version")[0].int("user_version") == 3)
+        #expect(try second.query("PRAGMA user_version")[0].int("user_version") == 4)
         #expect(try second.query("SELECT count(*) AS n FROM sqlite_master WHERE name = 'captures'")[0].int("n") == 1)
     }
 
@@ -110,7 +110,7 @@ private func prepared() throws -> URL {
             for try await v in group { out.append(v) }
             return out
         }
-        #expect(versions == [3, 3])
+        #expect(versions == [4, 4])
     }
 
     @Test func fileDatabaseUsesWAL() throws {
@@ -152,7 +152,7 @@ private func prepared() throws -> URL {
         #expect(try v2.query("PRAGMA user_version")[0].int("user_version") == 2)
 
         let upgraded = try Database(url: url)
-        #expect(try upgraded.query("PRAGMA user_version")[0].int("user_version") == 3)
+        #expect(try upgraded.query("PRAGMA user_version")[0].int("user_version") == 4)
         let index = CaptureIndex(db: upgraded)
         for q in ["wombat", "burrow", "example", "scan", "wombat burrow"] {
             #expect(try index.page(CaptureFilter(searchText: q), after: nil, limit: 10).map(\.id) == ["old"])
@@ -163,5 +163,30 @@ private func prepared() throws -> URL {
                 .int("n") == 0)
         #expect(try index.packageDigest(captureID: "old") == "d")
         #expect(try index.packageDigest(captureID: "missing") == nil)
+    }
+
+    @Test func migratesFromV3ToV4() throws {
+        let url = try prepared()
+        let v3 = try Database(url: url, migratingUpTo: 3)
+        try v3.execute("""
+            INSERT INTO captures(capture_id, captured_at_ms, local_day, method, content_types, title, note_excerpt,
+              has_comment, has_location, attachment_count, primary_attachment_path, relative_directory,
+              package_digest, registered_at_ms, utc_offset_seconds)
+              VALUES ('old',1,'2026-11-07','typed_note',',text,','t',NULL,0,0,0,NULL,'captures/x','d',1,0)
+            """)
+        try v3.execute("INSERT INTO destinations VALUES ('d','fs','a','/','n','active',1)")
+        try v3.execute("INSERT INTO jobs(job_id, capture_id, destination_id, state, updated_at_ms) VALUES ('j','old','d','pending',1)")
+        #expect(try v3.query("PRAGMA user_version")[0].int("user_version") == 3)
+
+        let upgraded = try Database(url: url)
+        #expect(try upgraded.query("PRAGMA user_version")[0].int("user_version") == 4)
+        for table in ["remote_tombstones", "local_deletes", "remote_cursors", "remote_review_items", "remote_changed",
+                      "trimmed_attachments"] {
+            #expect(try upgraded.query("SELECT count(*) AS n FROM sqlite_master WHERE name = ?", [.text(table)])[0]
+                    .int("n") == 1, "\(table)")
+        }
+        #expect(try upgraded.query("SELECT capture_id FROM captures")[0].string("capture_id") == "old")
+        #expect(try upgraded.query("SELECT job_id FROM jobs")[0].string("job_id") == "j")
+        #expect(try upgraded.query("SELECT destination_id FROM destinations")[0].string("destination_id") == "d")
     }
 }

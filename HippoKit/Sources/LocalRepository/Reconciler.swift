@@ -36,6 +36,7 @@ public final class Reconciler: Sendable {
         // One bad item must not stop the rest of the run: each is isolated, counted and logged with a
         // fixed string (never IDs, paths or error text).
         removeAbandonedStaging(into: &report)
+        removeStaleTransfers(into: &report)
 
         // `failed` counts failed operations: a persistent DB failure counts once per listing and per register.
         // Drop rows whose package is gone, so the walk below can re-register a package that came back.
@@ -83,6 +84,28 @@ public final class Reconciler: Sendable {
 
     /// A log upload copies one file and uploads it; ten minutes is far beyond any live one.
     static let logSnapshotMaxAge: TimeInterval = 600
+
+    /// A transfer file untouched for this long was left by a download that will not resume.
+    static let transferMaxAge: TimeInterval = 7 * 86_400
+
+    /// Removes regular files directly under `transfers/` older than `transferMaxAge`. Nothing else.
+    private func removeStaleTransfers(into report: inout RecoveryReport) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: layout.transfersDir.path) else { return }
+        for name in names.sorted() {
+            let file = layout.transfersDir.appendingPathComponent(name)
+            guard let attributes = try? fm.attributesOfItem(atPath: file.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  let modified = attributes[.modificationDate] as? Date,
+                  Date().timeIntervalSince(modified) > Self.transferMaxAge else { continue }
+            do {
+                try fm.removeItem(at: file)
+                report.removedStaging += 1
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                // Already gone.
+            } catch { itemFailed(&report) }
+        }
+    }
 
     /// Deletes every `staging/<id>` whose lock is free, and lock files with no directory. A lock held
     /// by a live writer (a package writer, or a gold pull's `staging/gold-<uuid>`) means "skip".
