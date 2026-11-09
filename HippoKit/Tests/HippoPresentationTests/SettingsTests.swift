@@ -503,6 +503,21 @@ struct SettingsTests {
         #expect(h.model.summary == "All captures synced")
     }
 
+    @Test func coordinatorExposesNextRetry() async throws {
+        let faults = FaultPlan()
+        let h = try Harness(faults: faults)
+        defer { h.cleanup() }
+        #expect(await h.coordinator.nextRetryAt() == nil)
+        let p = try await h.t.note("offline", at: start)
+        let first = try #require(p.marker.files.first { $0.relativePath != "complete.json" })
+        faults.failBeforeWrite("\(p.relativeDirectory)/\(first.relativePath)", .offline)
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        _ = await h.coordinator.syncNow()
+        #expect(try h.states(p) == [.retryableFailure])
+        let next = try #require(await h.coordinator.nextRetryAt())
+        #expect(next > Date())
+    }
+
     @Test func uploadExistingCopiesToNewDestination() async throws {
         let h = try Harness()
         defer { h.cleanup() }

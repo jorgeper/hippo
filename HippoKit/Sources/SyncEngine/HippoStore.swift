@@ -146,9 +146,11 @@ public final class HippoStore: Sendable {
 
     /// Uploads the event log's segment files to `logs/<installID>/` on the active destination.
     public func makeLogUploader(installID: String,
-                                adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+                                adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
+                                isConstrained: @escaping @Sendable () -> Bool = { false })
         -> LogUploader {
-        LogUploader(layout: layout, log: log, destinations: destinations, installID: installID, adapterFor: adapterFor)
+        LogUploader(layout: layout, log: log, destinations: destinations, installID: installID, adapterFor: adapterFor,
+                    isConstrained: isConstrained)
     }
 
     /// Pulls gold enrichment from the active destination's `enrichments/server/` tree, with the default clock.

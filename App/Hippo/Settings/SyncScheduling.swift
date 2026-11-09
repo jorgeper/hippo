@@ -118,6 +118,45 @@ enum SyncScheduling {
         }
     }
 
+    /// Runs a pass, then enrichment, when the network comes back while the app is in the foreground.
+    /// Call once from `App.init`.
+    static func startConnectivityTrigger(_ environment: AppEnvironment) {
+        guard let coordinator = environment.coordinator else { return }
+        NetworkStatus.shared.onChange = { online in
+            guard online else { return }
+            Task { @MainActor in
+                guard UIApplication.shared.applicationState == .active else { return }
+                await runPass(coordinator, name: "connectivity-sync", trigger: "connectivity")
+                await EnrichmentScheduling.run(environment, reason: "connectivity")
+            }
+        }
+    }
+
+    /// The one pending foreground retry.
+    @MainActor private static var retryTask: Task<Void, Never>?
+    private static let minRetryDelay: TimeInterval = 5
+    private static let maxRetryDelay: TimeInterval = 3600
+
+    /// Replaces the pending retry: sleeps until the earliest waiting `retryable_failure` job is due
+    /// (clamped to 5 s ... 1 h), then runs a pass. Call on activation and after every pass.
+    @MainActor static func scheduleForegroundRetry(_ environment: AppEnvironment) {
+        retryTask?.cancel()
+        retryTask = nil
+        guard let coordinator = environment.coordinator else { return }
+        retryTask = Task {
+            guard let due = await coordinator.nextRetryAt() else { return }
+            let delay = max(minRetryDelay, min(maxRetryDelay, due.timeIntervalSinceNow))
+            guard (try? await Task.sleep(for: .seconds(delay))) != nil else { return }
+            // Unstructured, so the `passFinished` that follows rescheduling cannot cancel the pass itself.
+            Task { await runPass(coordinator, name: "retry-sync", trigger: "retry") }
+        }
+    }
+
+    @MainActor static func cancelForegroundRetry() {
+        retryTask?.cancel()
+        retryTask = nil
+    }
+
     /// Syncs once launch recovery has registered the packages on disk.
     static func syncAfterLaunchRecovery(_ environment: AppEnvironment) async {
         guard let coordinator = environment.coordinator else { return }
@@ -133,17 +172,22 @@ private struct SyncSchedulingModifier: ViewModifier {
         content.onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
+                SyncScheduling.cancelForegroundRetry()
                 enteredBackground()
             case .active:
                 // Every activation syncs; the coordinator coalesces overlapping calls.
                 if let coordinator = environment.coordinator {
                     Task { await SyncScheduling.runPass(coordinator, name: "foreground-sync", trigger: "activation") }
                 }
+                SyncScheduling.scheduleForegroundRetry(environment)
                 // Picks up anything pending, including captures saved by the Share Extension.
                 Task { await EnrichmentScheduling.run(environment, reason: "foreground") }
             default:
                 break
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.passFinished)) { _ in
+            if scenePhase == .active { SyncScheduling.scheduleForegroundRetry(environment) }
         }
     }
 

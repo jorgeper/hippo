@@ -501,6 +501,24 @@ private struct Stores {
         #expect(try s.jobs.receipts(jobID: job.jobID) == [replaced, meta])
     }
 
+    @Test func nextAttemptAtIsEarliestRetryable() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        #expect(try s.jobs.nextAttemptAt(destinationID: "dest-a") == nil)
+        let ids = [try await s.capture("a"), try await s.capture("b"), try await s.capture("c")]
+        func set(_ id: String, _ state: String, _ next: Int64) throws {
+            try s.h.db.execute("UPDATE jobs SET state = ?, next_attempt_at_ms = ? WHERE capture_id = ?",
+                               [.text(state), .int(next), .text(id)])
+        }
+        try set(ids[0], "retryable_failure", 1_800_000_200_000)
+        try set(ids[1], "retryable_failure", 1_800_000_100_000)
+        try set(ids[2], "blocked", 1_800_000_000_000)
+        #expect(try s.jobs.nextAttemptAt(destinationID: "dest-a") == Date(timeIntervalSince1970: 1_800_000_100))
+        #expect(try s.jobs.nextAttemptAt(destinationID: "other") == nil)
+        try s.h.db.execute("UPDATE jobs SET state = 'synced' WHERE state = 'retryable_failure'")
+        #expect(try s.jobs.nextAttemptAt(destinationID: "dest-a") == nil)
+    }
+
     @Test func retryNowResetsBlockedAndRetryableButNotCancelled() async throws {
         let s = try Stores(); defer { s.h.cleanup() }
         _ = try s.destinations.connect(destination("d1", account: "a"))

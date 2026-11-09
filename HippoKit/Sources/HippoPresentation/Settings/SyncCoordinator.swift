@@ -46,14 +46,22 @@ public actor SyncCoordinator {
     public var isBusy: Bool { running != nil || pending != nil }
 
     public init(store: HippoStore, registry: ProviderRegistry, ownerPrefix: String, appVersion: String,
-                settings: AppSettings) {
+                settings: AppSettings, isConstrained: @escaping @Sendable () -> Bool = { false }) {
         self.store = store
         self.settings = settings
         self.appVersion = appVersion
         worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix)
         uploader = store.makeEnrichmentUploader(adapterFor: { try registry.adapter(for: $0) })
         puller = store.makeGoldPuller(adapterFor: { try registry.adapter(for: $0) })
-        logUploader = store.makeLogUploader(installID: settings.installID, adapterFor: { try registry.adapter(for: $0) })
+        logUploader = store.makeLogUploader(installID: settings.installID, adapterFor: { try registry.adapter(for: $0) },
+                                          isConstrained: isConstrained)
+    }
+
+    /// When the earliest waiting retry of the connected destination is due, or nil when nothing waits
+    /// or nothing is connected.
+    public func nextRetryAt() -> Date? {
+        guard let active = try? store.destinations.active() else { return nil }
+        return try? store.jobs.nextAttemptAt(destinationID: active.id)
     }
 
     /// Runs a pass, or joins the follow-up pass when one is already running, and returns that pass's

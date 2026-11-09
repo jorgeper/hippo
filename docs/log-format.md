@@ -46,7 +46,7 @@ Keys are snake_case; absent values are omitted, never `null`.
 | `attempt` | int | Attempt number |
 | `count` | int | A count (items processed, queued, uploaded) |
 | `ms` | int | Duration in milliseconds |
-| `trigger` | string | What started it: capture method (`note`, `recording`, `share_extension`, `import`), or a sync trigger (`launch` after launch recovery, `activation`, `bg`, `manual`, `after_save`, `enrichment` after enrichment ran, to upload its results) |
+| `trigger` | string | What started it: capture method (`note`, `recording`, `share_extension`, `import`), or a sync trigger (`launch` after launch recovery, `activation`, `bg`, `manual`, `connectivity` when the network came back, `retry` after a failed upload's wait, `after_save`, `enrichment` after enrichment ran, to upload its results) |
 | `dest` | string | The destination's provider kind (`filesystem`, `dropbox`); never an account or destination ID |
 | `on` | bool | New state of a switch, for `settings.changed`; for `gold.pull`, true when the server reset the change cursor and the pull listed everything again |
 | `phase` | string | `start`, `end` or `expired`, for `sync.pass`, `enrich.pass`, `bg.task` |

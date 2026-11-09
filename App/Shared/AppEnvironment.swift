@@ -82,7 +82,8 @@ struct AppEnvironment: Sendable {
             let registry = processKind == .app ? ProviderRegistry(providers) : nil
             let coordinator = registry.map {
                 SyncCoordinator(store: store, registry: $0, ownerPrefix: "app", appVersion: producer.appVersion,
-                                settings: LocationService.settings)
+                                settings: LocationService.settings,
+                                isConstrained: { NetworkStatus.shared.isExpensive })
             }
             return .success(AppEnvironment(processKind: processKind, storeRoot: storeRoot, producer: producer,
                                            store: store, intake: IntakeDirectory(storeRoot: storeRoot),

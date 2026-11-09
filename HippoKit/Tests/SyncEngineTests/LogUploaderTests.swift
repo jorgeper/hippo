@@ -81,10 +81,13 @@ private struct Setup {
         try fh.seekToEnd()
         try fh.write(contentsOf: Data(text.utf8))
     }
-    func uploader(_ adapter: (any StorageAdapter)? = nil, max: Int = 5) -> LogUploader {
+    func uploader(_ adapter: (any StorageAdapter)? = nil, max: Int = 5,
+                  isConstrained: @escaping @Sendable () -> Bool = { false },
+                  now: @escaping @Sendable () -> Date = Date.init) -> LogUploader {
         let a: any StorageAdapter = adapter ?? h.adapter
         return LogUploader(layout: h.layout, log: h.log, destinations: h.destinations, installID: installID,
-                           adapterFor: { _ in a }, maxFilesPerPass: max)
+                           adapterFor: { _ in a }, maxFilesPerPass: max, isConstrained: isConstrained,
+                           constrainedMinInterval: 900, now: now)
     }
 }
 
@@ -153,6 +156,30 @@ private struct Setup {
         #expect(await up.upload().uploaded == 0)
         let second = try #require(LogUploader.lastResult(layout: s.h.layout)).at
         #expect(second > first)
+    }
+
+    @Test func cellularThrottleSkipsWithinInterval() async throws {
+        let s = try Setup(); defer { s.h.cleanup() }
+        try s.write("2026-11-08.jsonl", "{\"a\":1}\n")
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        // A first, unconstrained pass at t0 records last_at and uploads the file.
+        #expect(await s.uploader(now: { t0 }).upload() == LogUploadResult(uploaded: 1, code: nil))
+        try s.append("2026-11-08.jsonl", "{\"b\":2}\n")
+        let stateURL = s.h.layout.logsDir.appendingPathComponent("upload-state.json")
+        let before = try Data(contentsOf: stateURL)
+
+        let soon = s.uploader(isConstrained: { true }, now: { t0.addingTimeInterval(60) })
+        #expect(await soon.upload() == LogUploadResult(uploaded: 0, code: "throttled"))
+        #expect(try Data(contentsOf: stateURL) == before)
+        #expect(try Data(contentsOf: s.remote("2026-11-08.jsonl")) != Data(contentsOf: s.local("2026-11-08.jsonl")))
+
+        let later = s.uploader(isConstrained: { true }, now: { t0.addingTimeInterval(1000) })
+        #expect(await later.upload() == LogUploadResult(uploaded: 1, code: nil))
+
+        // Unconstrained passes are never throttled.
+        try s.append("2026-11-08.jsonl", "{\"c\":3}\n")
+        let free = s.uploader(isConstrained: { false }, now: { t0.addingTimeInterval(1001) })
+        #expect(await free.upload() == LogUploadResult(uploaded: 1, code: nil))
     }
 
     @Test func respectsMaxFilesPerPass() async throws {

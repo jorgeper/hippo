@@ -164,22 +164,3 @@ enum EnrichmentScheduling {
         return Set(kinds.filter { settings.isEnrichmentEnabled($0) })
     }
 }
-
-/// Whether the device has a usable network path, from one process-wide `NWPathMonitor`. Optimistic
-/// until the first update: a fetch made offline defers itself without spending an attempt.
-/// `@unchecked`: the monitor is touched only in `init`; the status is behind a lock.
-final class NetworkStatus: @unchecked Sendable {
-    static let shared = NetworkStatus()
-
-    private let monitor = NWPathMonitor()
-    private let online = OSAllocatedUnfairLock(initialState: true)
-
-    private init() {
-        monitor.pathUpdateHandler = { [online] path in
-            online.withLock { $0 = path.status == .satisfied }
-        }
-        monitor.start(queue: DispatchQueue(label: "com.jorgeper.hippo.network-status", qos: .utility))
-    }
-
-    var isOnline: Bool { online.withLock { $0 } }
-}
