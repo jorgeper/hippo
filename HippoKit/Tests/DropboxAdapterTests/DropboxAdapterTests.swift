@@ -9,8 +9,8 @@ private struct Harness {
     let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-dbx-\(UUID().uuidString)")
     let adapter: DropboxAdapter
 
-    init(root: String = "", cutoff: Int64 = 8 << 20, chunk: Int64 = 8 << 20) {
-        adapter = DropboxAdapter(client: makeClient(api: api), accountID: "dbid:acct", rootPrefix: root,
+    init(root: String = "", cutoff: Int64 = 8 << 20, chunk: Int64 = 8 << 20, uploads: ScriptedTransport? = nil) {
+        adapter = DropboxAdapter(client: makeClient(api: api, uploadTransport: uploads), accountID: "dbid:acct", rootPrefix: root,
                                  scratchDirectory: scratch.appendingPathComponent("chunks"),
                                  singleRequestCutoff: cutoff, chunkSize: chunk)
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -197,6 +197,28 @@ private final class Saved: @unchecked Sendable {
         // Chunk slices are removed after each request.
         let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: h.scratch.appendingPathComponent("chunks").path)) ?? []
         #expect(leftovers.isEmpty)
+    }
+
+    /// A cancelled background append may still be read by the system, so its slice is left to the
+    /// transport; a foreground one is deleted at once.
+    @Test func cancelledBackgroundAppendLeavesItsSliceToTheTransport() async throws {
+        for background in [true, false] {
+            let uploads = ScriptedTransport()
+            let h = Harness(cutoff: 1024, chunk: 1024, uploads: background ? uploads : nil)
+            let (url, integrity) = try h.file("big.bin", bytes: 2048)
+            h.on("files/get_metadata", h.apiError(notFound))
+            h.on("files/upload_session/start", ScriptedTransport.json(["session_id": "S1"]))
+            (background ? uploads : h.api).enqueue(matching: { $0.url.path == "/2/files/upload_session/append_v2" },
+                                                   .failure(CancellationError()))
+            await #expect(throws: CancellationError.self) {
+                _ = try await h.adapter.uploadFile(localURL: url, relativePath: "captures/x", expected: integrity,
+                                                   checkpoint: nil, saveCheckpoint: noCheckpoint)
+            }
+            let append = try #require((background ? uploads : h.api).requests.last)
+            #expect(append.removesFileIfAbandoned)
+            let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: h.scratch.appendingPathComponent("chunks").path)) ?? []
+            #expect(leftovers.count == (background ? 1 : 0), "background: \(background)")
+        }
     }
 
     @Test func incorrectOffsetAdoptsCorrectOffset() async throws {

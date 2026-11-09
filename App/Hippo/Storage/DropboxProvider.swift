@@ -10,6 +10,8 @@ import HippoPresentation
 enum DropboxProviderError: Error, Equatable {
     /// The person closed the sign-in sheet or declined access: nothing to report.
     case cancelled
+    /// Dropbox's callback carried an error other than `access_denied` (its code, made safe).
+    case failed(code: String)
     /// The callback came back without an authorization code.
     case noCode
     /// There is no window to show sign-in over, or the sign-in sheet couldn't start.
@@ -59,12 +61,22 @@ final class DropboxProvider: StorageProvider {
                                             scheme: callbackScheme)
         let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems ?? []
         guard let code = items.first(where: { $0.name == "code" })?.value, !code.isEmpty else {
-            // `error=access_denied` is the person tapping Cancel on Dropbox's page.
-            if items.contains(where: { $0.name == "error" }) { throw DropboxProviderError.cancelled }
+            if let error = items.first(where: { $0.name == "error" })?.value {
+                // `access_denied` is the person tapping Cancel on Dropbox's page.
+                if error == "access_denied" { throw DropboxProviderError.cancelled }
+                throw DropboxProviderError.failed(code: Diagnostics.safeCode(error))
+            }
             throw DropboxProviderError.noCode
         }
         _ = try await auth.exchange(code: code, pkce: pkce, redirectURI: redirectURI)
-        let account = try JSONDecoder().decode(Account.self, from: try await client.rpc("users/get_current_account"))
+        let account: Account
+        do {
+            account = try JSONDecoder().decode(Account.self, from: try await client.rpc("users/get_current_account"))
+        } catch {
+            // Not connected after all: leave no tokens behind in the Keychain.
+            await auth.signOut()
+            throw error
+        }
         return Destination(id: "dropbox:\(account.account_id)", providerKind: kind,
                            accountIdentifier: account.account_id, remoteRoot: "",
                            displayName: account.name.display_name, status: .active)

@@ -10,12 +10,17 @@ public struct DropboxRequest: Sendable, CustomStringConvertible, CustomDebugStri
     public var method: String
     public var headers: [String: String]
     public var body: Body
+    /// The `.file` body is a scratch copy. A background transport whose caller stops waiting deletes it
+    /// once the system has finished reading it; otherwise it stays the caller's to delete.
+    public var removesFileIfAbandoned: Bool
 
-    public init(url: URL, method: String = "POST", headers: [String: String] = [:], body: Body = .none) {
+    public init(url: URL, method: String = "POST", headers: [String: String] = [:], body: Body = .none,
+                removesFileIfAbandoned: Bool = false) {
         self.url = url
         self.method = method
         self.headers = headers
         self.body = body
+        self.removesFileIfAbandoned = removesFileIfAbandoned
     }
 }
 

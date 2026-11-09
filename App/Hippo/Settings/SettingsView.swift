@@ -118,7 +118,7 @@ struct SettingsView: View {
                 Button("Download from \(destination.displayName)…") { downloading = true }
                     .disabled(busy)
                     .accessibilityIdentifier("settings-download")
-                if model.accountStatus == .needsSignIn, let provider = registry.provider(kind: destination.providerKind) {
+                if model.needsReconnect, let provider = registry.provider(kind: destination.providerKind) {
                     Button("Reconnect \(destination.displayName)") { connect(provider) }
                         .disabled(busy)
                         .accessibilityIdentifier("settings-reconnect")

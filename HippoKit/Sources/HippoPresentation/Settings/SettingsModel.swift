@@ -34,15 +34,16 @@ public final class SettingsModel {
     /// One line for the Sync section.
     public var summary: String {
         Self.summary(counts: counts, pendingRemoteDeletes: pendingRemoteDeletes,
-                     needsSignIn: accountStatus == .needsSignIn || needsAuthenticationJobs > 0,
+                     needsSignIn: needsReconnect,
                      reviewPending: reviewPending, destinationName: activeDestination?.displayName)
     }
 
     /// The active destination's sign-in state from its provider; set by `refresh()`.
     public private(set) var accountStatus: ProviderAccountStatus = .ok
 
-    /// The active destination's jobs waiting for a new sign-in; set by `refresh()`.
-    public private(set) var needsAuthenticationJobs = 0
+    /// The active destination's sign-in expired: its provider says so, or a job is waiting for a new
+    /// sign-in. Settings then offers "Reconnect <name>" and the summary says why; set by `refresh()`.
+    public private(set) var needsReconnect = false
 
     /// Captures in the active destination's review queue (they look different there); set by `refresh()`.
     public private(set) var reviewPending = 0
@@ -186,7 +187,7 @@ public final class SettingsModel {
         }
         loadFailed = false
         accountStatus = status
-        needsAuthenticationJobs = snapshot.needsAuthentication
+        needsReconnect = status == .needsSignIn || snapshot.needsAuthentication > 0
         activeDestination = snapshot.destination
         counts = snapshot.counts
         pendingRemoteDeletes = snapshot.pendingDeletes

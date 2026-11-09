@@ -248,11 +248,13 @@ struct SettingsTests {
         _ = try h.t.store.destinations.connect(dest)
         await h.model.refresh()
         #expect(h.model.accountStatus == .ok)
+        #expect(!h.model.needsReconnect)
         #expect(!h.model.summary.contains("Sign in again"))
 
         h.provider.setAccountStatus(.needsSignIn)
         await h.model.refresh()
         #expect(h.model.accountStatus == .needsSignIn)
+        #expect(h.model.needsReconnect)
         #expect(h.model.summary.contains("Sign in again to Developer folder"))
 
         // A job that failed for lack of sign-in says so too, even while the provider reports `.ok`.
@@ -263,6 +265,8 @@ struct SettingsTests {
         try h.t.store.jobs.markFailed(jobID: job.jobID, owner: "w", state: .needsAuthentication,
                                       errorCode: "needs_authentication", nextAttemptAt: nil)
         await h.model.refresh()
+        #expect(h.model.accountStatus == .ok)
+        #expect(h.model.needsReconnect)
         #expect(h.model.summary.contains("Sign in again to Developer folder"))
         #expect(SettingsModel.summary(counts: [:], pendingRemoteDeletes: 1, needsSignIn: true, reviewPending: 1,
                                       destinationName: "Dropbox")

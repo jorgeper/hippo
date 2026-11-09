@@ -260,9 +260,16 @@ public struct DropboxAdapter: StorageAdapter {
                 if offset < size {
                     let length = min(chunkSize, size - offset)
                     let slice = try writeSlice(of: localURL, offset: offset, length: length)
-                    defer { try? FileManager.default.removeItem(at: slice) }
+                    // A cancelled background append may still be read by the system; its transport then
+                    // deletes the slice when that upload ends. Every other outcome deletes it here.
+                    var handedOff = false
+                    defer { if !handedOff { try? FileManager.default.removeItem(at: slice) } }
                     let arg = AppendArg(cursor: SessionCursor(session_id: sessionID, offset: offset))
-                    _ = try await client.upload("files/upload_session/append_v2", arg: arg, file: slice)
+                    do { _ = try await client.upload("files/upload_session/append_v2", arg: arg, file: slice, scratchFile: true) }
+                    catch is CancellationError where client.usesBackgroundUploads {
+                        handedOff = true
+                        throw CancellationError()
+                    }
                     offset += length
                     try await save()
                 } else {
@@ -271,6 +278,8 @@ public struct DropboxAdapter: StorageAdapter {
                     return try decode(Meta.self, try await client.upload("files/upload_session/finish", arg: arg))
                 }
             } catch let e as DropboxCallError where e.status == 409 && e.tags.contains("incorrect_offset") {
+                // Also covers a background append that finished after its pass was cancelled: Dropbox's
+                // offset is then past the saved checkpoint, and the next attempt adopts it here.
                 corrections += 1
                 guard let correct = e.correctOffset, (0...size).contains(correct), corrections <= 5 else {
                     throw StorageError.checkpointExpired

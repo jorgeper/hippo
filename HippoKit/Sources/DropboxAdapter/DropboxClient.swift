@@ -63,14 +63,16 @@ public final class DropboxClient: Sendable {
     }
 
     /// Content endpoint with an optional file body; returns the response body (JSON metadata, or thumbnail bytes).
-    public func upload(_ endpoint: String, arg: some Encodable, file: URL? = nil) async throws -> Data {
+    /// `scratchFile`: see `DropboxRequest.removesFileIfAbandoned`.
+    public func upload(_ endpoint: String, arg: some Encodable, file: URL? = nil, scratchFile: Bool = false) async throws -> Data {
         let header = Self.headerJSON(try Self.encode(arg))
         let url = URL(string: Self.contentBase + endpoint)!
         let body: DropboxRequest.Body = file.map { .file($0) } ?? .none
         let viaUploadTransport = file != nil
         return try await perform(uploadTransport: viaUploadTransport) { token in
             DropboxRequest(url: url, headers: ["Authorization": "Bearer \(token)", "Dropbox-API-Arg": header,
-                                               "Content-Type": "application/octet-stream"], body: body)
+                                               "Content-Type": "application/octet-stream"], body: body,
+                           removesFileIfAbandoned: scratchFile)
         }.body
     }
 

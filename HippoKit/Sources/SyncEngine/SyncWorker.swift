@@ -67,6 +67,7 @@ public final class SyncWorker: Sendable {
     public func runOnce(maxJobs: Int = 20) async -> SyncPassResult {
         var result = SyncPassResult(synced: 0, failed: 0, idle: true)
         var claimed = 0
+        var loggedAuthExpiry = false
         while claimed < maxJobs, !Task.isCancelled {
             let next: UploadJob?
             do {
@@ -84,7 +85,13 @@ public final class SyncWorker: Sendable {
             result.idle = false
             switch await process(job) {
             case .synced: result.synced += 1
-            case .failed: result.failed += 1
+            case .failed(let authExpired):
+                result.failed += 1
+                // One `auth.refresh_failed` per pass, however many jobs found the sign-in expired.
+                if authExpired, !loggedAuthExpiry {
+                    loggedAuthExpiry = true
+                    log?.append(LogEvent(event: .authRefreshFailed, dest: destinationKind(job)))
+                }
             case .abandoned: break
             case .stopped: return result
             }
@@ -94,7 +101,11 @@ public final class SyncWorker: Sendable {
 
     // MARK: - One job
 
-    private enum Outcome { case synced, failed, abandoned, stopped }
+    private enum Outcome {
+        case synced, abandoned, stopped
+        /// `authExpired`: it failed for lack of a valid sign-in.
+        case failed(authExpired: Bool)
+    }
 
     /// The failure state and safe error code to record for a job.
     private struct Failure: Error {
@@ -256,10 +267,9 @@ public final class SyncWorker: Sendable {
         do {
             try jobs.markFailed(jobID: job.jobID, owner: leaseOwner, state: failure.state, errorCode: failure.code,
                                 nextAttemptAt: next)
-            let kind = destinationKind(job)
-            log?.append(LogEvent(event: .packageUploadFailed, captureID: job.captureID, code: failure.code, dest: kind))
-            if failure.code == "needs_authentication" { log?.append(LogEvent(event: .authRefreshFailed, dest: kind)) }
-            return .failed
+            log?.append(LogEvent(event: .packageUploadFailed, captureID: job.captureID, code: failure.code,
+                                 dest: destinationKind(job)))
+            return .failed(authExpired: failure.code == "needs_authentication")
         } catch {
             return .abandoned
         }

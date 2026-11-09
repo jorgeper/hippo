@@ -247,6 +247,17 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(FileManager.default.fileExists(atPath: pkg.directoryURL.appendingPathComponent("complete.json").path))
     }
 
+    @Test func authExpiryIsLoggedOncePerPass() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let a = try await h.capture(), b = try await h.capture()
+        h.faults.failBeforeWrite(a.metadataPath, .needsAuthentication)
+        h.faults.failBeforeWrite(b.metadataPath, .needsAuthentication)
+
+        #expect(await h.worker().runOnce().failed == 2)
+        let expired = h.log.globalEvents(limit: 10, before: nil).filter { $0.event == .authRefreshFailed }
+        #expect(expired.map(\.dest) == ["filesystem"])
+    }
+
     @Test func quotaBlocks() async throws {
         let h = try SyncHarness(); defer { h.cleanup() }
         let pkg = try await h.capture()
