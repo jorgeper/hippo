@@ -72,7 +72,7 @@ Per capture (carry `capture_id`):
 | `remote.delete` | "Delete everywhere": no `outcome` when queued, `ok` once removed in the destination, `failed` with `code` (`dest`) |
 | `remote.changed` | A file of the capture is missing or different in the destination, so it is marked changed (`dest`); `code` `unverified` when the capture's package or marker is gone there but its upload isn't verified, so it was not removed |
 | `attachment.restored` | A trimmed file was downloaded back (`dest`); `ok`, or `failed` with `code` |
-| `download.capture` | "Download from <destination>" handled the capture (`dest`): `ok` when it was downloaded and indexed as synced; `skipped` with `code` (`outside_window`: its `captured_at` is before the window; `already_present`: it is on this phone already); `failed` with `code` (`incomplete_package`: a file is missing or doesn't match the manifest; `invalid_package`: the marker or metadata is unusable or the capture is in another date's folder; or the adapter's code) |
+| `download.capture` | "Download from <destination>" handled the capture (`dest`): `ok` when it was downloaded and indexed as synced; `skipped` with `code` (`outside_window`: its `captured_at` is before the window; `already_present`: it is on this phone already, or a package is in its place that doesn't validate); `failed` with `code` (`incomplete_package`: a file is missing, over the light limit or doesn't match the manifest; `invalid_package`: the marker or metadata is unusable or the capture is in another date's folder; `index_failed`: it couldn't be indexed or its synced job or trimmed records couldn't be written, so it was undone; `download_failed`: a local file operation failed; `offline` or `needs_authentication`, which also end the run; or another adapter code such as `transient:<code>`) |
 | `gold.applied`, `gold.removed`, `gold.skipped` | Server enrichment applied, removed, or skipped (`code`) |
 
 Global (no `capture_id`):
@@ -87,7 +87,7 @@ Global (no `capture_id`):
 | `gold.pull` | A gold pull ended (`count` applied, `code`, `on` if the change cursor was reset) |
 | `remote.review` | Deletes found in the destination were not applied and wait for review (`count` captures, `dest`); `code` is `threshold` (too many at once), `root_missing` (the `captures/` folder is gone) or `cursor_reset` (the change cursor was reset and a full listing missed them) |
 | `trim.run` | Save space ended (`count` files trimmed, `bytes` freed, `code` = the last skip or stop reason, if any) |
-| `download.run` | "Download from <destination>" ended (`count` captures downloaded, `dest`, `code` = the last failure or stop reason, if any) |
+| `download.run` | "Download from <destination>" ended (`count` captures downloaded, `dest`, `code` = the last failure or stop reason, if any: a `download.capture` failure code, `cancelled`, `no_destination` when none is connected, or `unavailable` when the destination couldn't be read or opened) |
 | `app.launch` | The app launched (`code` = version-build) |
 | `settings.changed` | A switch changed (`kind`, `on`); never values such as folder names |
 | `log.truncated` | A segment reached its size cap; later events in it were dropped |

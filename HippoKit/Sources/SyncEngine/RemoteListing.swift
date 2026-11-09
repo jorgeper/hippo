@@ -56,14 +56,14 @@ public struct DownloadEstimate: Sendable, Equatable {
 struct RemoteListing: Sendable {
     /// Month folders are listed from this long before the window starts (and through this long after now),
     /// and a capture's folder may be dated this far before the window, because a folder is named by the
-    /// capture's local date.
-    static let folderSlack: TimeInterval = 86_400
+    /// capture's local date and UTC offsets span 26 hours.
+    static let folderSlack: TimeInterval = 2 * 86_400
 
     let calendar: Calendar
     let lightAttachmentLimit: Int64
 
     /// Captures with both `complete.json` and `metadata.json` in the window's month folders (all of
-    /// `captures/` when the window is everything) whose folder date is at most a day before the window.
+    /// `captures/` when the window is everything) whose folder date is at most two days before the window.
     /// Newest folder first; none is flagged locally deleted.
     func completeCaptures(window: DownloadWindow, now: Date, adapter: any StorageAdapter) async throws
         -> [DownloadCandidate] {

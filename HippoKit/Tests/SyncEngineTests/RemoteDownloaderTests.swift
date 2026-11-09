@@ -60,13 +60,24 @@ private struct Phones {
     var bAdapter: FilesystemAdapter { FilesystemAdapter(root: a.remote, faults: b.faults) }
 
     func downloader(_ adapter: (any StorageAdapter)? = nil,
-                    limit: Int64 = RemoteDownloader.defaultLightAttachmentLimit) -> RemoteDownloader {
+                    limit: Int64 = RemoteDownloader.defaultLightAttachmentLimit,
+                    recordTrim: (@Sendable (TrimmedAttachment) throws -> Void)? = nil) -> RemoteDownloader {
         let adapter: any StorageAdapter = adapter ?? bAdapter
         let clock = b.clock
         return RemoteDownloader(layout: b.layout, index: b.index, jobs: b.jobs, destinations: b.destinations,
                                 remoteState: b.remoteState, trims: b.trims, enrichments: bEnrichments,
                                 enrichmentTasks: bTasks, adapterFor: { _ in adapter }, lightAttachmentLimit: limit,
-                                calendar: utcCalendar, now: { clock.now }, log: b.log)
+                                calendar: utcCalendar, now: { clock.now }, log: b.log, recordTrim: recordTrim)
+    }
+
+    /// Copies A's local package to B's `captures/` without indexing it, as a crash between the move and the
+    /// index row leaves it, dropping the files at `dropping` (package-relative).
+    func prePlace(_ p: CommittedPackage, dropping: [String] = []) throws -> URL {
+        let placed = b.layout.packageURL(relativeDirectory: p.relativeDirectory)
+        try FileManager.default.createDirectory(at: placed.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: a.layout.packageURL(relativeDirectory: p.relativeDirectory), to: placed)
+        for path in dropping { try FileManager.default.removeItem(at: placed.appendingPathComponent(path)) }
+        return placed
     }
 
     /// A capture on phone A `daysAgo` days before the shared clock's now.
@@ -234,10 +245,11 @@ private struct Phones {
         let bRow = try #require(try s.b.index.page(CaptureFilter(), after: nil, limit: 10).first)
         #expect(bRow == aRow)
 
-        // B's sync pass uploads nothing.
-        let before = s.b.faults.operations.count
+        // B's sync pass has nothing to do in the destination: no inspect, no upload.
+        let before = s.b.faults.operations
         _ = await s.b.worker(s.bAdapter).runOnce()
-        #expect(s.b.faults.operations.dropFirst(before).filter { $0.hasPrefix("upload ") }.isEmpty)
+        #expect(s.b.faults.operations == before)
+        #expect(try s.b.jobs.jobs(captureID: id).map(\.state) == [.synced])
 
         let events = s.bEvents(id)
         #expect(!events.contains { $0.event == .captureSaved })
@@ -279,6 +291,87 @@ private struct Phones {
         let thumb = try Data(contentsOf: s.b.layout.thumbnailURL(attachmentID: attachment.attachmentID))
         #expect(thumb.starts(with: [0xFF, 0xD8]))
         #expect(try s.b.index.relativeDirectory(captureID: p.metadata.captureID) == p.relativeDirectory)
+    }
+
+    @Test func failedTrimRecordUndoesTheCapture() async throws {
+        let s = try Phones(); defer { s.cleanup() }
+        let p = try await s.capture(daysAgo: 10, image: try noisyPNG(side: 64))
+        await s.uploadFromA()
+        struct Boom: Error {}
+        let d = s.downloader(limit: 4096, recordTrim: { _ in throw Boom() })
+
+        try s.expectNotDownloaded(try await s.download(30 * day, d), p, code: "index_failed")
+        #expect(try s.b.jobs.jobs(captureID: p.metadata.captureID).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: s.b.layout.packageURL(relativeDirectory: p.relativeDirectory).path))
+        #expect(!FileManager.default.fileExists(
+            atPath: s.b.layout.thumbnailURL(attachmentID: p.metadata.attachments[0].attachmentID).path))
+    }
+
+    @Test func prePlacedPackageWithoutIndexRowIsRegistered() async throws {
+        let s = try Phones(); defer { s.cleanup() }
+        let p = try await s.capture(daysAgo: 10, image: try noisyPNG(side: 64))
+        await s.uploadFromA()
+        let attachment = p.metadata.attachments[0]
+        _ = try s.prePlace(p, dropping: [attachment.relativePath])
+
+        let r = try await s.download(30 * day, s.downloader(limit: 4096))
+
+        #expect(r == DownloadResult(downloaded: 1, skipped: 0, failed: 0, code: nil))
+        #expect(try s.b.index.relativeDirectory(captureID: p.metadata.captureID) == p.relativeDirectory)
+        #expect(try s.b.jobs.jobs(captureID: p.metadata.captureID).map(\.state) == [.synced])
+        let trimmed = try s.b.trims.trimmed(captureID: p.metadata.captureID)
+        #expect(trimmed.map(\.relativePath) == [attachment.relativePath])
+        #expect(trimmed.map(\.sha256) == [attachment.sha256])
+        #expect(FileManager.default.fileExists(atPath: s.b.layout.thumbnailURL(attachmentID: attachment.attachmentID).path))
+        // Only the metadata was fetched: the package already here was used as it is.
+        #expect(s.b.faults.operations.filter { $0.hasPrefix("download captures/") } == ["download \(p.metadataPath)"])
+    }
+
+    @Test func prePlacedFullPackageRecordsNoTrims() async throws {
+        let s = try Phones(); defer { s.cleanup() }
+        let p = try await s.capture(daysAgo: 10, image: try noisyPNG(side: 64))
+        await s.uploadFromA()
+        _ = try s.prePlace(p)
+
+        let r = try await s.download(30 * day, s.downloader(limit: 4096))
+        #expect(r.downloaded == 1)
+        #expect(try s.b.trims.trimmed(captureID: p.metadata.captureID).isEmpty)
+    }
+
+    @Test func invalidPrePlacedPackageIsLeftAndSkipped() async throws {
+        let s = try Phones(); defer { s.cleanup() }
+        let p = try await s.capture(daysAgo: 10)
+        await s.uploadFromA()
+        let placed = try s.prePlace(p, dropping: ["complete.json"])
+
+        let r = try await s.download()
+        #expect(r == DownloadResult(downloaded: 0, skipped: 1, failed: 0, code: nil))
+        #expect(try s.b.index.relativeDirectory(captureID: p.metadata.captureID) == nil)
+        #expect(FileManager.default.fileExists(atPath: placed.appendingPathComponent("metadata.json").path))
+        let event = try #require(s.bEvents(p.metadata.captureID).last { $0.event == .downloadCapture })
+        #expect(event.code == "already_present")
+    }
+
+    @Test func lightCapComesFromTheLimitNotJustTheManifest() async throws {
+        let s = try Phones(); defer { s.cleanup() }
+        let p = try await s.capture(daysAgo: 10, attachmentBytes: 10_240)
+        await s.uploadFromA()
+        // The metadata claims a small attachment; the manifest (and the file) say 10 KiB.
+        let metadataURL = s.a.remote.appendingPathComponent(p.metadataPath)
+        var json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: metadataURL)) as? [String: Any])
+        var attachments = try #require(json["attachments"] as? [[String: Any]])
+        attachments[0]["byte_count"] = 100
+        json["attachments"] = attachments
+        try JSONSerialization.data(withJSONObject: json).write(to: metadataURL)
+        let completed = Seen()
+        let attachmentPath = p.attachmentPath
+        let adapter = HookedAdapter(inner: s.bAdapter, afterDownload: { path in
+            if path == attachmentPath { completed.add([1]) }
+        })
+
+        try s.expectNotDownloaded(try await s.download(30 * day, s.downloader(adapter, limit: 4096)), p,
+                                  code: "incomplete_package")
+        #expect(completed.all.isEmpty)
     }
 
     @Test func incompleteRemotePackageIsSkippedAndNotIndexed() async throws {

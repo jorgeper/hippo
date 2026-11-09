@@ -52,13 +52,27 @@ public final class RemoteDownloader: Sendable {
     private let listing: RemoteListing
     private let now: @Sendable () -> Date
     private let log: ActivityLog?
+    /// Records a trimmed attachment. `trims.record` unless a test replaces it.
+    private let recordTrim: @Sendable (TrimmedAttachment) throws -> Void
 
-    public init(layout: StoreLayout, index: CaptureIndex, jobs: JobStore, destinations: DestinationStore,
-                remoteState: RemoteStateStore, trims: TrimStore, enrichments: EnrichmentStore,
-                enrichmentTasks: EnrichmentTaskStore,
-                adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
-                lightAttachmentLimit: Int64 = defaultLightAttachmentLimit, calendar: Calendar = .current,
-                now: @escaping @Sendable () -> Date = Date.init, log: ActivityLog? = nil) {
+    public convenience init(layout: StoreLayout, index: CaptureIndex, jobs: JobStore, destinations: DestinationStore,
+                            remoteState: RemoteStateStore, trims: TrimStore, enrichments: EnrichmentStore,
+                            enrichmentTasks: EnrichmentTaskStore,
+                            adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
+                            lightAttachmentLimit: Int64 = defaultLightAttachmentLimit, calendar: Calendar = .current,
+                            now: @escaping @Sendable () -> Date = Date.init, log: ActivityLog? = nil) {
+        self.init(layout: layout, index: index, jobs: jobs, destinations: destinations, remoteState: remoteState,
+                  trims: trims, enrichments: enrichments, enrichmentTasks: enrichmentTasks, adapterFor: adapterFor,
+                  lightAttachmentLimit: lightAttachmentLimit, calendar: calendar, now: now, log: log, recordTrim: nil)
+    }
+
+    /// `recordTrim` replaces `trims.record`, for tests only.
+    init(layout: StoreLayout, index: CaptureIndex, jobs: JobStore, destinations: DestinationStore,
+         remoteState: RemoteStateStore, trims: TrimStore, enrichments: EnrichmentStore,
+         enrichmentTasks: EnrichmentTaskStore, adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
+         lightAttachmentLimit: Int64, calendar: Calendar, now: @escaping @Sendable () -> Date, log: ActivityLog?,
+         recordTrim: (@Sendable (TrimmedAttachment) throws -> Void)?) {
+        self.recordTrim = recordTrim ?? { [trims] in try trims.record($0) }
         self.layout = layout
         self.index = index
         self.jobs = jobs
@@ -80,7 +94,7 @@ public final class RemoteDownloader: Sendable {
     /// everything) and returns the complete captures that aren't indexed here and have no pending remote
     /// delete. Captures removed with "Delete from iPhone" are counted, and listed only when included.
     /// Newest folder first. The window is checked against `captured_at` only when downloading; here a
-    /// folder dated up to a day before it still counts.
+    /// folder dated up to two days before it still counts.
     public func estimate(window: DownloadWindow, includeLocallyDeleted: Bool) async throws -> DownloadEstimate {
         guard let active = try destinations.active() else {
             return DownloadEstimate(candidates: [], skippedLocallyDeleted: 0, bytes: 0, count: 0)
@@ -185,7 +199,6 @@ public final class RemoteDownloader: Sendable {
         }
         let work = staging.appendingPathComponent(c.captureID, isDirectory: true)
         let target = layout.packageURL(relativeDirectory: c.relativeDirectory)
-        let remote = c.relativeDirectory + "/"
         let package: CommittedPackage
         let large: [Attachment]
         do {
@@ -195,50 +208,53 @@ public final class RemoteDownloader: Sendable {
 
             // The metadata first: the window applies to `captured_at`, not to the folder's date.
             let metadataURL = work.appendingPathComponent("metadata.json")
-            try await fetch(remote + "metadata.json", to: metadataURL, maxBytes: maxPackageDocumentBytes, adapter)
+            try await fetch(c.relativeDirectory + "/metadata.json", to: metadataURL, maxBytes: maxPackageDocumentBytes,
+                            adapter)
             guard let metadata = try? HippoJSON.decodeMetadata(Data(contentsOf: metadataURL)) else {
                 throw Rejected(code: "invalid_package")
             }
             if let cutoff, metadata.capturedAt < cutoff { return .skipped("outside_window") }
 
-            let markerURL = work.appendingPathComponent("complete.json")
-            try await fetch(remote + "complete.json", to: markerURL, maxBytes: maxPackageDocumentBytes, adapter)
-            large = metadata.attachments.filter { $0.byteCount > lightAttachmentLimit }
-            let largePaths = Set(large.map(\.relativePath))
-            // An undecodable marker downloads nothing more; the validator rejects it below.
-            let marker = try? HippoJSON.decodeMarker(Data(contentsOf: markerURL))
-            for entry in marker?.files ?? [] where entry.relativePath != "metadata.json"
-                && !largePaths.contains(entry.relativePath) {
-                // Checked before anything is written: a remote manifest must not place files outside `work`.
-                guard (try? PackagePath.validateRelative(entry.relativePath)) != nil else {
+            let largeInMetadata = metadata.attachments.filter { $0.byteCount > lightAttachmentLimit }
+            let largePaths = Set(largeInMetadata.map(\.relativePath))
+
+            let loaded: CommittedPackage
+            let placedHere: Bool
+            if fm.fileExists(atPath: target.path) {
+                // Left by a run that stopped between the move and the index row: used as it is if it validates.
+                guard let existing = CommittedPackage.load(directory: target, layout: layout, trimmed: largePaths)
+                else { return .skipped("already_present") }
+                loaded = existing
+                placedHere = false
+            } else {
+                try await downloadLight(c, metadataURL: metadataURL, largePaths: largePaths, work: work, adapter)
+                try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.moveItem(at: work, to: target)
+                placedHere = true
+                // From here the capture is on this phone: cancellation no longer drops it.
+                guard let moved = CommittedPackage.load(directory: target, layout: layout, trimmed: largePaths) else {
+                    try? fm.moveItem(at: target, to: work)
                     throw Rejected(code: "invalid_package")
                 }
-                let local = work.appendingPathComponent(entry.relativePath)
-                try fm.createDirectory(at: local.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try await fetch(remote + entry.relativePath, to: local, maxBytes: max(entry.byteCount, 0), adapter)
+                loaded = moved
             }
-
-            switch PackageValidator.validate(directory: work, trimmed: largePaths) {
-            case .complete(let validated, _):
-                guard Self.expectedDirectory(validated) == c.relativeDirectory else {
-                    throw Rejected(code: "invalid_package")
-                }
-            case .incomplete: throw Rejected(code: "incomplete_package")
-            case .corrupt, .unsupportedSchema: throw Rejected(code: "invalid_package")
-            }
-
-            if fm.fileExists(atPath: target.path) { return .skipped("already_present") }
-            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.moveItem(at: work, to: target)
-            // From here the capture is on this phone: cancellation no longer drops it.
-            guard let loaded = CommittedPackage.load(directory: target, layout: layout, trimmed: largePaths) else {
-                try? fm.moveItem(at: target, to: work)
-                throw Rejected(code: "invalid_package")
+            // Large attachments the package doesn't hold (a pre-placed one may hold them all).
+            large = largeInMetadata.filter {
+                !fm.fileExists(atPath: target.appendingPathComponent($0.relativePath).path)
             }
             do {
                 _ = try index.register(loaded, noteBody: loaded.noteBody())
             } catch {
-                try? fm.moveItem(at: target, to: work)
+                if placedHere { try? fm.moveItem(at: target, to: work) }
+                throw Rejected(code: "index_failed")
+            }
+            // Without its synced job it would be uploaded again, and without its trimmed rows its large
+            // files could never be restored: then the capture is undone, as if never downloaded.
+            do {
+                try record(loaded, large: large, destination: destination)
+            } catch {
+                try? index.remove(captureID: c.captureID)
+                if placedHere { try? fm.moveItem(at: target, to: work) }
                 throw Rejected(code: "index_failed")
             }
             package = loaded
@@ -256,6 +272,50 @@ public final class RemoteDownloader: Sendable {
 
         await settle(package, large: large, destination: destination, adapter: adapter, staging: staging)
         return .downloaded
+    }
+
+    /// Downloads `complete.json` and every manifest file but the large attachments into `work`, then checks
+    /// it by the reader algorithm and against the directory it came from.
+    private func downloadLight(_ c: DownloadCandidate, metadataURL: URL, largePaths: Set<String>, work: URL,
+                               _ adapter: any StorageAdapter) async throws {
+        let fm = FileManager.default
+        let remote = c.relativeDirectory + "/"
+        let markerURL = work.appendingPathComponent("complete.json")
+        try await fetch(remote + "complete.json", to: markerURL, maxBytes: maxPackageDocumentBytes, adapter)
+        // An undecodable marker downloads nothing more; the validator rejects it below.
+        let marker = try? HippoJSON.decodeMarker(Data(contentsOf: markerURL))
+        for entry in marker?.files ?? [] where entry.relativePath != "metadata.json"
+            && !largePaths.contains(entry.relativePath) {
+            // Checked before anything is written: a remote manifest must not place files outside `work`.
+            guard (try? PackagePath.validateRelative(entry.relativePath)) != nil else {
+                throw Rejected(code: "invalid_package")
+            }
+            let local = work.appendingPathComponent(entry.relativePath)
+            try fm.createDirectory(at: local.deletingLastPathComponent(), withIntermediateDirectories: true)
+            // Never more than the light limit, whatever the manifest says: a file the metadata calls small
+            // but the manifest calls large stays in the destination, and the package is incomplete.
+            try await fetch(remote + entry.relativePath, to: local,
+                            maxBytes: min(max(entry.byteCount, 0), lightAttachmentLimit), adapter)
+        }
+
+        switch PackageValidator.validate(directory: work, trimmed: largePaths) {
+        case .complete(let validated, _):
+            guard Self.expectedDirectory(validated) == c.relativeDirectory else {
+                throw Rejected(code: "invalid_package")
+            }
+        case .incomplete: throw Rejected(code: "incomplete_package")
+        case .corrupt, .unsupportedSchema: throw Rejected(code: "invalid_package")
+        }
+    }
+
+    /// The synced job and the trimmed rows of a capture just indexed. Any failure is the caller's to undo.
+    private func record(_ p: CommittedPackage, large: [Attachment], destination: Destination) throws {
+        try jobs.insertSynced(captureID: p.metadata.captureID, destinationID: destination.id)
+        for a in large {
+            try recordTrim(TrimmedAttachment(captureID: p.metadata.captureID, attachmentID: a.attachmentID,
+                                             relativePath: a.relativePath, byteCount: a.byteCount, sha256: a.sha256,
+                                             destinationID: destination.id, state: .trimmed, trimmedAt: now()))
+        }
     }
 
     /// Downloads one package file. A missing or oversized file means the package is incomplete.
@@ -277,23 +337,12 @@ public final class RemoteDownloader: Sendable {
                                             localDate: DateComponents(year: y, month: mo, day: d))
     }
 
-    /// The bookkeeping of a capture that is now indexed: synced job, trimmed records and thumbnails, the
-    /// local-delete record, then enrichment. A failure here is logged and leaves the capture downloaded.
+    /// What follows a capture's records: thumbnails of its large attachments, the local-delete record, then
+    /// enrichment. A failure here is logged and leaves the capture downloaded.
     private func settle(_ p: CommittedPackage, large: [Attachment], destination: Destination,
                         adapter: any StorageAdapter, staging: URL) async {
         let captureID = p.metadata.captureID
-        do { try jobs.insertSynced(captureID: captureID, destinationID: destination.id) } catch {
-            Self.osLog.error("\("download_job_failed", privacy: .public)")
-        }
         for a in large {
-            do {
-                try trims.record(TrimmedAttachment(captureID: captureID, attachmentID: a.attachmentID,
-                                                   relativePath: a.relativePath, byteCount: a.byteCount,
-                                                   sha256: a.sha256, destinationID: destination.id, state: .trimmed,
-                                                   trimmedAt: now()))
-            } catch {
-                Self.osLog.error("\("download_trim_record_failed", privacy: .public)")
-            }
             // The ID names a local file, so it must be a plain UUID.
             guard adapter.capabilities.supportsThumbnails, UUID(uuidString: a.attachmentID) != nil,
                   let jpeg = try? await adapter.thumbnail(relativePath: p.relativeDirectory + "/" + a.relativePath,
