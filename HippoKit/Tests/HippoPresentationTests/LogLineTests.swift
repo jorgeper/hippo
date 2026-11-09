@@ -229,3 +229,22 @@ struct LogLineTests {
                 == "Download failed · mismatch")
     }
 }
+
+@Suite struct DownloadLogLineTests {
+    private func line(_ e: LogEvent) -> LogLine {
+        LogLine.make(e, id: 0, now: Date(timeIntervalSince1970: 1_800_000_000), zone: TimeZone(identifier: "UTC")!,
+                     locale: Locale(identifier: "en_US_POSIX"))
+    }
+
+    @Test func downloadLines() {
+        #expect(line(LogEvent(event: .downloadRun, count: 3, dest: "dropbox")).text == "Downloaded 3 captures from Dropbox")
+        #expect(line(LogEvent(event: .downloadRun, count: 1, dest: "dropbox")).text == "Downloaded 1 capture from Dropbox")
+        #expect(line(LogEvent(event: .downloadRun, code: "incomplete_package", count: 0, dest: "filesystem")).text
+                == "Downloaded 0 captures from the Developer folder · incomplete_package")
+        #expect(line(LogEvent(event: .downloadCapture, outcome: .ok, dest: "dropbox")).text == "Downloaded from Dropbox")
+        #expect(line(LogEvent(event: .downloadCapture, outcome: .skipped, code: "outside_window", dest: "dropbox")).text
+                == "Skipped · outside_window")
+        #expect(line(LogEvent(event: .downloadCapture, outcome: .failed, code: "invalid_package", dest: "dropbox")).text
+                == "Couldn't download · invalid_package")
+    }
+}

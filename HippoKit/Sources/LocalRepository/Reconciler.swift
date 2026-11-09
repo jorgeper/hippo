@@ -115,7 +115,8 @@ public final class Reconciler: Sendable {
     }
 
     /// Deletes every `staging/<id>` whose lock is free, and lock files with no directory. A lock held
-    /// by a live writer (a package writer, or a gold pull's `staging/gold-<uuid>`) means "skip".
+    /// by a live writer (a package writer, a gold pull's `staging/gold-<uuid>`, or a remote download's
+    /// `staging/download-<uuid>`) means "skip".
     /// `staging/enrichments/` is not a package: `EnrichmentStore.sweep()` owns it. A log upload's
     /// `staging/log-<uuid>.jsonl` snapshot is removed too once it is older than `logSnapshotMaxAge`: recovery
     /// can run alongside the launch's first sync pass, so a fresh one may belong to a live upload; an old one

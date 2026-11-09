@@ -138,6 +138,16 @@ public struct LogLine: Equatable, Sendable, Identifiable {
             let d = destination(e.dest).map { " from \($0)" } ?? ""
             if e.outcome == .failed { return join(["Download failed", e.code]) }
             return "Downloaded a file" + d
+        case .downloadRun:
+            let n = e.count ?? 0
+            let d = destination(e.dest).map { " from \($0)" } ?? ""
+            return join(["Downloaded \(n) \(n == 1 ? "capture" : "captures")" + d, e.code])
+        case .downloadCapture:
+            switch e.outcome {
+            case .ok?, nil: return "Downloaded" + (destination(e.dest).map { " from \($0)" } ?? "")
+            case .skipped?: return join(["Skipped", e.code])
+            default: return join(["Couldn't download", e.code])
+            }
         case .goldApplied: return "Server results applied"
         case .goldRemoved: return "Server results removed"
         case .goldSkipped: return join(["Server results skipped", e.code])

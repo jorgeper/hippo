@@ -65,8 +65,9 @@ struct SyncHarness {
     }
 
     /// Commits, registers and enqueues a capture with one attachment of `attachmentBytes` bytes, or a
-    /// URL-only capture when `attachmentBytes` is nil.
+    /// URL-only capture when `attachmentBytes` is nil. `timeZone` sets the local date (the package's partition).
     func capture(attachmentBytes: Int? = 1_000, startedAt: Date = Date(timeIntervalSince1970: 1_794_070_800),
+                 timeZone: TimeZone = TimeZone(identifier: "America/Los_Angeles")!,
                  image: Data? = nil) async throws -> CommittedPackage {
         var attachments: [AttachmentSource] = []
         if let image {
@@ -80,7 +81,7 @@ struct SyncHarness {
                                                 representationSource: "item_provider_data"))
         }
         let draft = CaptureDraft(captureID: UUID(), startedAt: startedAt,
-                                 timeZone: TimeZone(identifier: "America/Los_Angeles")!, method: .shareExtension,
+                                 timeZone: timeZone, method: .shareExtension,
                                  userNote: "note",
                                  urls: attachmentBytes == nil && image == nil ? [CapturedURL(url: "https://example.com/a", source: "shared")] : [],
                                  attachments: attachments)

@@ -201,6 +201,14 @@ public final class HippoStore: Sendable {
                    adapterFor: adapterFor, log: log)
     }
 
+    /// "Download from <destination>": brings recent remote captures onto this phone in light form.
+    public func makeDownloader(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> RemoteDownloader {
+        RemoteDownloader(layout: layout, index: index, jobs: jobs, destinations: destinations, remoteState: remoteState,
+                         trims: trims, enrichments: enrichments, enrichmentTasks: enrichmentTasks,
+                         adapterFor: adapterFor, log: log)
+    }
+
     /// Downloads a trimmed attachment back into its package.
     public func makeRestorer(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
         -> AttachmentRestorer {
