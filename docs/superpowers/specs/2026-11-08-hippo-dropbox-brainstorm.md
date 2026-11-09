@@ -1,9 +1,9 @@
 # Hippo Dropbox phase: brainstorm notes (handoff)
 
-Status, 2026-11-08: the brainstorm has started. Nothing below is approved for building yet. These notes are where to resume: settle the open questions with Jorge, write the design doc (`docs/superpowers/specs/YYYY-MM-DD-hippo-dropbox-design.md`), run the builder check, get approval, then write the plan and build with subagent-driven development, as in the enrichment and visibility phases.
+Status, 2026-11-08: the brainstorm has started, and Q1 and Q2 are answered (see "Decided this session"). Nothing below is approved for building yet. These notes are where to resume: settle the open questions with Jorge, write the design doc (`docs/superpowers/specs/YYYY-MM-DD-hippo-dropbox-design.md`), run the builder check, get approval, then write the plan and build with subagent-driven development, as in the enrichment and visibility phases.
 
 Background reading, in this order:
-- `docs/superpowers/specs/2026-11-07-hippo-v0-design.md` §3.1 already specifies most of the Dropbox adapter: auth, uploads, integrity, errors, SDK-vs-HTTP choice, and the "Hippo Dev" test app. It still stands unless something below reopens it.
+- `docs/superpowers/specs/2026-11-07-hippo-v0-design.md` §3.1 already specifies most of the Dropbox adapter: auth, uploads, integrity, errors, SDK-vs-HTTP choice. It still stands unless something below reopens it.
 - `HippoKit/Sources/SyncEngine/StorageAdapter.swift`: the provider-neutral contract the Dropbox adapter implements. The Developer-folder `FilesystemAdapter` is the reference implementation, and the shared AdapterContract tests apply to both.
 - `docs/package-format.md`, `docs/enrichment-format.md` and `docs/log-format.md`: what lands in the folder.
 
@@ -28,6 +28,19 @@ In his words, lightly cleaned up:
   - **A capture missing from the phone never means "delete it in Dropbox".** A new or wiped phone must never remove anything remotely.
   - A delete made in Dropbox removes the capture from the phone too. That's new: today nothing flows from Dropbox to the phone except gold.
 - **Today's delete:** "Delete from iPhone…" removes only the phone's copy, and its prompt says uploaded copies stay where they are.
+
+## Decided this session (2026-11-08, after the playback)
+
+- **Delete everywhere (Q1, Jorge):** Detail offers "Delete everywhere" alongside today's "Delete from iPhone". The design still needs the mechanics. Recommendation: a tombstone that the next sync applies in Dropbox, so it works offline, and absence alone never deletes.
+- **Folder choice (Q2, Jorge):** the user chooses at connect time between:
+  - **Hippo's own folder** (`Apps/Hippo`, App folder access), and
+  - **broader access**, where they pick any folder (Full Dropbox access).
+  - Picking broader access must make it plain that Hippo can then see and change everything in their Dropbox, not just the chosen folder.
+  - Dropbox fixes an app's access type at registration (confirmed in Dropbox forum answers by Dropbox staff), so this means **two registered Dropbox apps**, one per access type. Hippo signs in through whichever one the user picks.
+  - Folder picking needs a folder browser, using `files.metadata.read` listing.
+- **Registration (Jorge):** he accepts registering in the Dropbox App Console. He'd rather keep it minimal, and wants a guided script.
+  - **The "Hippo Dev" test app from v0 §3.1 is dropped.** Real-Dropbox integration tests write to a clearly named test subfolder (for example `Apps/Hippo/_hippo-test/`) or run only on request. The design decides which.
+  - Jorge was told and agreed that the alternative, writing through the Dropbox iPhone app via Files, gives weaker guarantees: no verification, sync timing set by the Dropbox app, and unreliable background writes.
 
 ## Open questions, most important first
 
@@ -66,9 +79,9 @@ These carry into the design unless Jorge reopens them.
 - **Auth and storage:** OAuth 2 PKCE as a public client with `token_access_type=offline` in `ASWebAuthenticationSession`. Tokens are stored in the shared Keychain access group. Background and extension code never shows UI; an expired login moves the job to `needs_authentication`.
 - **Scopes:** `files.content.write`, `files.content.read`, `files.metadata.read`, `account_info.read`. The `files.content.write` scope covers deletes too.
 - **App keys:**
-  - The app key goes in the gitignored `Config/Secrets.xcconfig`, with a committed `Secrets.example.xcconfig`.
-  - The "Hippo Dev" app writes to `Apps/Hippo Dev`, and its key and refresh token live in a gitignored `.env` with a committed `.env.example`.
-  - Real-Dropbox integration tests run only against Hippo Dev, and are skipped when the env vars are absent.
+  - App keys go in the gitignored `Config/Secrets.xcconfig`, with a committed `Secrets.example.xcconfig`.
+  - Integration-test credentials, if any, go in a gitignored `.env` with a committed `.env.example`, and the tests are skipped when they're absent.
+  - The separate Hippo Dev app is dropped (see "Decided this session").
 - **Uploads:**
   - Small files use single-request upload; large ones use upload sessions with the checkpoint persisted (session IDs are sensitive and never logged).
   - Writes use `mode: add` and `autorename: false`. On a conflict, a matching size and `content_hash` counts as success; otherwise the job is blocked as a content conflict and nothing is overwritten.
@@ -82,7 +95,7 @@ These carry into the design unless Jorge reopens them.
   - `replaceFile` uses upload mode overwrite and is allowed only under `enrichments/` and `logs/`, matching the FilesystemAdapter rule.
   - `listChanges` uses `list_folder` recursive plus `continue`, and a `reset` maps to `cursorReset`.
   - `downloadFile` is implemented.
-  - The shared AdapterContract tests run against Dropbox (Hippo Dev).
+  - The shared AdapterContract tests run against real Dropbox, in a test subfolder.
   - Log uploads are throttled on cellular. Today's log file re-uploads on every pass, so limit it to at most every 15 minutes or Wi-Fi only.
 - **Also parked, worth considering with sync:**
   - No foreground retry timer for `next_attempt_at`.
@@ -91,10 +104,10 @@ These carry into the design unless Jorge reopens them.
 
 ## Jorge has to do these before the build (not before the design)
 
-- Create two apps in the Dropbox App Console, both with Scoped access, App folder type and the four scopes:
-  - **"Hippo"**: its app key goes in `Config/Secrets.xcconfig`.
-  - **"Hippo Dev"**: its app key and a long-lived refresh token go in `.env`.
-  - The README documents these steps.
+- Create the Dropbox app(s) in the App Console with Scoped access and the four scopes, using a guided script the build provides:
+  - "Hippo" with App folder access;
+  - plus, for the broader-access option, a second app with Full Dropbox access.
+  - Their app keys go in `Config/Secrets.xcconfig`. The README documents the steps.
 - Keys never go into git and never get pasted in full into chat. Show only the first and last four characters.
 
 ## Device acceptance to plan for
