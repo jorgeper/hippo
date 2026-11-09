@@ -21,9 +21,16 @@ public final class AttachmentRestorer: Sendable {
     private let destinations: DestinationStore
     private let adapterFor: @Sendable (Destination) throws -> any StorageAdapter
     private let log: ActivityLog?
+    private let tasks: EnrichmentTaskStore?
+
+    /// Kinds that read attachment bytes (`TextRecognitionEnricher`, `TranscriptEnricher`); SyncEngine can't
+    /// import `Enrichment`, so they are listed here.
+    static let byteReadingKinds: [FacetKind] = [.textRecognition, .transcript]
 
     public init(layout: StoreLayout, index: CaptureIndex, trims: TrimStore, destinations: DestinationStore,
-                adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter, log: ActivityLog? = nil) {
+                adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter, log: ActivityLog? = nil,
+                tasks: EnrichmentTaskStore? = nil) {
+        self.tasks = tasks
         self.layout = layout
         self.index = index
         self.trims = trims
@@ -49,6 +56,13 @@ public final class AttachmentRestorer: Sendable {
         defer { try? fm.removeItem(at: temp) }
         do {
             try fm.createDirectory(at: layout.transfersDir, withIntermediateDirectories: true)
+            let destination = layout.packageURL(relativeDirectory: directory).appendingPathComponent(row.relativePath)
+            // A retry after the file was moved into place but the row couldn't be removed.
+            if let existing = try? StreamingHasher.digest(of: destination),
+               existing.sha256 == row.sha256, existing.byteCount == row.byteCount {
+                try finish(row, captureID: captureID, attachmentID: attachmentID, active)
+                return
+            }
             let adapter = try adapterFor(active)
             let size = row.byteCount
             _ = try await adapter.downloadFile(relativePath: directory + "/" + row.relativePath, to: temp,
@@ -60,11 +74,14 @@ public final class AttachmentRestorer: Sendable {
                 fail("mismatch", captureID, active)
                 throw RestoreError.mismatch
             }
-            let destination = layout.packageURL(relativeDirectory: directory).appendingPathComponent(row.relativePath)
+            // The capture may have been deleted during the download: never recreate its package.
+            var isDirectory: ObjCBool = false
+            guard (try? index.relativeDirectory(captureID: captureID)) != nil,
+                  fm.fileExists(atPath: layout.packageURL(relativeDirectory: directory).path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else { throw RestoreError.notFound }
             try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fm.moveItem(at: temp, to: destination)
-            try trims.remove(captureID: captureID, attachmentID: attachmentID)
-            log?.append(LogEvent(event: .attachmentRestored, captureID: captureID, outcome: .ok, dest: active.providerKind))
+            try finish(row, captureID: captureID, attachmentID: attachmentID, active)
         } catch let e as RestoreError {
             throw e
         } catch StorageError.permanent(code: "not_found") {
@@ -82,6 +99,14 @@ public final class AttachmentRestorer: Sendable {
             fail(code, captureID, active)
             throw RestoreError.failed(code: Diagnostics.safeCode(code))
         }
+    }
+
+    private func finish(_ row: TrimmedAttachment, captureID: String, attachmentID: String,
+                        _ active: Destination) throws {
+        try trims.remove(captureID: captureID, attachmentID: attachmentID)
+        // The byte-reading kinds were marked not applicable while the file was missing.
+        try? tasks?.clearNotApplicable(captureID: captureID, kinds: Self.byteReadingKinds)
+        log?.append(LogEvent(event: .attachmentRestored, captureID: captureID, outcome: .ok, dest: active.providerKind))
     }
 
     private func trimmedRow(captureID: String, attachmentID: String) throws -> TrimmedAttachment? {

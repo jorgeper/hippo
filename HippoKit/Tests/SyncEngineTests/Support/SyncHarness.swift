@@ -127,6 +127,8 @@ struct HookedAdapter: StorageAdapter {
     var onCheckpoint: @Sendable (String) throws -> Void = { _ in }
     var afterUpload: @Sendable (String) -> Void = { _ in }
     var beforeDownload: @Sendable (String) throws -> Void = { _ in }
+    var beforeInspect: @Sendable (String) async throws -> Void = { _ in }
+    var afterDownload: @Sendable (String) async throws -> Void = { _ in }
     var beforeDelete: @Sendable (String) throws -> Void = { _ in }
     var beforeListFolder: @Sendable (String) throws -> Void = { _ in }
 
@@ -141,7 +143,10 @@ struct HookedAdapter: StorageAdapter {
     func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
                       progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {
         try beforeDownload(relativePath)
-        return try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes, progress: progress)
+        let info = try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes,
+                                                progress: progress)
+        try await afterDownload(relativePath)
+        return info
     }
     func deleteFolder(relativePath: String) async throws {
         try beforeDelete(relativePath)
@@ -158,6 +163,7 @@ struct HookedAdapter: StorageAdapter {
     func validateDestination() async throws { try await inner.validateDestination() }
     func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }
     func inspectFile(relativePath: String) async throws -> RemoteFileInfo? {
+        try await beforeInspect(relativePath)
         let info = try await inner.inspectFile(relativePath: relativePath)
         return hideFromInspect(relativePath) ? nil : info
     }

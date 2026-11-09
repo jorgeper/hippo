@@ -132,7 +132,14 @@ public actor EnrichmentRunner {
             return false
         }
         // The local originals are gone, so a kind that reads their bytes can't run; its row stays as it is.
-        if e.readsAttachmentBytes, !(try trimmedPaths(id)).isEmpty { return false }
+        // A capture with no row for the kind gets a terminal one, so it isn't listed again every pass; the
+        // restorer clears it after a download.
+        if e.readsAttachmentBytes, !(try trimmedPaths(id)).isEmpty {
+            if try tasks.task(captureID: id, kind: e.kind) == nil {
+                try tasks.set(captureID: id, kind: e.kind, version: e.version, status: "not_applicable", now: t)
+            }
+            return false
+        }
         let applies = e.applies(to: metadata)
         try tasks.set(captureID: id, kind: e.kind, version: e.version, status: applies ? "pending" : "not_applicable",
                       now: t)

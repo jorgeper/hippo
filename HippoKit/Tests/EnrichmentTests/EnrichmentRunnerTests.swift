@@ -746,7 +746,11 @@ extension RunnerHarness {
         let runner = h.runner([reads, other])
 
         #expect(try await runner.schedule() == 1)
-        #expect(try h.task(id, .textRecognition) == nil)
+        #expect(try h.task(id, .textRecognition)?.status == "not_applicable")
+        #expect(try h.task(id, .textRecognition)?.version == 1)
         #expect(try h.task(id, .dataDetection)?.status == "pending")
+        // The terminal row means the capture is no longer listed, so no pass is left to schedule it.
+        #expect(try h.store.enrichmentTasks.capturesNeeding(kind: .textRecognition, version: 1, limit: 10).isEmpty)
+        #expect(try await runner.schedule() == 0)
     }
 }

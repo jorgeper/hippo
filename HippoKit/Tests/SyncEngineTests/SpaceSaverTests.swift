@@ -120,6 +120,8 @@ private final class Progress: @unchecked Sendable {
         #expect(result == SpaceSaveResult(trimmed: 0, bytes: 0, skipped: 1, code: "remote_mismatch"))
         #expect(FileManager.default.fileExists(atPath: s.localFile(pkg).path))
         #expect(try s.h.trims.trimmed(captureID: pkg.metadata.captureID).isEmpty)
+        #expect(!FileManager.default.fileExists(
+            atPath: s.h.layout.thumbnailURL(attachmentID: pkg.metadata.attachments[0].attachmentID).path))
     }
 
     @Test func runSkipsWhenRemoteHasSameSizeButOtherBytes() async throws {
@@ -153,13 +155,7 @@ private final class Progress: @unchecked Sendable {
         let store = try HippoStore.open(root: s.h.root, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"))
         let id = pkg.metadata.captureID
         var hooked = HookedAdapter(inner: s.h.adapter)
-        hooked.hideFromInspect = { _ in
-            // inspectFile is async but this hook is not: delete on a detached task and wait for it.
-            let done = DispatchSemaphore(value: 0)
-            Task { _ = try? await store.delete(captureID: id); done.signal() }
-            done.wait()
-            return false
-        }
+        hooked.beforeInspect = { _ in _ = try? await store.delete(captureID: id) }
 
         let result = await s.run(s.saver(hooked))
 

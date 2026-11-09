@@ -29,7 +29,7 @@ private struct Setup {
     func restorer(_ adapter: (any StorageAdapter)? = nil) -> AttachmentRestorer {
         let a: any StorageAdapter = adapter ?? h.adapter
         return AttachmentRestorer(layout: h.layout, index: h.index, trims: h.trims, destinations: h.destinations,
-                                  adapterFor: { _ in a }, log: h.log)
+                                  adapterFor: { _ in a }, log: h.log, tasks: EnrichmentTaskStore(db: h.db))
     }
 
     func restore(_ r: AttachmentRestorer, progress: @escaping @Sendable (Int64, Int64) -> Void = { _, _ in }) async throws {
@@ -113,5 +113,43 @@ private final class Last: @unchecked Sendable {
 
         #expect(try s.h.trims.trimmed(captureID: s.id).first?.state == .trimmed)
         #expect(s.events.first?.code == "offline")
+    }
+
+    @Test func restoreMakesByteReadingKindsSchedulableAgain() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        let tasks = EnrichmentTaskStore(db: s.h.db)
+        try tasks.set(captureID: s.id, kind: .textRecognition, version: 1, status: "not_applicable", now: t0)
+        try tasks.set(captureID: s.id, kind: .transcript, version: 1, status: "ok", now: t0)
+
+        try await s.restore(s.restorer())
+
+        #expect(try tasks.task(captureID: s.id, kind: .textRecognition) == nil)
+        #expect(try tasks.task(captureID: s.id, kind: .transcript)?.status == "ok")
+    }
+
+    @Test func restoreNeverRecreatesADeletedPackage() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        let store = try HippoStore.open(root: s.h.root, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"))
+        let id = s.id
+        var hooked = HookedAdapter(inner: s.h.adapter)
+        hooked.afterDownload = { _ in _ = try? await store.delete(captureID: id) }
+        let rowBefore = try s.h.trims.trimmed(captureID: id)
+        #expect(rowBefore.count == 1)
+
+        await #expect(throws: RestoreError.notFound) { try await s.restore(s.restorer(hooked)) }
+
+        #expect(!FileManager.default.fileExists(atPath: s.h.layout.packageURL(relativeDirectory: s.pkg.relativeDirectory).path))
+        #expect(s.transferLeftovers.isEmpty)
+    }
+
+    @Test func restoreRetryAfterRowRemovalFailedSkipsTheDownload() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try FileManager.default.copyItem(at: s.h.remote.appendingPathComponent(s.pkg.attachmentPath), to: s.localFile)
+        var hooked = HookedAdapter(inner: s.h.adapter)
+        hooked.beforeDownload = { _ in throw StorageError.offline }
+
+        try await s.restore(s.restorer(hooked))
+
+        #expect(try s.h.trims.trimmed(captureID: s.id).isEmpty)
     }
 }

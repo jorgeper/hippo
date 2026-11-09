@@ -205,7 +205,7 @@ public final class HippoStore: Sendable {
     public func makeRestorer(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
         -> AttachmentRestorer {
         AttachmentRestorer(layout: layout, index: index, trims: trims, destinations: destinations,
-                           adapterFor: adapterFor, log: log)
+                           adapterFor: adapterFor, log: log, tasks: enrichmentTasks)
     }
 
     /// Deletes the capture from this phone (spec §11): cancels its uploads, waits up to 10 s for a
