@@ -1,6 +1,6 @@
 # Hippo Dropbox phase: brainstorm notes (handoff)
 
-Status, 2026-11-08: the brainstorm has started, and Q1 and Q2 are answered (see "Decided this session"). Nothing below is approved for building yet. These notes are where to resume: settle the open questions with Jorge, write the design doc (`docs/superpowers/specs/YYYY-MM-DD-hippo-dropbox-design.md`), run the builder check, get approval, then write the plan and build with subagent-driven development, as in the enrichment and visibility phases.
+Status, 2026-11-08: the brainstorm is complete, and the playback below is confirmed. Next: the design doc. Nothing below is approved for building yet. These notes are where to resume: settle the open questions with Jorge, write the design doc (`docs/superpowers/specs/YYYY-MM-DD-hippo-dropbox-design.md`), run the builder check, get approval, then write the plan and build with subagent-driven development, as in the enrichment and visibility phases.
 
 Background reading, in this order:
 - `docs/superpowers/specs/2026-11-07-hippo-v0-design.md` §3.1 already specifies most of the Dropbox adapter: auth, uploads, integrity, errors, SDK-vs-HTTP choice. It still stands unless something below reopens it.
@@ -111,6 +111,21 @@ My view, given to Jorge:
   - It has two options: how old (captures older than N) and how large (files bigger than N MB).
   - It trims only captures already verified in Dropbox.
   - My call: show "Frees about X MB from N captures" before confirming.
+
+## Confirmed playback (Jorge: "looks great")
+
+- **Connect:** Settings → Connect Dropbox → Dropbox sign-in. Everything goes in `Apps/Hippo`. Captures saved before connecting upload straight away.
+- **Upload:** on open, while open, and in iOS background time. Started uploads can finish after the app closes. The Settings line shows the last sync.
+- **Deleting on the phone:** "Delete from iPhone" works as today. "Delete everywhere" also removes the capture in Dropbox; if offline, that happens at the next sync, using a tombstone.
+- **Deleting in Dropbox:** a capture is deleted only when its whole folder is gone. A missing or edited file inside it deletes nothing and shows as "changed in Dropbox".
+- **Safety valve:** if a lot disappears in one sync (the whole folder, or more than about 20 captures), nothing is applied and Hippo asks. A capture whose upload isn't verified is never deleted by a remote change.
+- **Download from Dropbox:** a manual Settings action, "from the last N weeks or months". It fetches the light version (details, enrichment, thumbnails), and large files download on tap. This is how a new phone fills up.
+- **Save space:** a manual Settings action that trims files older or larger than chosen limits, only on captures verified in Dropbox, and shows what it would free first.
+- **Disconnect:** keeps everything on the phone and stops syncing; it never deletes anything. Captures bound to one account never upload to another.
+- **Provider-neutral (Jorge):** build it so another provider (Google Drive and others) can be added later, but make Dropbox work really well now.
+  - Everything new goes through the `StorageAdapter` contract, not Dropbox-specific code in sync, Settings or Detail: remote delete, listing for download and remote-delete detection, partial download, and thumbnails.
+  - Dropbox specifics stay inside the adapter, as v0 §3.1 already requires.
+  - The AdapterContract tests cover each new operation for both the FilesystemAdapter and Dropbox.
 
 ## Already decided: from v0 §3.1 and the parked follow-ups
 
