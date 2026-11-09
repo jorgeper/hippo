@@ -343,6 +343,26 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
                 == "This file was only in Dropbox and is gone there. Restore it from Dropbox's deleted files on dropbox.com.")
     }
 
+    @Test func storageLineNamesTheBoundDestinationNotTheActiveOne() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        func dest(_ id: String, _ name: String, _ status: DestinationStatus) -> Destination {
+            Destination(id: id, providerKind: "dropbox", accountIdentifier: id, remoteRoot: "/", displayName: name, status: status)
+        }
+        _ = try t.store.destinations.connect(dest("dest-a", "Alpha", .active))
+        let p = try await t.note("bound to A", at: now)
+        let id = p.metadata.captureID
+        while let j = try t.store.jobs.claimNext(owner: "o", now: Date(), lease: 60) {
+            try t.store.jobs.markSynced(jobID: j.jobID, owner: "o")
+        }
+        _ = try t.store.destinations.connect(dest("dest-b", "Beta", .active))
+        #expect(try t.store.destinations.active()?.displayName == "Beta")
+
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale)
+        await model.load()
+        #expect(await model.detail?.storage?.text == "In Alpha · verified")
+    }
+
     @Test func uploadAgainRequeuesAndSyncs() async throws {
         let t = try TestStore()
         defer { t.cleanup() }

@@ -69,16 +69,18 @@ public final class CaptureDetailModel {
                                                marker: CompletionMarker(schemaVersion: 1, captureID: id, files: []),
                                                relativeDirectory: dir, directoryURL: url)
                 let jobs = try store.jobs.jobs(captureID: id)
-                let names = Dictionary(uniqueKeysWithValues: try Set(jobs.map(\.destinationID)).map {
-                    ($0, try store.destinations.destination(id: $0))
+                let names = Dictionary(uniqueKeysWithValues: Set(jobs.map(\.destinationID)).map {
+                    ($0, try? store.destinations.destination(id: $0))
                 })
                 let enrichment = ResolvedEnrichment.load(store: store, captureID: id)
                 let tasks = try store.enrichmentTasks.tasks(captureIDs: [id])
                 let goldArrivedAt = (try? store.enrichments.document(.server, captureID: id))?.generatedAt
-                let changed = try store.remoteState.changed(captureID: id)
-                let trimmedPaths = try store.trims.trimmedPaths(captureID: id)
-                // The destination the storage line speaks for: the active one, else the first job's.
-                let storageName = try store.destinations.active()?.displayName ?? jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName
+                let changed = (try? store.remoteState.changed(captureID: id)) ?? nil
+                let trimmedPaths = (try? store.trims.trimmedPaths(captureID: id)) ?? []
+                // The destination the storage line speaks for: the changed record's, else the lowest job
+                // destination ID (as `deleteEverywhere` binds) -- never merely the active one.
+                let storageID = changed?.destinationID ?? jobs.map(\.destinationID).min()
+                let storageName = storageID.flatMap { names[$0] ?? nil }?.displayName
                 let detail = CaptureDetail.make(metadata: metadata, packageURL: url, noteBody: package.noteBody(),
                                                 jobs: jobs, enrichment: enrichment, tasks: tasks,
                                                 changed: changed, trimmedPaths: trimmedPaths,

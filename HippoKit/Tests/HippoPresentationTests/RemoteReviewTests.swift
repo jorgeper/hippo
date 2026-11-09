@@ -11,6 +11,11 @@ private let la = TimeZone(identifier: "America/Los_Angeles")!
 private let dropbox = Destination(id: "dest-x", providerKind: "dropbox", accountIdentifier: "acct", remoteRoot: "/",
                                   displayName: "Dropbox", status: .active)
 
+/// ICU may use thin or narrow no-break spaces; tests compare with plain ones.
+private func spaced(_ s: String) -> String {
+    s.replacingOccurrences(of: "\u{2009}", with: " ").replacingOccurrences(of: "\u{202F}", with: " ")
+}
+
 private final class Counter: Sendable {
     private let n = Mutex(0)
     func bump() { n.withLock { $0 += 1 } }
@@ -47,6 +52,17 @@ private struct Harness {
                                  locale: Locale(identifier: "en_US"), calendar: calendar)
     }
 
+    /// Marks every capture's job synced, as after a finished upload.
+    func markAllSynced() throws {
+        while let job = try t.store.jobs.claimNext(owner: "test", now: Date(), lease: 60) {
+            try t.store.jobs.markSynced(jobID: job.jobID, owner: "test")
+        }
+    }
+
+    func jobState(_ index: Int) throws -> JobState {
+        try #require(try t.store.jobs.jobs(captureID: ids[index]).first).state
+    }
+
     func trim(_ index: Int) throws {
         let pkg = try #require(try t.store.index.metadata(captureID: ids[index], layout: t.store.layout))
         let a = try #require(pkg.attachments.first)
@@ -69,7 +85,7 @@ struct RemoteReviewTests {
         #expect(m.trimmedCount == 1)
         #expect(m.destinationName == "Dropbox")
         #expect(m.title == "Dropbox looks different")
-        #expect(m.summaryLine == "2 captures, Nov 7\u{2009}–\u{2009}9, 2026")
+        #expect(spaced(m.summaryLine) == "2 captures, Nov 7 – 9, 2026")
         #expect(m.trimmedLine == "1 of these have large files only in Dropbox")
         #expect(m.footer == "You can restore deleted files on dropbox.com for a while.")
         #expect(m.keepTitle == "Keep and upload again")
@@ -82,7 +98,7 @@ struct RemoteReviewTests {
         try h.trim(0)
         let m = h.model()
         await m.load()
-        #expect(m.summaryLine == "1 capture, Nov 7, 2026")
+        #expect(spaced(m.summaryLine) == "1 capture, Nov 7, 2026")
         #expect(m.trimmedLine == "1 of these have large files only in Dropbox")
         #expect(m.keepTitle == "Keep on iPhone as they are")
     }
@@ -114,11 +130,16 @@ struct RemoteReviewTests {
     @Test func keepRequeuesNonTrimmedAndClears() async throws {
         let h = try await Harness()
         defer { h.t.cleanup() }
+        try h.markAllSynced()
         try h.queue([0, 1])
         try h.trim(1)
         let m = h.model()
         await m.load()
+        #expect(try h.jobState(0) == .synced && h.jobState(1) == .synced)
         await m.keepAndUploadAgain()
+        #expect(!m.resolveFailed)
+        #expect(try h.jobState(0) == .pending)
+        #expect(try h.jobState(1) == .synced)
         #expect(try h.t.store.index.count() == 2)
         #expect(try h.t.store.remoteState.reviewItems(destinationID: dropbox.id).isEmpty)
         #expect(h.calls.value == 1)

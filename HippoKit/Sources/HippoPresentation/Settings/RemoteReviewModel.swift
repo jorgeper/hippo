@@ -14,6 +14,8 @@ public final class RemoteReviewModel {
     public private(set) var trimmedCount = 0
     public private(set) var destinationName = ""
     public private(set) var isPending = false
+    /// True after a resolve failed; the sheet shows an alert and stays open.
+    public var resolveFailed = false
 
     public var count: Int { items.count }
     public var title: String { "\(destinationName) looks different" }
@@ -98,8 +100,10 @@ public final class RemoteReviewModel {
         let store = store
         do {
             _ = try await store.resolveReview(destinationID: id, keep: keep)
+            resolveFailed = false
         } catch {
             Self.log.error("\("resolve_failed", privacy: .public)")
+            resolveFailed = true
         }
         await load()
     }

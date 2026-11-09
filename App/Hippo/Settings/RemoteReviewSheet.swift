@@ -42,6 +42,11 @@ struct RemoteReviewSheet: View {
         }
         .presentationDetents([.medium, .large])
         .task { await model.load() }
+        .alert("Something went wrong", isPresented: $model.resolveFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Hippo couldn't finish that. Your captures are safe on this iPhone.")
+        }
     }
 
     private func run(_ name: String, _ action: @escaping @MainActor () async -> Void) {
@@ -52,7 +57,7 @@ struct RemoteReviewSheet: View {
             await BackgroundActivity.run(name: name, onExpire: coordinator.map(SyncScheduling.stopper)) { await action() }
             busy = false
             NotificationCenter.default.post(name: SyncCoordinator.passFinished, object: nil)
-            dismiss()
+            if !model.resolveFailed { dismiss() }
         }
     }
 }
