@@ -167,12 +167,14 @@ public protocol StorageAdapter: Sendable {
     /// unsafe path and `.permanent(code: "delete_not_allowed")` unless the path starts with `captures/` or
     /// `enrichments/` and has at least two segments.
     func deleteFolder(relativePath: String) async throws
-    /// A cursor for changes from now on under `prefix`, listing nothing. Creates the prefix folder if missing.
+    /// A cursor for changes from now on under `prefix`, listing nothing. `prefix` is a folder path ending in `/`
+    /// (a missing trailing slash is treated the same). Creates that folder if it doesn't exist.
     func latestCursor(under prefix: String) async throws -> String
-    /// Files and folders with sizes and hashes. A nil `cursor` starts; a missing folder returns an empty page
+    /// Files and folders with sizes and hashes. A nil `cursor` starts; an empty `relativePath` lists the root; a missing folder returns an empty page
     /// with `hasMore == false`. Hidden entries (a segment starting with `.`) are never reported.
     func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage
-    /// JPEG bytes, or nil when the provider can't make one. Callers check `capabilities.supportsThumbnails` first.
+    /// JPEG bytes, or nil when the provider can't make one (including for a folder). A missing file's behaviour
+    /// is adapter-specific (the filesystem adapter throws `not_found`). Callers check `capabilities.supportsThumbnails` first.
     func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data?
 }
 

@@ -311,7 +311,8 @@ public struct FilesystemAdapter: StorageAdapter {
 
     public func latestCursor(under prefix: String) async throws -> String {
         faults.record("latestCursor \(prefix)")
-        let dirPart = prefix.contains("/") ? String(prefix[..<prefix.lastIndex(of: "/")!]) : ""
+        // `prefix` is a folder path; a missing trailing slash is tolerated.
+        let dirPart = prefix.hasSuffix("/") ? String(prefix.dropLast()) : prefix
         if !dirPart.isEmpty {
             let dir = try resolve(dirPart)
             do {
@@ -325,7 +326,7 @@ public struct FilesystemAdapter: StorageAdapter {
 
     public func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
         faults.record("listFolder \(relativePath)")
-        let start = try resolve(relativePath)
+        let start = relativePath.isEmpty ? root : try resolve(relativePath)
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: start.path, isDirectory: &isDir), isDir.boolValue else {
@@ -363,9 +364,10 @@ public struct FilesystemAdapter: StorageAdapter {
         faults.record("thumbnail \(relativePath)")
         let url = try resolve(relativePath)
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else {
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
             throw StorageError.permanent(code: "not_found")
         }
+        if isDir.boolValue { return nil }
         guard let type = UTType(filenameExtension: url.pathExtension) else { return nil }
         return await LocalThumbnailer.jpeg(for: url, uti: type.identifier, maxPixelSize: maxPixelSize)
     }

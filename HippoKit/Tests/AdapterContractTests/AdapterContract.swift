@@ -311,6 +311,17 @@ private func runFolderOperationsContract(adapter: any StorageAdapter, scratch: U
     }
     #expect(seen == [fresh])
 
+    // latestCursor on a prefix that doesn't exist yet creates it.
+    let freshPrefix = "enrichments/fresh-\(UUID().uuidString.lowercased())/"
+    let freshCursor = try await adapter.latestCursor(under: freshPrefix)
+    #expect(!freshCursor.isEmpty)
+    let freshQuiet = try await adapter.listChanges(under: freshPrefix, cursor: freshCursor)
+    #expect(freshQuiet.changes.isEmpty)
+    let freshFile = "\(freshPrefix)later.bin"
+    _ = try await upload(freshFile, bytes: 40, seed: 24)
+    let freshNext = try await adapter.listChanges(under: freshPrefix, cursor: freshQuiet.cursor)
+    #expect(freshNext.changes.map(\.upsertedPath) == [freshFile])
+
     // listFolder.
     let base = "captures/2026/12/02"
     _ = try await upload("\(base)/aaa/content/x.bin", bytes: 120, seed: 31)
@@ -329,6 +340,12 @@ private func runFolderOperationsContract(adapter: any StorageAdapter, scratch: U
     #expect(aaa.first { $0.relativePath.hasSuffix("metadata.json") }?.byteCount == 30)
     let none = try await adapter.listFolder(relativePath: "captures/2099/01", recursive: true, cursor: nil)
     #expect(none.entries.isEmpty && !none.hasMore)
+
+    // Hidden entries are never reported (a cursor snapshot folder may exist by now).
+    let rootList = try await listAll(adapter, "", recursive: false)
+    #expect(rootList.allSatisfy { e in !e.relativePath.split(separator: "/").contains { $0.hasPrefix(".") } })
+    let allList = try await listAll(adapter, "captures", recursive: true)
+    #expect(allList.allSatisfy { e in !e.relativePath.split(separator: "/").contains { $0.hasPrefix(".") } })
 
     // thumbnails.
     let pngPath = "\(base)/aaa/content/p.png"
