@@ -290,7 +290,8 @@ public final class GoldPuller: Sendable {
         try index.packageDigest(captureID: captureID) != nil
     }
 
-    private static func code(for error: StorageError) -> String {
+    /// The fixed code recorded for an adapter error. Shared with `RemoteChangeDetector`.
+    static func code(for error: StorageError) -> String {
         switch error {
         case .offline: "offline"
         case .transient(let code): "transient:\(code)"

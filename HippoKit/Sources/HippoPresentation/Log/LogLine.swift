@@ -123,6 +123,13 @@ public struct LogLine: Equatable, Sendable, Identifiable {
             case .ok?: return "Deleted in \(d)"
             default: return join(["Delete in \(d) failed", e.code])
             }
+        case .remoteChanged:
+            if e.code == "unverified" { return "Not removed: upload not verified" }
+            return "Changed in \(destination(e.dest) ?? "storage")"
+        case .remoteReview:
+            let d = destination(e.dest) ?? "storage"
+            let head = d.prefix(1).uppercased() + d.dropFirst() + " looks different"
+            return join([head, e.count.map { "\($0) \($0 == 1 ? "capture" : "captures") to review" }])
         case .goldApplied: return "Server results applied"
         case .goldRemoved: return "Server results removed"
         case .goldSkipped: return join(["Server results skipped", e.code])

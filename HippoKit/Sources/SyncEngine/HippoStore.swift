@@ -3,6 +3,17 @@ import CaptureCore
 import LocalRepository
 import os
 
+/// What "Upload again from iPhone" did.
+public struct UploadAgainResult: Sendable, Equatable {
+    /// False when the capture has no upload job.
+    public var requeued: Bool
+    /// Paths that couldn't be requeued because their local originals were trimmed.
+    public var unrestorablePaths: [String]
+    public init(requeued: Bool, unrestorablePaths: [String]) {
+        self.requeued = requeued; self.unrestorablePaths = unrestorablePaths
+    }
+}
+
 /// The one entry point the app and the Share Extension use: commit, index and enqueue captures,
 /// recover at launch, delete locally, and write diagnostics. Both processes may open the same root.
 public final class HippoStore: Sendable {
@@ -138,7 +149,8 @@ public final class HippoStore: Sendable {
     /// `owner` is a prefix (e.g. "app"); the worker's `leaseOwner` makes it unique per worker.
     public func makeWorker(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter,
                            owner: String) -> SyncWorker {
-        SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index, adapterFor: adapterFor,
+        SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index, trims: trims,
+                   remoteState: remoteState, adapterFor: adapterFor,
                    owner: owner, log: log)
     }
 
@@ -170,6 +182,15 @@ public final class HippoStore: Sendable {
     public func makeRemoteDeleter(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
         -> RemoteDeleter {
         RemoteDeleter(destinations: destinations, remoteState: remoteState, adapterFor: adapterFor, log: log)
+    }
+
+    /// Applies deletes and marks changes made in the active destination's `captures/` tree, with the default
+    /// clock. Runs after uploads. Removals use `removeAfterRemoteDelete`.
+    public func makeChangeDetector(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> RemoteChangeDetector {
+        RemoteChangeDetector(layout: layout, index: index, jobs: jobs, remoteState: remoteState, trims: trims,
+                             destinations: destinations, adapterFor: adapterFor,
+                             removeLocally: { [self] in try await removeAfterRemoteDelete(captureID: $0) }, log: log)
     }
 
     /// Deletes the capture from this phone (spec §11): cancels its uploads, waits up to 10 s for a
@@ -281,6 +302,63 @@ public final class HippoStore: Sendable {
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             // Nothing to remove.
         }
+    }
+
+    /// "Upload again from iPhone" (design §4.3): clears the receipts of the files the destination lost or
+    /// changed (every manifest file when no change is recorded) and of `complete.json`, and requeues the
+    /// capture's upload to the active destination (every upload when none is active). The worker then re-adds
+    /// missing files and never overwrites: a file that exists with other content stays a conflict. Trimmed
+    /// files have no local original; they keep their receipts and are returned. The changed record is cleared
+    /// once something is requeued.
+    public func uploadAgain(captureID: String) throws -> UploadAgainResult {
+        try uploadAgain(captureID: captureID, allPaths: false)
+    }
+
+    private func uploadAgain(captureID: String, allPaths: Bool) throws -> UploadAgainResult {
+        let record = allPaths ? nil : try remoteState.changed(captureID: captureID)
+        let paths: [String]
+        if let record {
+            paths = record.paths
+        } else {
+            guard let directory = try index.relativeDirectory(captureID: captureID) else {
+                return UploadAgainResult(requeued: false, unrestorablePaths: [])
+            }
+            let marker = try HippoJSON.decodeMarker(Data(contentsOf: layout.packageURL(relativeDirectory: directory)
+                .appendingPathComponent("complete.json")))
+            paths = marker.files.map(\.relativePath)
+        }
+        let trimmed = try trims.trimmedPaths(captureID: captureID)
+        let unrestorable = paths.filter { trimmed.contains($0) }.sorted()
+        let cleared = Array(Set(paths.filter { !trimmed.contains($0) } + ["complete.json"])).sorted()
+
+        let all = try jobs.jobs(captureID: captureID)
+        let active = try destinations.active()
+        let targets = active.map { a in all.filter { $0.destinationID == a.id } } ?? all
+        for job in targets {
+            try jobs.clearReceipts(jobID: job.jobID, paths: cleared)
+            try jobs.requeue(jobID: job.jobID)
+        }
+        if !targets.isEmpty { try remoteState.clearChanged(captureID: captureID) }
+        return UploadAgainResult(requeued: !targets.isEmpty, unrestorablePaths: unrestorable)
+    }
+
+    /// Settles the destination's pending "looks different" review. `keep == false` removes each item's capture
+    /// from this phone (as a remote delete); `keep == true` uploads again every file of each capture without
+    /// trimmed files and leaves the others as they are. Captures that no longer exist are skipped. Returns
+    /// how many items were settled.
+    public func resolveReview(destinationID: String, keep: Bool) async throws -> Int {
+        var settled = 0
+        for item in try remoteState.reviewItems(destinationID: destinationID) {
+            guard try index.relativeDirectory(captureID: item.captureID) != nil else { continue }
+            if !keep {
+                try await removeAfterRemoteDelete(captureID: item.captureID)
+            } else if try trims.trimmedPaths(captureID: item.captureID).isEmpty {
+                _ = try uploadAgain(captureID: item.captureID, allPaths: true)
+            }
+            settled += 1
+        }
+        try remoteState.clearReview(destinationID: destinationID)
+        return settled
     }
 
     /// Manual retry (spec §10): makes this capture's blocked and retry-waiting uploads claimable now.

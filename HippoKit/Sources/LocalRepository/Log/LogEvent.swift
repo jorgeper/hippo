@@ -32,6 +32,8 @@ public enum LogEventName: String, Codable, Sendable, CaseIterable {
     case goldSkipped = "gold.skipped"
     case goldPull = "gold.pull"
     case remoteDelete = "remote.delete"
+    case remoteChanged = "remote.changed"
+    case remoteReview = "remote.review"
     case syncPass = "sync.pass"
     case bgTask = "bg.task"
     case appLaunch = "app.launch"

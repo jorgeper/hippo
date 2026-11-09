@@ -24,6 +24,7 @@ public actor SyncCoordinator {
     private let deleter: RemoteDeleter
     private let uploader: EnrichmentUploader
     private let puller: GoldPuller
+    private let detector: RemoteChangeDetector
     private let logUploader: LogUploader
     private let settings: AppSettings
     private let appVersion: String
@@ -55,6 +56,7 @@ public actor SyncCoordinator {
         deleter = store.makeRemoteDeleter(adapterFor: { try registry.adapter(for: $0) })
         uploader = store.makeEnrichmentUploader(adapterFor: { try registry.adapter(for: $0) })
         puller = store.makeGoldPuller(adapterFor: { try registry.adapter(for: $0) })
+        detector = store.makeChangeDetector(adapterFor: { try registry.adapter(for: $0) })
         logUploader = store.makeLogUploader(installID: settings.installID, adapterFor: { try registry.adapter(for: $0) },
                                           isConstrained: isConstrained)
     }
@@ -177,6 +179,8 @@ public actor SyncCoordinator {
         }
         // Gold pulls never change the pass result or the follow-up decision either.
         if !Task.isCancelled { _ = await puller.pull() }
+        // Deletes and changes made in the destination, after this pass's uploads; never change the result.
+        if !Task.isCancelled { _ = await detector.run() }
         // Log uploads are not events and never change the pass result.
         if !Task.isCancelled { _ = await logUploader.upload() }
         store.log.prune()

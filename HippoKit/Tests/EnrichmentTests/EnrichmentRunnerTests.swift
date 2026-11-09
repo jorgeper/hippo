@@ -570,17 +570,57 @@ private let t0 = RunnerHarness.t0
         #expect(h.store.log.globalEvents(limit: 50, before: nil).filter { $0.event == .enrichScheduled }.isEmpty)
     }
 
-    /// A provider whose destination is a local folder (`providerKind` "filesystem").
+    /// A provider whose destination is a local folder (`providerKind` "filesystem"), signed in as an account
+    /// whose name and identifier must never reach the log. Its folder deletes fail with a token-like code.
     private struct FolderProvider: StorageProvider {
         let kind = "filesystem"
         let displayName = "Folder"
         let root: URL
         @MainActor func connect() async throws -> Destination {
-            Destination(id: "dest-fs", providerKind: kind, accountIdentifier: "local", remoteRoot: root.path,
-                        displayName: displayName, status: .active)
+            Destination(id: "dest-fs", providerKind: kind, accountIdentifier: "dbid:SECRET", remoteRoot: root.path,
+                        displayName: "Secret Person", status: .active)
         }
-        func makeAdapter(for d: Destination) throws -> any StorageAdapter { FilesystemAdapter(root: root) }
+        func makeAdapter(for d: Destination) throws -> any StorageAdapter {
+            FailingDeleteAdapter(inner: FilesystemAdapter(root: root))
+        }
         func signOut(_ d: Destination) async {}
+    }
+
+    /// The filesystem adapter, except that `deleteFolder` throws an error whose code looks like a token.
+    private struct FailingDeleteAdapter: StorageAdapter {
+        let inner: FilesystemAdapter
+        var capabilities: StorageCapabilities { inner.capabilities }
+        func validateDestination() async throws { try await inner.validateDestination() }
+        func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }
+        func inspectFile(relativePath: String) async throws -> RemoteFileInfo? {
+            try await inner.inspectFile(relativePath: relativePath)
+        }
+        func verify(remote: RemoteFileInfo, localURL: URL, expected: FileIntegrity) async throws -> VerificationEvidence? {
+            try await inner.verify(remote: remote, localURL: localURL, expected: expected)
+        }
+        func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
+                        saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt {
+            try await inner.uploadFile(localURL: localURL, relativePath: relativePath, expected: expected,
+                                       checkpoint: checkpoint, saveCheckpoint: saveCheckpoint)
+        }
+        func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
+            try await inner.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
+        }
+        func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
+            try await inner.listChanges(under: prefix, cursor: cursor)
+        }
+        func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
+                          progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {
+            try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes, progress: progress)
+        }
+        func deleteFolder(relativePath: String) async throws { throw StorageError.transient(code: "sl.SECRETTOKEN") }
+        func latestCursor(under prefix: String) async throws -> String { try await inner.latestCursor(under: prefix) }
+        func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
+            try await inner.listFolder(relativePath: relativePath, recursive: recursive, cursor: cursor)
+        }
+        func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data? {
+            try await inner.thumbnail(relativePath: relativePath, maxPixelSize: maxPixelSize)
+        }
     }
 
     @MainActor @Test func noEventCarriesContent() async throws {
@@ -632,13 +672,37 @@ private let t0 = RunnerHarness.t0
                                       .enrichPass, .packageUploaded, .silverUploaded, .goldApplied, .goldPull,
                                       .syncPass, .settingsChanged]))
         #expect(global.filter { $0.event == .syncPass }.allSatisfy { $0.trigger == "launch" })
+
+        // Changes made in the destination, a failing "Delete everywhere" and the safety valve, then
+        // Disconnect and Connect again, all with the account's name and identifier around.
+        let second = try await h.store.capture(CaptureDraft(
+            captureID: UUID(), startedAt: RunnerHarness.t0, timeZone: RunnerHarness.zone, method: .shareExtension,
+            urls: [CapturedURL(url: "https://example.com/second", source: "shared")])).metadata.captureID
+        _ = await coordinator.syncNow()
+        let remotePackage = remote.appendingPathComponent(directory)
+        try Data("{}".utf8).write(to: remotePackage.appendingPathComponent("metadata.json"))
+        _ = try await h.store.deleteEverywhere(captureID: second)
+        _ = await coordinator.syncNow()
+        // One of one synced capture is over the safety valve's fraction: a review, not a removal.
+        try FileManager.default.removeItem(at: remotePackage.appendingPathComponent("complete.json"))
+        _ = await coordinator.syncNow()
+        try await model.signOut()
+        try await model.connect(provider)
+
+        let later = Set(events(h, id).map(\.event)).union(events(h, second).map(\.event))
+            .union(h.store.log.globalEvents(limit: 200, before: nil).map(\.event))
+        #expect(later.isSuperset(of: [.remoteDelete, .remoteChanged, .remoteReview]))
+        #expect(events(h, second).filter { $0.event == .remoteDelete && $0.outcome == .failed }.map(\.code)
+                == ["unrecognized"])
+        #expect(try h.store.index.relativeDirectory(captureID: id) == directory)
+
         let files = h.store.log.segmentFiles()
         #expect(!files.isEmpty)
         for file in files {
             let text = String(decoding: try Data(contentsOf: file), as: UTF8.self)
-            #expect(!text.contains("SECRET"))
-            #expect(!text.contains("example.com"))
-            #expect(!text.contains(directory))
+            for secret in ["SECRET", "Secret", "dbid:", "@example.com", "example.com", directory] {
+                #expect(!text.contains(secret), "\(secret)")
+            }
         }
     }
 

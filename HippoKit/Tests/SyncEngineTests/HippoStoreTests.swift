@@ -152,7 +152,8 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         let adapter = PausingAdapter(inner: t.adapter, path: pkg.attachmentPath)
         let s = t.store
         let worker = SyncWorker(layout: s.layout, jobs: s.jobs, destinations: s.destinations, index: s.index,
-                                adapterFor: { _ in adapter }, owner: "stalled-worker", now: { t0 })
+                                trims: s.trims, remoteState: s.remoteState, adapterFor: { _ in adapter },
+                                owner: "stalled-worker", now: { t0 })
         // Opening `paused` on exit too means a worker that never reaches the file fails the test, not hangs it.
         let run = Task { let r = await worker.runOnce(); adapter.paused.open(); return r }
         await adapter.paused.wait()
@@ -360,6 +361,63 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(try !t.store.remoteState.hasTombstone(captureID: id))
         #expect(try t.store.remoteState.localDeletedCaptureIDs() == [id])
         #expect(try t.store.index.count() == 0)
+    }
+
+    @Test func uploadAgainClearsChangedReceiptsAndRequeues() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        let adapter = t.adapter
+        let worker = t.store.makeWorker(adapterFor: { _ in adapter }, owner: "app")
+        _ = await worker.runOnce()
+        let attachment = pkg.metadata.attachments[0].relativePath
+        try FileManager.default.removeItem(at: t.remoteURL(pkg).appendingPathComponent(attachment))
+        try t.store.remoteState.markChanged(captureID: id, destinationID: "dest-fs", paths: [attachment], now: Date())
+
+        let result = try t.store.uploadAgain(captureID: id)
+
+        #expect(result == UploadAgainResult(requeued: true, unrestorablePaths: []))
+        let job = try #require(try t.store.jobs.jobs(captureID: id).first)
+        #expect(job.state == .pending)
+        #expect(try t.store.jobs.receipts(jobID: job.jobID).map(\.relativePath) == ["metadata.json"])
+        #expect(try t.store.remoteState.changed(captureID: id) == nil)
+
+        // The next pass puts the missing file back.
+        #expect(await worker.runOnce() == SyncPassResult(synced: 1, failed: 0, idle: false))
+        #expect(isComplete(PackageValidator.validate(directory: t.remoteURL(pkg))))
+    }
+
+    @Test func uploadAgainReportsTrimmedPaths() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        let adapter = t.adapter
+        _ = await t.store.makeWorker(adapterFor: { _ in adapter }, owner: "app").runOnce()
+        let attachment = pkg.metadata.attachments[0]
+        try t.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: attachment.attachmentID,
+                                                   relativePath: attachment.relativePath,
+                                                   byteCount: attachment.byteCount, sha256: attachment.sha256,
+                                                   destinationID: "dest-fs", state: .trimmed, trimmedAt: Date()))
+        try t.store.remoteState.markChanged(captureID: id, destinationID: "dest-fs",
+                                            paths: [attachment.relativePath, "metadata.json"], now: Date())
+
+        let result = try t.store.uploadAgain(captureID: id)
+
+        #expect(result == UploadAgainResult(requeued: true, unrestorablePaths: [attachment.relativePath]))
+        let job = try #require(try t.store.jobs.jobs(captureID: id).first)
+        #expect(job.state == .pending)
+        // The trimmed file keeps its receipt: there is nothing on this iPhone to upload.
+        #expect(try t.store.jobs.receipts(jobID: job.jobID).map(\.relativePath) == [attachment.relativePath])
+        #expect(try t.store.remoteState.changed(captureID: id) == nil)
+    }
+
+    @Test func uploadAgainWithoutJobRequeuesNothing() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        #expect(try t.store.uploadAgain(captureID: pkg.metadata.captureID)
+                == UploadAgainResult(requeued: false, unrestorablePaths: []))
     }
 
     @Test func removeAfterRemoteDeleteWritesNoLocalDeleteRecord() async throws {

@@ -56,6 +56,44 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
                 == (pkg.marker.files.map(\.relativePath) + ["complete.json"]).sorted())
     }
 
+    @Test func trimmedFileWithoutReceiptBlocks() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        let attachment = pkg.metadata.attachments[0]
+        try h.trims.record(TrimmedAttachment(captureID: pkg.metadata.captureID, attachmentID: attachment.attachmentID,
+                                             relativePath: attachment.relativePath, byteCount: attachment.byteCount,
+                                             sha256: attachment.sha256, destinationID: "dest-fs", state: .trimmed,
+                                             trimmedAt: t0))
+        try FileManager.default.removeItem(at: pkg.directoryURL.appendingPathComponent(attachment.relativePath))
+
+        let result = await h.worker().runOnce()
+
+        #expect(result == SyncPassResult(synced: 0, failed: 1, idle: false))
+        let job = try h.job(pkg)
+        #expect(job.state == .blocked)
+        #expect(job.lastErrorCode == "trimmed_file_missing")
+        #expect(!h.uploads.contains("upload \(pkg.attachmentPath)"))
+        #expect(!h.uploads.contains("upload \(pkg.markerPath)"))
+    }
+
+    @Test func markSyncedClearsChanged() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        let other = try await h.capture()
+        try h.remoteState.markChanged(captureID: pkg.metadata.captureID, destinationID: "dest-fs",
+                                      paths: ["metadata.json"], now: t0)
+        try h.remoteState.markChanged(captureID: other.metadata.captureID, destinationID: "dest-fs",
+                                      paths: ["metadata.json"], now: t0)
+        // The other capture's upload doesn't run, so its record stays.
+        try h.db.execute("UPDATE jobs SET state = 'blocked' WHERE job_id = ?", [.text(try h.job(other).jobID)])
+
+        _ = await h.worker().runOnce()
+
+        #expect(try h.job(pkg).state == .synced)
+        #expect(try h.remoteState.changed(captureID: pkg.metadata.captureID) == nil)
+        #expect(try h.remoteState.changed(captureID: other.metadata.captureID) != nil)
+    }
+
     @Test func urlOnlyCaptureHasNoRemoteContentFolder() async throws {
         let h = try SyncHarness(); defer { h.cleanup() }
         let pkg = try await h.capture(attachmentBytes: nil)
@@ -430,7 +468,8 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         let adapter = h.adapter
         let clock = h.clock
         let worker = SyncWorker(layout: h.layout, jobs: h.jobs, destinations: h.destinations, index: h.index,
-                                adapterFor: { _ in adapter }, owner: "w", policy: RetryPolicy(base: 1000, cap: 1000),
+                                trims: h.trims, remoteState: h.remoteState, adapterFor: { _ in adapter }, owner: "w",
+                                policy: RetryPolicy(base: 1000, cap: 1000),
                                 now: { clock.now }, random: { 0.5 })
 
         _ = await worker.runOnce()

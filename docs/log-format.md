@@ -69,6 +69,7 @@ Per capture (carry `capture_id`):
 | `silver.uploaded`, `silver.upload_failed` | Silver enrichment uploaded or failed (`dest`, `code`) |
 | `package.uploaded`, `package.upload_failed` | Capture package uploaded or failed (`dest`, `code`) |
 | `remote.delete` | "Delete everywhere": no `outcome` when queued, `ok` once removed in the destination, `failed` with `code` (`dest`) |
+| `remote.changed` | A file of the capture is missing or different in the destination, so it is marked changed (`dest`); `code` `unverified` when the capture's package or marker is gone there but its upload isn't verified, so it was not removed |
 | `gold.applied`, `gold.removed`, `gold.skipped` | Server enrichment applied, removed, or skipped (`code`) |
 
 Global (no `capture_id`):
@@ -81,6 +82,7 @@ Global (no `capture_id`):
 | `sync.pass` | A sync pass started or ended (`phase`, `trigger`, `count`, `code`) |
 | `bg.task` | A background task started, expired or ended (`phase`) |
 | `gold.pull` | A gold pull ended (`count` applied, `code`, `on` if the change cursor was reset) |
+| `remote.review` | Deletes found in the destination were not applied and wait for review (`count` captures, `dest`); `code` is `threshold` (too many at once), `root_missing` (the `captures/` folder is gone) or `cursor_reset` (the change cursor was reset and a full listing missed them) |
 | `app.launch` | The app launched (`code` = version-build) |
 | `settings.changed` | A switch changed (`kind`, `on`); never values such as folder names |
 | `log.truncated` | A segment reached its size cap; later events in it were dropped |

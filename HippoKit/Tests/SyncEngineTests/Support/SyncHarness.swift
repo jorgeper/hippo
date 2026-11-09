@@ -26,6 +26,8 @@ struct SyncHarness {
     let writer: PackageWriter
     let destinations: DestinationStore
     let jobs: JobStore
+    let trims: TrimStore
+    let remoteState: RemoteStateStore
     let log: ActivityLog
     let faults = FaultPlan()
     let clock = TestClock(t0)
@@ -42,6 +44,8 @@ struct SyncHarness {
         writer = PackageWriter(layout: layout, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"))
         destinations = DestinationStore(db: db)
         jobs = JobStore(db: db)
+        trims = TrimStore(db: db)
+        remoteState = RemoteStateStore(db: db)
         log = ActivityLog(layout: layout, process: .app)
         _ = try destinations.connect(Destination(id: "dest-fs", providerKind: "filesystem", accountIdentifier: "local",
                                                  remoteRoot: "/", displayName: "Local folder", status: .active))
@@ -55,8 +59,9 @@ struct SyncHarness {
                 random: @escaping @Sendable () -> Double = { 1 }) -> SyncWorker {
         let a: any StorageAdapter = adapter ?? self.adapter
         let clock = self.clock, log = self.log
-        return SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index,
-                          adapterFor: { _ in a }, owner: owner, now: { clock.now }, random: random, log: log)
+        return SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index, trims: trims,
+                          remoteState: remoteState, adapterFor: { _ in a }, owner: owner, now: { clock.now },
+                          random: random, log: log)
     }
 
     /// Commits, registers and enqueues a capture with one attachment of `attachmentBytes` bytes, or a
@@ -108,9 +113,11 @@ final class Counter: @unchecked Sendable {
 }
 
 /// Wraps the filesystem adapter with test hooks: hide paths from `inspectFile`, act before an upload,
-/// or act before each checkpoint is handed to the worker.
+/// or act before each checkpoint is handed to the worker, or script what `listChanges` returns.
 struct HookedAdapter: StorageAdapter {
     let inner: FilesystemAdapter
+    /// When set, `listChanges` returns this instead of asking the inner adapter.
+    var changes: (@Sendable (String, String?) throws -> ChangePage)? = nil
     var hideFromInspect: @Sendable (String) -> Bool = { _ in false }
     var beforeUpload: @Sendable (String) throws -> Void = { _ in }
     var onCheckpoint: @Sendable (String) throws -> Void = { _ in }
@@ -123,7 +130,8 @@ struct HookedAdapter: StorageAdapter {
         try await inner.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
     }
     func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
-        try await inner.listChanges(under: prefix, cursor: cursor)
+        if let changes { return try changes(prefix, cursor) }
+        return try await inner.listChanges(under: prefix, cursor: cursor)
     }
     func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
                       progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {

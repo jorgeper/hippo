@@ -27,6 +27,8 @@ public final class SyncWorker: Sendable {
     private let jobs: JobStore
     private let destinations: DestinationStore
     private let index: CaptureIndex
+    private let trims: TrimStore
+    private let remoteState: RemoteStateStore
     private let adapterFor: @Sendable (Destination) throws -> any StorageAdapter
     /// The lease owner for every job this worker claims: the `owner` prefix plus a per-instance UUID,
     /// so two workers with the same prefix (e.g. two app passes) never share a lease.
@@ -37,6 +39,7 @@ public final class SyncWorker: Sendable {
     private let log: ActivityLog?
 
     public init(layout: StoreLayout, jobs: JobStore, destinations: DestinationStore, index: CaptureIndex,
+                trims: TrimStore, remoteState: RemoteStateStore,
                 adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter, owner: String,
                 policy: RetryPolicy = .init(), now: @escaping @Sendable () -> Date = Date.init,
                 random: @escaping @Sendable () -> Double = { .random(in: 0...1) }, log: ActivityLog? = nil) {
@@ -45,6 +48,8 @@ public final class SyncWorker: Sendable {
         self.jobs = jobs
         self.destinations = destinations
         self.index = index
+        self.trims = trims
+        self.remoteState = remoteState
         self.adapterFor = adapterFor
         self.leaseOwner = "\(owner)#\(UUID().uuidString.lowercased())"
         self.policy = policy
@@ -99,6 +104,8 @@ public final class SyncWorker: Sendable {
         do {
             try await upload(job)
             try jobs.markSynced(jobID: job.jobID, owner: leaseOwner)
+            // Every file is verified in the destination again, so it no longer differs there.
+            try? remoteState.clearChanged(captureID: job.captureID)
             log?.append(LogEvent(event: .packageUploaded, captureID: job.captureID, dest: destinationKind(job)))
             return .synced
         } catch is CancellationError {
@@ -119,14 +126,23 @@ public final class SyncWorker: Sendable {
             throw Failure(state: .paused, code: "destination_inactive")
         }
         // Any package that fails to load is surfaced as blocked (visible "Needs attention");
-        // the user's Retry (JobStore.retryNow) re-queues it once the cause is gone.
+        // the user's Retry (JobStore.retryNow) re-queues it once the cause is gone. Trimmed files may be
+        // absent: their originals live only in the destination.
+        let trimmed = try trims.trimmedPaths(captureID: job.captureID)
         guard let directory = try index.relativeDirectory(captureID: job.captureID),
               let package = CommittedPackage.load(directory: layout.packageURL(relativeDirectory: directory),
-                                                  layout: layout) else {
+                                                  layout: layout, trimmed: trimmed) else {
             throw Failure(state: .blocked, code: "local_package_invalid")
         }
-        let adapter = try adapterFor(destination)
         let files = package.marker.files.filter { $0.relativePath != Self.markerName }
+        let receipted = Set(try jobs.receipts(jobID: job.jobID).map(\.relativePath))
+        // A trimmed file that still needs uploading is gone from this phone too: nothing here can restore it.
+        let fm = FileManager.default
+        if files.contains(where: { !receipted.contains($0.relativePath) && trimmed.contains($0.relativePath)
+            && !fm.fileExists(atPath: package.directoryURL.appendingPathComponent($0.relativePath).path) }) {
+            throw Failure(state: .blocked, code: "trimmed_file_missing")
+        }
+        let adapter = try adapterFor(destination)
 
         try await adapter.ensureContainer(relativePath: directory)
         // Mirror the local layout: a package without attachments has no content/ folder.
@@ -134,7 +150,6 @@ public final class SyncWorker: Sendable {
             try await adapter.ensureContainer(relativePath: directory + "/content")
         }
 
-        let receipted = Set(try jobs.receipts(jobID: job.jobID).map(\.relativePath))
         for entry in files where !receipted.contains(entry.relativePath) {
             try await syncFile(entry.relativePath, local: package.directoryURL.appendingPathComponent(entry.relativePath),
                                expected: FileIntegrity(byteCount: entry.byteCount, sha256: entry.sha256),

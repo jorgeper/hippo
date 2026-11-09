@@ -41,6 +41,18 @@ struct LogLineTests {
         #expect(line(LogEvent(event: .remoteDelete, dest: "filesystem")).text == "Delete queued for the Developer folder")
     }
 
+    @Test func remoteChangeLines() {
+        #expect(line(LogEvent(event: .remoteChanged, dest: "dropbox")).text == "Changed in Dropbox")
+        #expect(line(LogEvent(event: .remoteChanged, code: "unverified", dest: "dropbox")).text
+                == "Not removed: upload not verified")
+        #expect(line(LogEvent(event: .remoteReview, code: "threshold", count: 25, dest: "dropbox")).text
+                == "Dropbox looks different · 25 captures to review")
+        #expect(line(LogEvent(event: .remoteReview, code: "cursor_reset", count: 1, dest: "dropbox")).text
+                == "Dropbox looks different · 1 capture to review")
+        #expect(line(LogEvent(event: .remoteReview, code: "threshold", count: 2, dest: "filesystem")).text
+                == "The Developer folder looks different · 2 captures to review")
+    }
+
     @Test func unknownCombinationFallsBack() {
         #expect(line(LogEvent(event: .bgTask, outcome: .skipped, code: "stale")).text == "bg.task · skipped · stale")
         #expect(line(LogEvent(event: .goldSkipped, code: "stale")).text == "Server results skipped · stale")
