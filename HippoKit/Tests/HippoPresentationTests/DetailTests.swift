@@ -345,14 +345,15 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
 
     @Test func trimmedAttachmentRowsAndPreview() {
         let other = Destination(id: "d2", providerKind: "filesystem", accountIdentifier: "x", remoteRoot: "/",
-                                displayName: "Developer folder", status: .active)
+                                displayName: "Jorge", status: .active)
         func detail(_ state: TrimState, dest: String = "d1", active: Destination? = dropbox,
-                    thumb: URL? = nil) -> CaptureDetail {
+                    thumb: URL? = nil, provider: @escaping (String) -> String? = { _ in nil }) -> CaptureDetail {
             let t = TrimmedAttachment(captureID: "c1", attachmentID: "a1", relativePath: "content/a1.bin",
                                       byteCount: 2_500_000, sha256: "x", destinationID: dest, state: state, trimmedAt: now)
             return CaptureDetail.make(metadata: meta(attachments: [att()]), packageURL: pkg, noteBody: nil,
                                       jobs: [job(.synced, dest: dest)], enrichment: .empty,
                                       trimmed: [t], thumbnailURL: { _ in thumb }, activeDestination: active,
+                                      providerName: provider,
                                       destination: { ["d1": dropbox, "d2": other][$0] }, now: now,
                                       locale: locale, calendar: calendar)
         }
@@ -366,10 +367,14 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(available.exportURLs.isEmpty)
 
         let elsewhere = detail(.trimmed, dest: "d2", active: dropbox)
-        let message = "Connect Developer folder (account Developer folder) to download"
+        let message = "Connect Jorge to download"
         #expect(elsewhere.remoteOnly["a1"]?.state == .unavailable(message: message))
         #expect(elsewhere.attachments[0].contains(DetailRow(label: "Storage", value: message)))
         #expect(detail(.trimmed, dest: "d2", active: nil).remoteOnly["a1"]?.state == .unavailable(message: message))
+
+        let named = detail(.trimmed, dest: "d2", active: dropbox, provider: { $0 == "filesystem" ? "Developer folder" : nil })
+        #expect(named.remoteOnly["a1"]?.state
+                == .unavailable(message: "Connect Developer folder (account Jorge) to download"))
 
         let mismatch = detail(.mismatch)
         let changed = "Changed in Dropbox: this file no longer matches"
@@ -414,7 +419,7 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         await model.load()
         #expect(await model.detail?.remoteOnly[a.attachmentID]?.state == .available(destinationName: "Dropbox"))
         await model.restore(attachmentID: a.attachmentID)
-        #expect(await model.restoreMessage == "Connect to the internet to download")
+        #expect(await model.restoreMessages[a.attachmentID] == "Connect to the internet to download")
         #expect(await model.restoreProgress[a.attachmentID] == nil)
     }
 

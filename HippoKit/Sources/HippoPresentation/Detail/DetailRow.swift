@@ -57,9 +57,14 @@ public struct RemoteOnlyAttachment: Equatable, Sendable {
         self.state = state
     }
 
-    /// "Connect <name> (account <name>) to download"; the destination's display name is the account name.
-    public static func unavailableText(destinationName: String?) -> String {
-        destinationName.map { "Connect \($0) (account \($0)) to download" } ?? "Connect your storage to download"
+    /// "Connect <provider> (account <account>) to download"; without a provider name, "Connect <account> to download".
+    public static func unavailableText(providerName: String?, accountName: String?) -> String {
+        switch (providerName, accountName) {
+        case let (provider?, account?): "Connect \(provider) (account \(account)) to download"
+        case let (provider?, nil): "Connect \(provider) to download"
+        case let (nil, account?): "Connect \(account) to download"
+        case (nil, nil): "Connect your storage to download"
+        }
     }
 
     public static func mismatchText(destinationName: String?) -> String {

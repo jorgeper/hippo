@@ -63,6 +63,7 @@ public struct CaptureDetail: Equatable, Sendable {
                             destinationName: String? = nil,
                             trimmed: [TrimmedAttachment] = [], thumbnailURL: (String) -> URL? = { _ in nil },
                             activeDestination: Destination? = nil,
+                            providerName: (String) -> String? = { _ in nil },
                             isEnabled: (FacetKind) -> Bool = { _ in true }, isOnline: Bool = true,
                             goldArrivedAt: Date? = nil, destination: (String) -> Destination?, now: Date,
                             locale: Locale, calendar: Calendar) -> CaptureDetail {
@@ -72,14 +73,16 @@ public struct CaptureDetail: Equatable, Sendable {
         }
         let remoteOnly = Dictionary(uniqueKeysWithValues: trimmed.compactMap { t -> (String, RemoteOnlyAttachment)? in
             guard let a = m.attachments.first(where: { $0.attachmentID == t.attachmentID }) else { return nil }
-            let name = destination(t.destinationID)?.displayName
+            let owner = destination(t.destinationID)
+            let name = owner?.displayName
             let state: RemoteOnlyAttachment.State
             if t.state == .mismatch {
                 state = .mismatch(message: RemoteOnlyAttachment.mismatchText(destinationName: name))
             } else if let name, activeDestination?.id == t.destinationID {
                 state = .available(destinationName: name)
             } else {
-                state = .unavailable(message: RemoteOnlyAttachment.unavailableText(destinationName: name))
+                state = .unavailable(message: RemoteOnlyAttachment.unavailableText(providerName: owner.flatMap { providerName($0.providerKind) },
+                                                                                accountName: name))
             }
             return (t.attachmentID, RemoteOnlyAttachment(attachmentID: t.attachmentID, relativePath: t.relativePath,
                                                          byteCount: t.byteCount, thumbnailURL: thumbnailURL(t.attachmentID),

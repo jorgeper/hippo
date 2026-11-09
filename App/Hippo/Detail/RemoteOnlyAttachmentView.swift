@@ -25,7 +25,7 @@ struct RemoteOnlyAttachmentView: View {
                 thumbnail
                 VStack(alignment: .leading, spacing: 4) {
                     Text(stateText).font(large ? .headline : .subheadline)
-                    if let message = model.restoreMessage, model.restoreProgress[attachment.attachmentID] == nil {
+                    if let message = model.restoreMessages[attachment.attachmentID], model.restoreProgress[attachment.attachmentID] == nil {
                         Text(message).font(.footnote).foregroundStyle(.secondary)
                     }
                 }

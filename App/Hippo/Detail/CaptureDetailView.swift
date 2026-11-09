@@ -34,12 +34,14 @@ struct CaptureDetailView: View {
         let adapterFor: (@Sendable (Destination) throws -> any StorageAdapter)? = environment.registry.map { registry in
             { @Sendable destination in try registry.adapter(for: destination) }
         }
+        let registry = environment.registry
         _model = State(initialValue: CaptureDetailModel(
             store: environment.store, captureID: captureID,
             isEnabled: { LocationService.settings.isEnrichmentEnabled($0) },
             isOnline: { EnrichmentScheduling.isOnline },
             sync: { [coordinator = environment.coordinator] in _ = await coordinator?.syncNow(trigger: "manual") },
-            adapterFor: adapterFor))
+            adapterFor: adapterFor,
+            providerName: { kind in registry?.provider(kind: kind)?.displayName }))
     }
 
     var body: some View {

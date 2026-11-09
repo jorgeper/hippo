@@ -18,8 +18,8 @@ public final class CaptureDetailModel {
     public private(set) var capturedAt: Date?
     /// Download progress (0...1) by attachment ID, present only while that attachment is downloading.
     public private(set) var restoreProgress: [String: Double] = [:]
-    /// Why the last download didn't finish; cleared when the next one starts.
-    public private(set) var restoreMessage: String?
+    /// Why the last download of each attachment didn't finish; cleared when its next one starts.
+    public private(set) var restoreMessages: [String: String] = [:]
 
     @ObservationIgnored private let store: HippoStore
     @ObservationIgnored private let captureID: String
@@ -29,6 +29,7 @@ public final class CaptureDetailModel {
     @ObservationIgnored private let isEnabled: @Sendable (FacetKind) -> Bool
     @ObservationIgnored private let isOnline: @Sendable () -> Bool
     @ObservationIgnored private let sync: @Sendable () async -> Void
+    @ObservationIgnored private let providerName: @Sendable (String) -> String?
     @ObservationIgnored private let adapterFor: (@Sendable (Destination) throws -> any StorageAdapter)?
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "detail")
     /// Runs after a load's read and before it applies. Set only by tests, to finish loads out of order.
@@ -41,7 +42,9 @@ public final class CaptureDetailModel {
                 isEnabled: @escaping @Sendable (FacetKind) -> Bool = { _ in true },
                 isOnline: @escaping @Sendable () -> Bool = { true },
                 sync: @escaping @Sendable () async -> Void = {},
-                adapterFor: (@Sendable (Destination) throws -> any StorageAdapter)? = nil) {
+                adapterFor: (@Sendable (Destination) throws -> any StorageAdapter)? = nil,
+                providerName: @escaping @Sendable (String) -> String? = { _ in nil }) {
+        self.providerName = providerName
         self.adapterFor = adapterFor
         self.sync = sync
         self.isEnabled = isEnabled
@@ -66,7 +69,7 @@ public final class CaptureDetailModel {
         generation += 1
         let mine = generation
         let store = store, id = captureID, now = now(), calendar = calendar, locale = locale
-        let isEnabled = isEnabled, isOnline = isOnline
+        let isEnabled = isEnabled, isOnline = isOnline, providerName = providerName
         let loaded: Loaded? = await Task.detached {
             do {
                 guard let metadata = try store.index.metadata(captureID: id, layout: store.layout),
@@ -98,7 +101,7 @@ public final class CaptureDetailModel {
                                                     let url = store.layout.thumbnailURL(attachmentID: aid)
                                                     return FileManager.default.fileExists(atPath: url.path) ? url : nil
                                                 },
-                                                activeDestination: active, isEnabled: isEnabled,
+                                                activeDestination: active, providerName: providerName, isEnabled: isEnabled,
                                                 isOnline: isOnline(), goldArrivedAt: goldArrivedAt, destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName)
@@ -151,7 +154,7 @@ public final class CaptureDetailModel {
         restoreProgress[attachmentID] = 0
         var name: String?
         if case .available(let n)? = detail?.remoteOnly[attachmentID]?.state { name = n }
-        restoreMessage = nil
+        restoreMessages[attachmentID] = nil
         let store = store, id = captureID
         let result: Result<Void, RestoreError> = await Task.detached {
             do {
@@ -175,9 +178,11 @@ public final class CaptureDetailModel {
         restoreProgress[attachmentID] = nil
         if case .failure(let error) = result {
             Self.log.error("\("restore_failed", privacy: .public)")
-            restoreMessage = switch error {
+            restoreMessages[attachmentID] = switch error {
             case .offline: "Connect to the internet to download"
-            case .notConnected(let name): RemoteOnlyAttachment.unavailableText(destinationName: name)
+            case .notConnected(let account):
+                if case .unavailable(let message)? = detail?.remoteOnly[attachmentID]?.state { message }
+                else { RemoteOnlyAttachment.unavailableText(providerName: nil, accountName: account) }
             case .mismatch: RemoteOnlyAttachment.mismatchText(destinationName: name)
             case .notFound: RemoteOnlyAttachment.goneText(destinationName: name)
             case .failed: "Couldn't download this file"
