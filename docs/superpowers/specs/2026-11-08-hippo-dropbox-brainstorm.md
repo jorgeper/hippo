@@ -107,7 +107,10 @@ My view, given to Jorge:
 - Once a capture's upload is verified, the phone may drop its large attachment bytes, keeping metadata, enrichment and a thumbnail, and download the original on tap.
 - It's a setting.
 - Never before the upload is verified.
-- Open: when a file counts as "large", and whether it is dropped as soon as it's verified or only after an age.
+- **Shape (Jorge):** a manual **"Save space"** action in Settings, not automatic trimming.
+  - It has two options: how old (captures older than N) and how large (files bigger than N MB).
+  - It trims only captures already verified in Dropbox.
+  - My call: show "Frees about X MB from N captures" before confirming.
 
 ## Already decided: from v0 §3.1 and the parked follow-ups
 
