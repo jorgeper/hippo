@@ -241,6 +241,52 @@ struct SettingsTests {
                 == "Disconnect Dropbox? Nothing is deleted on this iPhone or in Dropbox. Files kept only in Dropbox can't be downloaded until you reconnect.")
     }
 
+    @Test func needsSignInShowsInSummary() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let dest = h.provider.destination
+        _ = try h.t.store.destinations.connect(dest)
+        await h.model.refresh()
+        #expect(h.model.accountStatus == .ok)
+        #expect(!h.model.summary.contains("Sign in again"))
+
+        h.provider.setAccountStatus(.needsSignIn)
+        await h.model.refresh()
+        #expect(h.model.accountStatus == .needsSignIn)
+        #expect(h.model.summary.contains("Sign in again to Developer folder"))
+
+        // A job that failed for lack of sign-in says so too, even while the provider reports `.ok`.
+        h.provider.setAccountStatus(.ok)
+        let p = try await h.t.note("waiting for sign-in", at: start)
+        let job = try #require(try h.t.store.jobs.claimNext(owner: "w", now: Date(), lease: 60))
+        #expect(job.captureID == p.metadata.captureID)
+        try h.t.store.jobs.markFailed(jobID: job.jobID, owner: "w", state: .needsAuthentication,
+                                      errorCode: "needs_authentication", nextAttemptAt: nil)
+        await h.model.refresh()
+        #expect(h.model.summary.contains("Sign in again to Developer folder"))
+        #expect(SettingsModel.summary(counts: [:], pendingRemoteDeletes: 1, needsSignIn: true, reviewPending: 1,
+                                      destinationName: "Dropbox")
+                == "1 delete waiting to reach Dropbox · Sign in again to Dropbox · Dropbox looks different · review")
+    }
+
+    @Test func connectAndDisconnectAreLogged() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        #expect(SettingsModel.connectTitle(h.provider) == "Connect Developer folder")
+        try await h.model.connect(h.provider)
+        try await h.model.signOut()
+        let all = h.t.store.log.globalEvents(limit: 100, before: nil)
+        let auth = all.filter { [.authConnected, .authDisconnected].contains($0.event) }.reversed()
+        #expect(auth.map(\.event) == [.authConnected, .authDisconnected])
+        #expect(auth.allSatisfy { $0.dest == "filesystem" })
+        let dest = h.provider.destination
+        for e in all {
+            let line = String(decoding: try JSONEncoder().encode(e), as: UTF8.self).lowercased()
+            #expect(!line.contains(dest.displayName.lowercased()), "\(e.event)")
+            #expect(!line.contains(dest.accountIdentifier.lowercased()), "\(e.event)")
+        }
+    }
+
     @Test func connectBindsUnassignedAndSyncs() async throws {
         let h = try Harness()
         defer { h.cleanup() }

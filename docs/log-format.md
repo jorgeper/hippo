@@ -88,6 +88,9 @@ Global (no `capture_id`):
 | `remote.review` | Deletes found in the destination were not applied and wait for review (`count` captures, `dest`); `code` is `threshold` (too many at once), `root_missing` (the `captures/` folder is gone) or `cursor_reset` (the change cursor was reset and a full listing missed them) |
 | `trim.run` | Save space ended (`count` files trimmed, `bytes` freed, `code` = the last skip or stop reason, if any) |
 | `download.run` | "Download from <destination>" ended (`count` captures downloaded, `dest`, `code` = the last failure or stop reason, if any: a `download.capture` failure code, `cancelled`, `no_destination` when none is connected, or `unavailable` when the destination couldn't be read or opened) |
+| `auth.connected` | A destination was connected in Settings (`dest`); never the account's name, email or ID |
+| `auth.disconnected` | The destination was disconnected in Settings (`dest`) |
+| `auth.refresh_failed` | An upload found the destination's sign-in expired or revoked, so its job waits for Reconnect (`dest`) |
 | `app.launch` | The app launched (`code` = version-build) |
 | `settings.changed` | A switch changed (`kind`, `on`); never values such as folder names |
 | `log.truncated` | A segment reached its size cap; later events in it were dropped |

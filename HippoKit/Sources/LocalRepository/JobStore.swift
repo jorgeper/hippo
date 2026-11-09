@@ -141,6 +141,12 @@ public final class JobStore: Sendable {
             """, [.text(destinationID)]).first?.date("next_ms")
     }
 
+    /// How many of the destination's jobs are in `state`.
+    public func count(state: JobState, destinationID: String) throws -> Int {
+        try db.query("SELECT count(*) AS n FROM jobs WHERE destination_id = ? AND state = ?",
+                     [.text(destinationID), .text(state.rawValue)]).first?.int("n").map(Int.init) ?? 0
+    }
+
     public func requestCancel(captureID: String) throws {
         try db.execute("UPDATE jobs SET cancel_requested = 1, updated_at_ms = ? WHERE capture_id = ?",
                        [.int(Self.ms(Date())), .text(captureID)])

@@ -148,6 +148,11 @@ public struct LogLine: Equatable, Sendable, Identifiable {
             case .skipped?: return join(["Skipped", e.code])
             default: return join(["Couldn't download", e.code])
             }
+        case .authConnected: return "Connected " + (destination(e.dest) ?? "storage")
+        case .authDisconnected: return "Disconnected " + (destination(e.dest) ?? "storage")
+        case .authRefreshFailed:
+            guard let d = destination(e.dest) else { return "Sign-in expired" }
+            return d.prefix(1).uppercased() + d.dropFirst() + " sign-in expired"
         case .goldApplied: return "Server results applied"
         case .goldRemoved: return "Server results removed"
         case .goldSkipped: return join(["Server results skipped", e.code])

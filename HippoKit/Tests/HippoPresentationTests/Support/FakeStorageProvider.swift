@@ -15,6 +15,7 @@ final class FakeStorageProvider: StorageProvider {
     let faults: FaultPlan
     private let adapter: (@Sendable (Destination) -> any StorageAdapter)?
     private let signOuts = Mutex(0)
+    private let status = Mutex(ProviderAccountStatus.ok)
 
     init(root: URL, id: String = "dev", kind: String = "filesystem", faults: FaultPlan = FaultPlan(),
          adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil) {
@@ -43,6 +44,10 @@ final class FakeStorageProvider: StorageProvider {
     }
 
     func signOut(_ d: Destination) async { signOuts.withLock { $0 += 1 } }
+
+    /// What `accountStatus` reports; `.ok` until set.
+    func setAccountStatus(_ s: ProviderAccountStatus) { status.withLock { $0 = s } }
+    func accountStatus(_ d: Destination) async -> ProviderAccountStatus { status.withLock { $0 } }
 }
 
 /// Wraps an adapter and holds the first upload until `release()`; `started()` returns once it is held.

@@ -4,6 +4,8 @@ import LocalRepository
 
 @main
 struct HippoApp: App {
+    /// Forwards background upload-session events to the Dropbox provider.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let startup: Result<AppEnvironment, StartupError>
 
     /// Messages are fixed strings only.

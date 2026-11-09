@@ -256,8 +256,9 @@ public final class SyncWorker: Sendable {
         do {
             try jobs.markFailed(jobID: job.jobID, owner: leaseOwner, state: failure.state, errorCode: failure.code,
                                 nextAttemptAt: next)
-            log?.append(LogEvent(event: .packageUploadFailed, captureID: job.captureID, code: failure.code,
-                                 dest: destinationKind(job)))
+            let kind = destinationKind(job)
+            log?.append(LogEvent(event: .packageUploadFailed, captureID: job.captureID, code: failure.code, dest: kind))
+            if failure.code == "needs_authentication" { log?.append(LogEvent(event: .authRefreshFailed, dest: kind)) }
             return .failed
         } catch {
             return .abandoned

@@ -34,8 +34,15 @@ public final class SettingsModel {
     /// One line for the Sync section.
     public var summary: String {
         Self.summary(counts: counts, pendingRemoteDeletes: pendingRemoteDeletes,
-                      reviewPending: reviewPending, destinationName: activeDestination?.displayName)
+                     needsSignIn: accountStatus == .needsSignIn || needsAuthenticationJobs > 0,
+                     reviewPending: reviewPending, destinationName: activeDestination?.displayName)
     }
+
+    /// The active destination's sign-in state from its provider; set by `refresh()`.
+    public private(set) var accountStatus: ProviderAccountStatus = .ok
+
+    /// The active destination's jobs waiting for a new sign-in; set by `refresh()`.
+    public private(set) var needsAuthenticationJobs = 0
 
     /// Captures in the active destination's review queue (they look different there); set by `refresh()`.
     public private(set) var reviewPending = 0
@@ -109,7 +116,7 @@ public final class SettingsModel {
         if on { await onEnrichmentEnabled(kind) }
     }
 
-    nonisolated static func summary(counts: [SyncBucket: Int], pendingRemoteDeletes: Int = 0,
+    nonisolated static func summary(counts: [SyncBucket: Int], pendingRemoteDeletes: Int = 0, needsSignIn: Bool = false,
                                     reviewPending: Int = 0, destinationName: String? = nil) -> String {
         let attention = counts[.needsAttention] ?? 0, waiting = counts[.notSynced] ?? 0
         var parts: [String] = []
@@ -119,9 +126,13 @@ public final class SettingsModel {
             let noun = pendingRemoteDeletes == 1 ? "delete" : "deletes"
             parts.append("\(pendingRemoteDeletes) \(noun) waiting to reach \(destinationName ?? "your storage")")
         }
+        if needsSignIn { parts.append("Sign in again to \(destinationName ?? "your storage")") }
         if reviewPending > 0 { parts.append("\(destinationName ?? "Your storage") looks different · review") }
         return parts.isEmpty ? "All captures synced" : parts.joined(separator: " · ")
     }
+
+    /// The Settings button that connects `p`.
+    public nonisolated static func connectTitle(_ p: any StorageProvider) -> String { "Connect \(p.displayName)" }
 
     /// The Disconnect confirmation's message.
     public func disconnectPrompt(name: String) -> String {
@@ -138,6 +149,7 @@ public final class SettingsModel {
         var pendingDeletes: Int
         var reviewPending: Int
         var trimmed: (captures: Int, bytes: Int64)
+        var needsAuthentication: Int
     }
 
     /// Re-reads the destination, sync counts, storage use and location preference.
@@ -156,14 +168,25 @@ public final class SettingsModel {
                                 reviewPending: try destination.map {
                                     try store.remoteState.reviewItems(destinationID: $0.id).count
                                 } ?? 0,
-                                trimmed: try destination.map { try store.trims.totals(destinationID: $0.id) } ?? (0, 0))
+                                trimmed: try destination.map { try store.trims.totals(destinationID: $0.id) } ?? (0, 0),
+                                needsAuthentication: try destination.map {
+                                    try store.jobs.count(state: .needsAuthentication, destinationID: $0.id)
+                                } ?? 0)
             } catch {
                 Self.log.error("\("refresh_failed", privacy: .public)")
                 return nil
             }
         }.value
         guard let snapshot else { loadFailed = true; return }
+        let status: ProviderAccountStatus
+        if let d = snapshot.destination, let provider = registry.provider(kind: d.providerKind) {
+            status = await provider.accountStatus(d)
+        } else {
+            status = .ok
+        }
         loadFailed = false
+        accountStatus = status
+        needsAuthenticationJobs = snapshot.needsAuthentication
         activeDestination = snapshot.destination
         counts = snapshot.counts
         pendingRemoteDeletes = snapshot.pendingDeletes
@@ -216,6 +239,7 @@ public final class SettingsModel {
         let destination = try await p.connect()
         let store = store
         _ = try await Task.detached { try store.destinations.connect(destination) }.value
+        store.log.append(LogEvent(event: .authConnected, dest: p.kind))
         await refresh()
         await syncThenRefresh()
     }
@@ -229,6 +253,7 @@ public final class SettingsModel {
         }
         await registry.provider(kind: active.providerKind)?.signOut(active)
         try await Task.detached { try store.destinations.signOut(destinationID: active.id) }.value
+        store.log.append(LogEvent(event: .authDisconnected, dest: active.providerKind))
         await refresh()
     }
 

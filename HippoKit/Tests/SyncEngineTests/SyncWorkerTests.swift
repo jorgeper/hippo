@@ -240,6 +240,8 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(job.state == .needsAuthentication)
         #expect(job.lastErrorCode == "needs_authentication")
         #expect(job.nextAttemptAt == nil)
+        let expired = h.log.globalEvents(limit: 10, before: nil).filter { $0.event == .authRefreshFailed }
+        #expect(expired.map(\.dest) == ["filesystem"])
         h.clock.set(t0.addingTimeInterval(86_400))
         #expect(await h.worker().runOnce().idle)
         #expect(FileManager.default.fileExists(atPath: pkg.directoryURL.appendingPathComponent("complete.json").path))

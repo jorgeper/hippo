@@ -41,6 +41,14 @@ struct LogLineTests {
         #expect(line(LogEvent(event: .remoteDelete, dest: "filesystem")).text == "Delete queued for the Developer folder")
     }
 
+    @Test func authLines() {
+        #expect(line(LogEvent(event: .authConnected, dest: "dropbox")).text == "Connected Dropbox")
+        #expect(line(LogEvent(event: .authDisconnected, dest: "dropbox")).text == "Disconnected Dropbox")
+        #expect(line(LogEvent(event: .authRefreshFailed, dest: "dropbox")).text == "Dropbox sign-in expired")
+        #expect(line(LogEvent(event: .authConnected, dest: "filesystem")).text == "Connected the Developer folder")
+        #expect(line(LogEvent(event: .authRefreshFailed)).text == "Sign-in expired")
+    }
+
     @Test func remoteChangeLines() {
         #expect(line(LogEvent(event: .remoteChanged, dest: "dropbox")).text == "Changed in Dropbox")
         #expect(line(LogEvent(event: .remoteChanged, code: "unverified", dest: "dropbox")).text

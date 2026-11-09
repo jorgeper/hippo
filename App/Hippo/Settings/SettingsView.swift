@@ -12,7 +12,11 @@ struct SettingsView: View {
     private let store: HippoStore
     @State private var logModel: GlobalLogModel
 
-    @State private var confirmingSignOut = false
+    @State private var confirmingDisconnect = false
+    /// The provider whose connect sheet is showing.
+    @State private var connectSheet: ConnectSheetItem?
+    /// Set by the sheet's Connect button; sign-in starts once the sheet has gone.
+    @State private var connectAfterSheet: ConnectSheetItem?
     @State private var confirmingUpload = false
     @State private var failed = false
     @State private var busy = false
@@ -71,6 +75,12 @@ struct SettingsView: View {
                 await reconcileLocation()
             }
         }
+        .sheet(item: $connectSheet, onDismiss: {
+            if let item = connectAfterSheet { connect(item.provider) }
+            connectAfterSheet = nil
+        }) { item in
+            DropboxConnectSheet(providerName: item.provider.displayName) { connectAfterSheet = item }
+        }
         .sheet(isPresented: $reviewing) { RemoteReviewSheet(store: store, coordinator: coordinator) }
         .sheet(isPresented: $savingSpace, onDismiss: { Task { await model.refresh() } }) {
             SaveSpaceSheet(store: store, registry: registry, coordinator: coordinator)
@@ -108,11 +118,17 @@ struct SettingsView: View {
                 Button("Download from \(destination.displayName)…") { downloading = true }
                     .disabled(busy)
                     .accessibilityIdentifier("settings-download")
-                Button("Sign out", role: .destructive) { confirmingSignOut = true }
+                if model.accountStatus == .needsSignIn, let provider = registry.provider(kind: destination.providerKind) {
+                    Button("Reconnect \(destination.displayName)") { connect(provider) }
+                        .disabled(busy)
+                        .accessibilityIdentifier("settings-reconnect")
+                }
+                Button("Disconnect", role: .destructive) { confirmingDisconnect = true }
                     .disabled(busy)
-                    .confirmationDialog("Sign out of \(destination.displayName)? Captures stay on this iPhone; uploads pause until you sign in again.",
-                                        isPresented: $confirmingSignOut, titleVisibility: .visible) {
-                        Button("Sign out", role: .destructive) { perform("settings-sign-out") { try await model.signOut() } }
+                    .accessibilityIdentifier("settings-disconnect")
+                    .confirmationDialog(model.disconnectPrompt(name: destination.displayName),
+                                        isPresented: $confirmingDisconnect, titleVisibility: .visible) {
+                        Button("Disconnect", role: .destructive) { perform("settings-disconnect") { try await model.signOut() } }
                     }
             #if DEBUG
                 if destination.providerKind == "filesystem" {
@@ -125,8 +141,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(registry.providers, id: \.kind) { provider in
-                    Button("Connect \(provider.displayName)") {
-                        perform("settings-connect") { try await model.connect(provider) }
+                    Button(SettingsModel.connectTitle(provider)) {
+                        // Dropbox explains what it will create first; the Developer folder connects at once.
+                        if provider.kind == "dropbox" { connectSheet = ConnectSheetItem(provider: provider) }
+                        else { connect(provider) }
                     }
                     .disabled(busy)
                     .accessibilityIdentifier("settings-connect-\(provider.kind)")
@@ -282,9 +300,17 @@ struct SettingsView: View {
 
     // MARK: Actions
 
+    /// Signs in with `provider`; closing its sign-in sheet is not a failure.
+    private func connect(_ provider: any StorageProvider) {
+        perform("settings-connect", quietly: { $0 as? DropboxProviderError == .cancelled }) {
+            try await model.connect(provider)
+        }
+    }
+
     /// Runs `action` inside a background assertion that stops syncing if time runs out; failures show
-    /// one fixed alert.
-    private func perform(_ name: String, _ action: @escaping @MainActor @Sendable () async throws -> Void) {
+    /// one fixed alert, except those `quietly` accepts.
+    private func perform(_ name: String, quietly: @escaping (Error) -> Bool = { _ in false },
+                         _ action: @escaping @MainActor @Sendable () async throws -> Void) {
         guard !busy else { return }
         busy = true
         let coordinator = coordinator
@@ -295,8 +321,14 @@ struct SettingsView: View {
                     try await action()
                 }
             } catch {
-                failed = true
+                if !quietly(error) { failed = true }
             }
         }
     }
+}
+
+/// Identifies the provider whose connect sheet is showing.
+private struct ConnectSheetItem: Identifiable {
+    let provider: any StorageProvider
+    var id: String { provider.kind }
 }
