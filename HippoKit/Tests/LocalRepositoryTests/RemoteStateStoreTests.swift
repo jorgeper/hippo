@@ -118,4 +118,29 @@ private struct Fixture {
         #expect(try f.store.changed(captureID: a) == nil)
         #expect(try f.store.changedCount(destinationID: "d") == 0)
     }
+
+    @Test func removeChangedPathsKeepsTheRestAndDropsAnEmptyRecord() async throws {
+        let f = try Fixture(); defer { f.h.cleanup() }
+        let a = try await f.h.add(note: "a").metadata.captureID
+        try f.store.removeChangedPaths(captureID: a, paths: ["x"])
+        #expect(try f.store.changed(captureID: a) == nil)
+        try f.store.markChanged(captureID: a, destinationID: "d", paths: ["a.txt", "m.txt", "z.txt"], now: t0)
+        try f.store.removeChangedPaths(captureID: a, paths: ["m.txt", "other"])
+        let record = try #require(try f.store.changed(captureID: a))
+        #expect(record.paths == ["a.txt", "z.txt"])
+        #expect(record.detectedAt == t0)
+        try f.store.removeChangedPaths(captureID: a, paths: ["a.txt", "z.txt"])
+        #expect(try f.store.changed(captureID: a) == nil)
+    }
+
+    @Test func addReviewItemsReturnsInsertedCount() async throws {
+        let f = try Fixture(); defer { f.h.cleanup() }
+        let a = try await f.h.add(note: "a").metadata.captureID
+        let b = try await f.h.add(note: "b").metadata.captureID
+        #expect(try f.store.addReviewItems([ReviewItem(captureID: a, destinationID: "d", reason: "threshold", createdAt: t0)]) == 1)
+        #expect(try f.store.addReviewItems([
+            ReviewItem(captureID: a, destinationID: "d", reason: "threshold", createdAt: t0),
+            ReviewItem(captureID: b, destinationID: "d", reason: "threshold", createdAt: t0),
+        ]) == 1)
+    }
 }

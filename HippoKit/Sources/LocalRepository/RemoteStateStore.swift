@@ -130,15 +130,19 @@ public final class RemoteStateStore: Sendable {
     // MARK: Review
 
     /// Adds the items; a (capture, destination) pair that already has one keeps the existing item.
-    public func addReviewItems(_ items: [ReviewItem]) throws {
+    /// Returns how many were new.
+    @discardableResult
+    public func addReviewItems(_ items: [ReviewItem]) throws -> Int {
         try db.transaction { tx in
+            var inserted = 0
             for item in items {
-                try tx.execute("""
+                inserted += try tx.query("""
                     INSERT OR IGNORE INTO remote_review_items(capture_id, destination_id, reason, created_at_ms)
-                    VALUES (?,?,?,?)
+                    VALUES (?,?,?,?) RETURNING capture_id
                     """, [.text(item.captureID), .text(item.destinationID), .text(item.reason),
-                          .int(JobStore.ms(item.createdAt))])
+                          .int(JobStore.ms(item.createdAt))]).count
             }
+            return inserted
         }
     }
 
@@ -168,6 +172,22 @@ public final class RemoteStateStore: Sendable {
                 INSERT INTO remote_changed(capture_id, destination_id, paths, detected_at_ms) VALUES (?,?,?,?)
                 ON CONFLICT(capture_id) DO UPDATE SET destination_id = excluded.destination_id, paths = excluded.paths
                 """, [.text(captureID), .text(destinationID), .text(json), .int(JobStore.ms(now))])
+        }
+    }
+
+    /// Removes `paths` from the capture's record, keeping its detection time; an emptied record is deleted.
+    public func removeChangedPaths(captureID: String, paths: [String]) throws {
+        try db.transaction { tx in
+            guard let existing = try tx.query("SELECT paths FROM remote_changed WHERE capture_id = ?",
+                                              [.text(captureID)]).first?.string("paths").map(Self.decodePaths)
+            else { return }
+            let kept = Array(Set(existing).subtracting(paths)).sorted()
+            if kept.isEmpty {
+                try tx.execute("DELETE FROM remote_changed WHERE capture_id = ?", [.text(captureID)])
+            } else {
+                let json = String(decoding: try JSONEncoder().encode(kept), as: UTF8.self)
+                try tx.execute("UPDATE remote_changed SET paths = ? WHERE capture_id = ?", [.text(json), .text(captureID)])
+            }
         }
     }
 

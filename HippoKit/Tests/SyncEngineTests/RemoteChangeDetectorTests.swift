@@ -27,14 +27,17 @@ private struct Setup {
 
     func id(_ i: Int) -> String { pkgs[i].metadata.captureID }
 
-    func detector(_ adapter: (any StorageAdapter)? = nil) -> RemoteChangeDetector {
+    func detector(_ adapter: (any StorageAdapter)? = nil,
+                  removeLocally: (@Sendable (String) async throws -> Void)? = nil) -> RemoteChangeDetector {
         let a: any StorageAdapter = adapter ?? h.adapter
         let clock = h.clock, store = store
         return RemoteChangeDetector(layout: h.layout, index: h.index, jobs: h.jobs, remoteState: h.remoteState,
                                     trims: h.trims, destinations: h.destinations, adapterFor: { _ in a },
-                                    removeLocally: { try await store.removeAfterRemoteDelete(captureID: $0) },
+                                    removeLocally: removeLocally ?? { try await store.removeAfterRemoteDelete(captureID: $0) },
                                     now: { clock.now }, log: h.log)
     }
+
+    var cursor: String? { try? h.remoteState.changeCursor(destinationID: dest) }
 
     /// The first run: saves a cursor and lists nothing.
     func baseline() async {
@@ -64,6 +67,11 @@ private struct Setup {
     }
 
     func reviewItems() throws -> [ReviewItem] { try h.remoteState.reviewItems(destinationID: dest) }
+}
+
+private func isComplete(_ r: ValidationResult) -> Bool {
+    if case .complete = r { return true }
+    return false
 }
 
 @Suite struct RemoteChangeDetectorTests {
@@ -209,6 +217,100 @@ private struct Setup {
         #expect(s.events(0, .remoteChanged).map(\.code) == ["unverified"])
         #expect(try s.h.remoteState.changed(captureID: s.id(0)) == nil)
         #expect(try s.reviewItems().isEmpty)
+        // Its receipts described files that are gone, so the next upload sends the whole package again.
+        #expect(try s.h.jobs.receipts(jobID: try s.h.job(s.pkgs[0]).jobID).isEmpty)
+        #expect(await s.h.worker().runOnce().synced == 1)
+        #expect(isComplete(PackageValidator.validate(directory: s.h.remoteURL(s.pkgs[0]))))
+    }
+
+    @Test func unsyncedCaptureDropsStaleReceiptsInsteadOfChanged() async throws {
+        let s = try await Setup(captures: 10); defer { s.h.cleanup() }
+        await s.baseline()
+        let job = try s.h.job(s.pkgs[0])
+        try s.h.jobs.requeue(jobID: job.jobID)
+        try s.removeRemote(s.pkgs[0].attachmentPath)
+
+        let r = await s.detector().run()
+
+        #expect(r == RemoteChangeReport())
+        #expect(try s.h.remoteState.changed(captureID: s.id(0)) == nil)
+        #expect(try s.h.jobs.receipts(jobID: job.jobID).map(\.relativePath) == ["metadata.json"])
+        #expect(await s.h.worker().runOnce().synced == 1)
+        #expect(FileManager.default.fileExists(atPath: s.h.remote.appendingPathComponent(s.pkgs[0].attachmentPath).path))
+        #expect(isComplete(PackageValidator.validate(directory: s.h.remoteURL(s.pkgs[0]))))
+    }
+
+    @Test func failedLaterPageAppliesNothingAndKeepsCursor() async throws {
+        let s = try await Setup(captures: 15); defer { s.h.cleanup() }
+        await s.baseline()
+        let start = s.cursor
+        let dirs = s.pkgs.map(\.relativeDirectory)
+        let adapter = HookedAdapter(inner: s.h.adapter, changes: { _, cursor in
+            if cursor == "p1" { throw StorageError.offline }
+            return ChangePage(changes: dirs.map { .deleted(relativePath: $0) }, cursor: "p1", hasMore: true)
+        })
+
+        let r = await s.detector(adapter).run()
+
+        #expect(r == RemoteChangeReport(code: "offline"))
+        #expect((0..<15).allSatisfy(s.isIndexed))
+        #expect(try s.reviewItems().isEmpty)
+        #expect(s.cursor == start)
+    }
+
+    @Test func softLimitQueuesReviewAndSavesCursor() async throws {
+        let s = try await Setup(captures: 10); defer { s.h.cleanup() }
+        await s.baseline()
+        let dir = s.pkgs[0].relativeDirectory, attachment = s.pkgs[1].attachmentPath
+        // Paths that aren't capture directories: listed and counted, never applied.
+        let junk = (0..<1998).map { RemoteChange.deleted(relativePath: "captures/junk-\($0).txt") }
+        let first = [RemoteChange.deleted(relativePath: dir), .deleted(relativePath: attachment)] + junk[..<998]
+        let second = Array(junk[998...])
+        let adapter = HookedAdapter(inner: s.h.adapter, changes: { _, cursor in
+            cursor == "p1" ? ChangePage(changes: second, cursor: "p2", hasMore: true)
+                : ChangePage(changes: first, cursor: "p1", hasMore: true)
+        })
+
+        let r = await s.detector(adapter).run()
+
+        // One of ten would be removed from a complete listing; an unfinished one only queues it for review.
+        #expect(r == RemoteChangeReport(changed: 1, reviewQueued: 1))
+        #expect(s.isIndexed(0))
+        #expect(try s.reviewItems().map(\.captureID) == [s.id(0)])
+        #expect(try s.reviewItems().map(\.reason) == ["threshold"])
+        #expect(try s.h.remoteState.changed(captureID: s.id(1))?.paths == [s.pkgs[1].metadata.attachments[0].relativePath])
+        #expect(s.cursor == "p2")
+    }
+
+    @Test func cancelDuringRemovalsSavesNothing() async throws {
+        let s = try await Setup(captures: 30); defer { s.h.cleanup() }
+        await s.baseline()
+        let start = try #require(s.cursor)
+        let deletions = (0..<3).map { RemoteChange.deleted(relativePath: s.pkgs[$0].relativeDirectory) }
+        let adapter = HookedAdapter(inner: s.h.adapter, changes: { _, cursor in
+            ChangePage(changes: cursor == start ? deletions : [], cursor: "after", hasMore: false)
+        })
+        let calls = Counter(), store = s.store
+        let interrupted = s.detector(adapter, removeLocally: { id in
+            // The second removal is interrupted by the pass being cancelled.
+            if calls.next() == 2 {
+                withUnsafeCurrentTask { $0?.cancel() }
+                throw CancellationError()
+            }
+            try await store.removeAfterRemoteDelete(captureID: id)
+        })
+
+        let r = await Task { await interrupted.run() }.value
+
+        #expect(r.removed == 1)
+        #expect((0..<3).filter { !s.isIndexed($0) }.count == 1)
+        #expect(s.cursor == start)
+
+        // The next run lists the same changes again; the capture already removed is no longer indexed.
+        #expect(await s.detector(adapter).run() == RemoteChangeReport(removed: 2))
+        #expect((0..<3).allSatisfy { !s.isIndexed($0) })
+        #expect((3..<30).allSatisfy(s.isIndexed))
+        #expect(s.cursor == "after")
     }
 
     @Test func thresholdQueuesReviewInsteadOfDeleting() async throws {
@@ -289,6 +391,30 @@ private struct Setup {
         #expect(cursor != nil && cursor != "garbage")
         // The new cursor works: the next pass sees no change.
         #expect(await s.detector().run() == RemoteChangeReport())
+    }
+
+    @Test func cursorResetListingFailureKeepsOldCursor() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        try s.h.remoteState.saveChangeCursor(destinationID: s.dest, cursor: "garbage", now: t0)
+        try s.removeRemote(s.pkgs[0].relativeDirectory)
+        let failing = HookedAdapter(inner: s.h.adapter, beforeListFolder: { _ in throw StorageError.offline })
+
+        #expect(await s.detector(failing).run() == RemoteChangeReport(cursorReset: true, code: "offline"))
+        #expect(s.cursor == "garbage")
+        #expect(try s.reviewItems().isEmpty)
+        #expect(s.globalEvents(.remoteReview).isEmpty)
+
+        // The next run resets again and this time queues the review.
+        #expect(await s.detector().run() == RemoteChangeReport(reviewQueued: 1, cursorReset: true))
+        #expect(s.cursor != "garbage")
+    }
+
+    @Test func duplicateReviewItemsAreNotCountedTwice() async throws {
+        let s = try await Setup(); defer { s.h.cleanup() }
+        await s.baseline()
+        #expect(await s.scripted([.deleted(relativePath: "captures")]).run() == RemoteChangeReport(reviewQueued: 2))
+        #expect(await s.scripted([.deleted(relativePath: "captures")]).run() == RemoteChangeReport())
+        #expect(s.globalEvents(.remoteReview).map(\.count) == [2])
     }
 
     @Test func restoredMarkerCancelsDeletionInSamePass() async throws {

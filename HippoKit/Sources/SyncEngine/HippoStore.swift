@@ -308,8 +308,8 @@ public final class HippoStore: Sendable {
     /// changed (every manifest file when no change is recorded) and of `complete.json`, and requeues the
     /// capture's upload to the active destination (every upload when none is active). The worker then re-adds
     /// missing files and never overwrites: a file that exists with other content stays a conflict. Trimmed
-    /// files have no local original; they keep their receipts and are returned. The changed record is cleared
-    /// once something is requeued.
+    /// files have no local original; they keep their receipts, stay in the changed record and are returned.
+    /// Once something is requeued, the requeued paths leave the changed record.
     public func uploadAgain(captureID: String) throws -> UploadAgainResult {
         try uploadAgain(captureID: captureID, allPaths: false)
     }
@@ -338,7 +338,7 @@ public final class HippoStore: Sendable {
             try jobs.clearReceipts(jobID: job.jobID, paths: cleared)
             try jobs.requeue(jobID: job.jobID)
         }
-        if !targets.isEmpty { try remoteState.clearChanged(captureID: captureID) }
+        if !targets.isEmpty { try remoteState.removeChangedPaths(captureID: captureID, paths: cleared) }
         return UploadAgainResult(requeued: !targets.isEmpty, unrestorablePaths: unrestorable)
     }
 

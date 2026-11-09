@@ -410,7 +410,11 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(job.state == .pending)
         // The trimmed file keeps its receipt: there is nothing on this iPhone to upload.
         #expect(try t.store.jobs.receipts(jobID: job.jobID).map(\.relativePath) == [attachment.relativePath])
-        #expect(try t.store.remoteState.changed(captureID: id) == nil)
+        // Only what was requeued leaves the record: the trimmed file is still missing in the destination.
+        #expect(try t.store.remoteState.changed(captureID: id)?.paths == [attachment.relativePath])
+
+        #expect(await t.store.makeWorker(adapterFor: { _ in adapter }, owner: "app").runOnce().synced == 1)
+        #expect(try t.store.remoteState.changed(captureID: id)?.paths == [attachment.relativePath])
     }
 
     @Test func uploadAgainWithoutJobRequeuesNothing() async throws {

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import CaptureCore
 import LocalRepository
 
@@ -22,6 +23,8 @@ public struct SyncPassResult: Sendable, Equatable {
 public final class SyncWorker: Sendable {
     public static let lease: TimeInterval = 120
     private static let markerName = "complete.json"
+    /// Messages are fixed category strings only.
+    private static let osLog = Logger(subsystem: "com.jorgeper.hippo", category: "sync")
 
     private let layout: StoreLayout
     private let jobs: JobStore
@@ -104,8 +107,7 @@ public final class SyncWorker: Sendable {
         do {
             try await upload(job)
             try jobs.markSynced(jobID: job.jobID, owner: leaseOwner)
-            // Every file is verified in the destination again, so it no longer differs there.
-            try? remoteState.clearChanged(captureID: job.captureID)
+            clearVerifiedChanges(job.captureID)
             log?.append(LogEvent(event: .packageUploaded, captureID: job.captureID, dest: destinationKind(job)))
             return .synced
         } catch is CancellationError {
@@ -118,6 +120,18 @@ public final class SyncWorker: Sendable {
             return record(Self.failure(for: error), for: job)
         } catch {
             return record(Failure(state: .retryableFailure, code: "transient:internal"), for: job)
+        }
+    }
+
+    /// Every file this phone still has is verified in the destination again, so those paths no longer differ
+    /// there. Trimmed paths stay in the changed record: their only copy was the one that is gone.
+    private func clearVerifiedChanges(_ captureID: String) {
+        do {
+            guard let record = try remoteState.changed(captureID: captureID) else { return }
+            let trimmed = try trims.trimmedPaths(captureID: captureID)
+            try remoteState.removeChangedPaths(captureID: captureID, paths: record.paths.filter { !trimmed.contains($0) })
+        } catch {
+            Self.osLog.error("\("changed_clear_failed", privacy: .public)")
         }
     }
 
