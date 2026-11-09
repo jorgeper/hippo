@@ -88,6 +88,23 @@ My view, given to Jorge:
 
 Open: whether the window also **removes** older captures from the phone to save space, or only **fetches** missing ones. Removing touches the "never lose a capture that isn't safely in Dropbox" rule.
 
+## Raised by Jorge, in discussion: pointers instead of copies
+
+Jorge asked whether the phone could keep a pointer to the original instead of copying everything into Hippo's store, for example a pointer to a picture in Photos.
+
+My view, given to Jorge:
+- **Pointing at Photos isn't reliable from the share sheet.**
+  - The share extension receives the image's bytes or a temporary file, not its Photos identifier.
+  - An identifier comes only from Hippo's own photo picker in the main app, or from matching the image against the whole library, which needs full Photos access and is slow and unreliable.
+  - The original can also be deleted, edited, or held only in iCloud ("Optimize iPhone Storage").
+- **It weakens the save guarantee.** "✓ Saved on this iPhone" means the bytes are safe even if the original goes away. And the folder is the product, so Dropbox needs the real bytes anyway.
+- **The alternative proposed:** point at the Dropbox copy instead. Once a capture's upload is verified, the phone may drop its large attachment bytes and keep the metadata, enrichment and a thumbnail, downloading the original on tap.
+  - This saves the same space without the fragility.
+  - It's the same machinery as the download window.
+  - It's the "remove older captures" half of that question.
+
+Open: confirm that phone storage space is what this is for.
+
 ## Already decided: from v0 §3.1 and the parked follow-ups
 
 These carry into the design unless Jorge reopens them.
