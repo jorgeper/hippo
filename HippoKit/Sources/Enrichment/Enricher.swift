@@ -57,5 +57,12 @@ public protocol Enricher: Sendable {
     var inputs: Set<FacetKind> { get }
     /// Whether the capture has anything for this enricher. False records `not_applicable`.
     func applies(to m: CaptureMetadata) -> Bool
+    /// True when `run` reads the attachment files' bytes. Such a kind isn't scheduled for a capture with a
+    /// trimmed attachment (its local original is gone).
+    var readsAttachmentBytes: Bool { get }
     func run(_ input: EnricherInput) async throws -> EnricherOutput
+}
+
+extension Enricher {
+    public var readsAttachmentBytes: Bool { false }
 }

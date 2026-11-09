@@ -147,7 +147,8 @@ enum EnrichmentScheduling {
             producer: EnrichmentProducer(name: "hippo-ios", version: env.producer.appVersion,
                                          build: env.producer.build),
             isEnabled: { settings.isEnrichmentEnabled($0) },
-            isOnline: { EnrichmentScheduling.isOnline }, log: store.log)
+            isOnline: { EnrichmentScheduling.isOnline }, log: store.log,
+            trimmedPaths: { try store.trims.trimmedPaths(captureID: $0) })
         runner = made
         return made
     }

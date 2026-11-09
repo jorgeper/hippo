@@ -27,8 +27,13 @@ public final class Reconciler: Sendable {
     private let jobs: JobStore
     private let destinations: DestinationStore
 
-    public init(layout: StoreLayout, index: CaptureIndex, jobs: JobStore, destinations: DestinationStore) {
+    /// A capture's trimmed attachment paths, which a package may lack on disk.
+    private let trimmedPaths: @Sendable (String) throws -> Set<String>
+
+    public init(layout: StoreLayout, index: CaptureIndex, jobs: JobStore, destinations: DestinationStore,
+                trimmedPaths: @escaping @Sendable (String) throws -> Set<String> = { _ in [] }) {
         self.layout = layout; self.index = index; self.jobs = jobs; self.destinations = destinations
+        self.trimmedPaths = trimmedPaths
     }
 
     public func run() throws -> RecoveryReport {
@@ -54,7 +59,9 @@ public final class Reconciler: Sendable {
         do { indexed = Set(try index.indexedDirectories().map(\.captureID)) } catch { itemFailed(&report); indexed = [] }
         for directory in packageDirectories() where !indexed.contains(directory.lastPathComponent) {
             // `load` validates (hashing the package once) and checks the path.
-            guard let package = CommittedPackage.load(directory: directory, layout: layout) else {
+            let trimmed: Set<String>
+            do { trimmed = try trimmedPaths(directory.lastPathComponent) } catch { itemFailed(&report); continue }
+            guard let package = CommittedPackage.load(directory: directory, layout: layout, trimmed: trimmed) else {
                 report.invalidPackages += 1
                 continue
             }

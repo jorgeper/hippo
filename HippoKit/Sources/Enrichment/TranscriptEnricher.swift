@@ -22,6 +22,7 @@ public struct TranscriptEnricher: Enricher {
     public var kind: FacetKind { .transcript }
     public var version: Int { 1 }
     public var usesNetwork: Bool { false }
+    public var readsAttachmentBytes: Bool { true }
     public var inputs: Set<FacetKind> { [] }
 
     private let transcriber: any Transcribing

@@ -194,3 +194,33 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
         #expect(report.failed == 3)
     }
 }
+
+@Suite struct ReconcilerTrimmedTests {
+    @Test func trimmedCaptureSurvivesRecover() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let trims = TrimStore(db: h.db)
+        _ = try DestinationStore(db: h.db).connect(Destination(id: "d", providerKind: "filesystem", accountIdentifier: "a",
+                                                   remoteRoot: "/", displayName: "A", status: .active))
+        let draft = CaptureDraft(captureID: UUID(), startedAt: Date(timeIntervalSince1970: 1_794_070_800), timeZone: h.zone,
+                                 method: .shareExtension, userNote: "n",
+                                 attachments: [AttachmentSource(body: .data(Data("big".utf8)), originalFilename: "a.bin",
+                                                                uti: "public.data", mimeType: nil,
+                                                                representationSource: "item_provider_data")])
+        let pkg = try await h.writer.commit(draft)
+        _ = try h.index.register(pkg, noteBody: nil)
+        let id = pkg.metadata.captureID
+        let a = pkg.metadata.attachments[0]
+        try trims.record(TrimmedAttachment(captureID: id, attachmentID: a.attachmentID, relativePath: a.relativePath,
+                                           byteCount: a.byteCount, sha256: a.sha256, destinationID: "d", state: .trimmed,
+                                           trimmedAt: Date()))
+        try FileManager.default.removeItem(at: pkg.directoryURL.appendingPathComponent(a.relativePath))
+
+        let reconciler = Reconciler(layout: h.layout, index: h.index, jobs: JobStore(db: h.db),
+                                    destinations: DestinationStore(db: h.db),
+                                    trimmedPaths: { try trims.trimmedPaths(captureID: $0) })
+        let report = try reconciler.run()
+        #expect(report.orphanedIndexRows == 0)
+        #expect(report.invalidPackages == 0)
+        #expect(try h.index.relativeDirectory(captureID: id) == pkg.relativeDirectory)
+    }
+}

@@ -96,7 +96,9 @@ public final class HippoStore: Sendable {
     /// of the package recovery failed (that capture's package may still exist). Then the index's search
     /// text and `device_revision` are re-synced with the enrichment files. Enrichment failures are only logged.
     public func recover() throws -> RecoveryReport {
-        let report = try Reconciler(layout: layout, index: index, jobs: jobs, destinations: destinations).run()
+        let report = try Reconciler(
+            layout: layout, index: index, jobs: jobs, destinations: destinations,
+            trimmedPaths: { [trims] in try trims.trimmedPaths(captureID: $0) }).run()
         do { _ = try enrichments.sweep(removingOrphans: report.failed == 0) } catch {
             Self.osLog.error("\("recover_enrichment_sweep_failed", privacy: .public)")
         }
@@ -191,6 +193,19 @@ public final class HippoStore: Sendable {
         RemoteChangeDetector(layout: layout, index: index, jobs: jobs, remoteState: remoteState, trims: trims,
                              destinations: destinations, adapterFor: adapterFor,
                              removeLocally: { [self] in try await removeAfterRemoteDelete(captureID: $0) }, log: log)
+    }
+
+    /// "Save space": trims large, old attachments that are verified in the active destination.
+    public func makeSpaceSaver(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter) -> SpaceSaver {
+        SpaceSaver(layout: layout, index: index, jobs: jobs, destinations: destinations, trims: trims,
+                   adapterFor: adapterFor, log: log)
+    }
+
+    /// Downloads a trimmed attachment back into its package.
+    public func makeRestorer(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> AttachmentRestorer {
+        AttachmentRestorer(layout: layout, index: index, trims: trims, destinations: destinations,
+                           adapterFor: adapterFor, log: log)
     }
 
     /// Deletes the capture from this phone (spec §11): cancels its uploads, waits up to 10 s for a

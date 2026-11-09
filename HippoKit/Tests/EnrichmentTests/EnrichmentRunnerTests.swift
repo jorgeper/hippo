@@ -725,3 +725,28 @@ private let t0 = RunnerHarness.t0
 extension RunnerHarness {
     static var maxAttempts: Int { EnrichmentRunner.maxAttempts }
 }
+
+@Suite struct EnrichmentRunnerTrimmedTests {
+    @Test func trimmedAttachmentKindsAreNotScheduled() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        _ = try h.store.destinations.connect(Destination(id: "d", providerKind: "filesystem", accountIdentifier: "a",
+                                                         remoteRoot: "/", displayName: "A", status: .active))
+        let id = try await h.store.capture(CaptureDraft(
+            captureID: UUID(), startedAt: t0, timeZone: RunnerHarness.zone, method: .shareExtension,
+            attachments: [AttachmentSource(body: .data(Data("img".utf8)), originalFilename: "a.png", uti: "public.png",
+                                           mimeType: "image/png", representationSource: "item_provider_data")]))
+            .metadata.captureID
+        let attachment = try #require(try h.store.index.metadata(captureID: id, layout: h.store.layout)?.attachments.first)
+        try h.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: attachment.attachmentID,
+                                                   relativePath: attachment.relativePath, byteCount: attachment.byteCount,
+                                                   sha256: attachment.sha256, destinationID: "d", state: .trimmed,
+                                                   trimmedAt: t0))
+        let reads = FakeEnricher(kind: .textRecognition, readsAttachmentBytes: true)
+        let other = FakeEnricher(kind: .dataDetection)
+        let runner = h.runner([reads, other])
+
+        #expect(try await runner.schedule() == 1)
+        #expect(try h.task(id, .textRecognition) == nil)
+        #expect(try h.task(id, .dataDetection)?.status == "pending")
+    }
+}

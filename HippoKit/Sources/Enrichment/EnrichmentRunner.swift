@@ -55,6 +55,7 @@ public actor EnrichmentRunner {
     private let now: @Sendable () -> Date
     private let random: @Sendable () -> Double
     private let log: ActivityLog?
+    private let trimmedPaths: @Sendable (String) throws -> Set<String>
 
     private var passRunning = false
     /// Passes waiting for the running one to finish, in arrival order.
@@ -64,8 +65,10 @@ public actor EnrichmentRunner {
                 enrichers: [any Enricher], producer: EnrichmentProducer,
                 isEnabled: @escaping @Sendable (FacetKind) -> Bool, isOnline: @escaping @Sendable () -> Bool,
                 policy: RetryPolicy = EnrichmentRunner.retryPolicy, now: @escaping @Sendable () -> Date = Date.init,
-                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }, log: ActivityLog? = nil) {
+                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }, log: ActivityLog? = nil,
+                trimmedPaths: @escaping @Sendable (String) throws -> Set<String> = { _ in [] }) {
         self.log = log
+        self.trimmedPaths = trimmedPaths
         self.layout = layout
         self.index = index
         self.tasks = tasks
@@ -128,6 +131,8 @@ public actor EnrichmentRunner {
                                     nextAttemptAt: nil, incrementAttempts: true, now: t)
             return false
         }
+        // The local originals are gone, so a kind that reads their bytes can't run; its row stays as it is.
+        if e.readsAttachmentBytes, !(try trimmedPaths(id)).isEmpty { return false }
         let applies = e.applies(to: metadata)
         try tasks.set(captureID: id, kind: e.kind, version: e.version, status: applies ? "pending" : "not_applicable",
                       now: t)

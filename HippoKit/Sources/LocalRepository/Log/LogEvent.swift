@@ -34,6 +34,8 @@ public enum LogEventName: String, Codable, Sendable, CaseIterable {
     case remoteDelete = "remote.delete"
     case remoteChanged = "remote.changed"
     case remoteReview = "remote.review"
+    case trimRun = "trim.run"
+    case attachmentRestored = "attachment.restored"
     case syncPass = "sync.pass"
     case bgTask = "bg.task"
     case appLaunch = "app.launch"
@@ -56,6 +58,8 @@ public struct LogEvent: Codable, Equatable, Sendable {
     public private(set) var attempt: Int?
     public private(set) var count: Int?
     public private(set) var ms: Int?
+    /// A byte total, for `trim.run`.
+    public private(set) var bytes: Int64?
     public private(set) var trigger: String?
     public private(set) var dest: String?
     public private(set) var on: Bool?
@@ -67,7 +71,7 @@ public struct LogEvent: Codable, Equatable, Sendable {
     public init(event: LogEventName, captureID: String? = nil, kind: String? = nil, outcome: LogOutcome? = nil,
                 code: String? = nil, attempt: Int? = nil, count: Int? = nil, ms: Int? = nil,
                 trigger: String? = nil, dest: String? = nil, on: Bool? = nil, phase: String? = nil,
-                retryAt: Date? = nil) {
+                retryAt: Date? = nil, bytes: Int64? = nil) {
         t = Date(timeIntervalSince1970: 0)
         v = 1
         proc = .app
@@ -79,6 +83,7 @@ public struct LogEvent: Codable, Equatable, Sendable {
         self.attempt = attempt
         self.count = count
         self.ms = ms
+        self.bytes = bytes
         self.trigger = trigger.map(Diagnostics.safeCode)
         self.dest = dest.map(Diagnostics.safeCode)
         self.on = on
@@ -89,7 +94,7 @@ public struct LogEvent: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case t, v, proc, event
         case captureID = "capture_id"
-        case kind, outcome, code, attempt, count, ms, trigger, dest, on, phase
+        case kind, outcome, code, attempt, count, ms, bytes, trigger, dest, on, phase
         case retryAt = "retry_at"
     }
 

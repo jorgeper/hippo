@@ -130,6 +130,14 @@ public struct LogLine: Equatable, Sendable, Identifiable {
             let d = destination(e.dest) ?? "storage"
             let head = d.prefix(1).uppercased() + d.dropFirst() + " looks different"
             return join([head, e.count.map { "\($0) \($0 == 1 ? "capture" : "captures") to review" }])
+        case .trimRun:
+            let n = e.count ?? 0
+            let size = ByteCountFormatter.string(fromByteCount: e.bytes ?? 0, countStyle: .file)
+            return join(["Saved space", "\(n) \(n == 1 ? "file" : "files")", size])
+        case .attachmentRestored:
+            let d = destination(e.dest).map { " from \($0)" } ?? ""
+            if e.outcome == .failed { return join(["Download failed", e.code]) }
+            return "Downloaded a file" + d
         case .goldApplied: return "Server results applied"
         case .goldRemoved: return "Server results removed"
         case .goldSkipped: return join(["Server results skipped", e.code])

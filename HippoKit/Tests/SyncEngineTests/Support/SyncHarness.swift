@@ -66,19 +66,23 @@ struct SyncHarness {
 
     /// Commits, registers and enqueues a capture with one attachment of `attachmentBytes` bytes, or a
     /// URL-only capture when `attachmentBytes` is nil.
-    func capture(attachmentBytes: Int? = 1_000) async throws -> CommittedPackage {
+    func capture(attachmentBytes: Int? = 1_000, startedAt: Date = Date(timeIntervalSince1970: 1_794_070_800),
+                 image: Data? = nil) async throws -> CommittedPackage {
         var attachments: [AttachmentSource] = []
-        if let n = attachmentBytes {
+        if let image {
+            attachments.append(AttachmentSource(body: .data(image), originalFilename: "photo.png", uti: "public.png",
+                                                mimeType: "image/png", representationSource: "item_provider_data"))
+        } else if let n = attachmentBytes {
             var data = Data(count: n)
             for i in 0..<n { data[i] = UInt8(truncatingIfNeeded: i &* 31 &+ 7) }
             attachments.append(AttachmentSource(body: .data(data), originalFilename: "blob.bin", uti: "public.data",
                                                 mimeType: "application/octet-stream",
                                                 representationSource: "item_provider_data"))
         }
-        let draft = CaptureDraft(captureID: UUID(), startedAt: Date(timeIntervalSince1970: 1_794_070_800),
+        let draft = CaptureDraft(captureID: UUID(), startedAt: startedAt,
                                  timeZone: TimeZone(identifier: "America/Los_Angeles")!, method: .shareExtension,
                                  userNote: "note",
-                                 urls: attachmentBytes == nil ? [CapturedURL(url: "https://example.com/a", source: "shared")] : [],
+                                 urls: attachmentBytes == nil && image == nil ? [CapturedURL(url: "https://example.com/a", source: "shared")] : [],
                                  attachments: attachments)
         let pkg = try await writer.commit(draft)
         _ = try index.register(pkg, noteBody: pkg.noteBody())

@@ -213,3 +213,19 @@ struct LogLineTests {
         #expect(model.lines.count == 2)
     }
 }
+
+@Suite struct TrimLogLineTests {
+    private func line(_ e: LogEvent) -> LogLine {
+        LogLine.make(e, id: 0, now: Date(timeIntervalSince1970: 1_800_000_000), zone: TimeZone(identifier: "UTC")!,
+                     locale: Locale(identifier: "en_US_POSIX"))
+    }
+
+    @Test func trimAndRestoreLines() {
+        #expect(line(LogEvent(event: .trimRun, count: 3, bytes: 12_000_000)).text == "Saved space · 3 files · 12 MB")
+        #expect(line(LogEvent(event: .trimRun, count: 1, bytes: 1_000_000)).text == "Saved space · 1 file · 1 MB")
+        #expect(line(LogEvent(event: .attachmentRestored, outcome: .ok, dest: "dropbox")).text
+                == "Downloaded a file from Dropbox")
+        #expect(line(LogEvent(event: .attachmentRestored, outcome: .failed, code: "mismatch", dest: "dropbox")).text
+                == "Download failed · mismatch")
+    }
+}
