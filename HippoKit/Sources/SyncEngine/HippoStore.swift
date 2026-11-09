@@ -225,16 +225,7 @@ public final class HippoStore: Sendable {
             }
         }
 
-        let fm = FileManager.default
-        let staged = layout.stagingDir.appendingPathComponent("\(captureID).deleted", isDirectory: true)
-        try fm.createDirectory(at: layout.stagingDir, withIntermediateDirectories: true)
-        // Left by an earlier attempt that crashed after its rename.
-        try Self.removeIfPresent(staged)
-        do {
-            try fm.moveItem(at: layout.packageURL(relativeDirectory: directory), to: staged)
-        } catch let error as CocoaError where error.code == .fileNoSuchFile {
-            // Already moved or gone.
-        }
+        // The record goes in before the package moves, so a crash after the rename can't lose it.
         var tombstoned = false, recordedLocalDelete = false
         switch mode {
         case .everywhere where bound != nil:
@@ -249,10 +240,21 @@ public final class HippoStore: Sendable {
             recordedLocalDelete = true
         case .remote: break
         }
+        let fm = FileManager.default
+        let staged = layout.stagingDir.appendingPathComponent("\(captureID).deleted", isDirectory: true)
         do {
+            try fm.createDirectory(at: layout.stagingDir, withIntermediateDirectories: true)
+            // Left by an earlier attempt that crashed after its rename.
+            try Self.removeIfPresent(staged)
+            do {
+                try fm.moveItem(at: layout.packageURL(relativeDirectory: directory), to: staged)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                // Already moved or gone.
+            }
             try index.remove(captureID: captureID)
         } catch {
-            // The capture stays, so nothing may claim it was deleted.
+            // The capture stays, so nothing may claim it was deleted. If this rollback also fails, a stale
+            // tombstone could outlive the capture: the next delete of it rewrites the row, and none runs otherwise.
             if tombstoned { try? remoteState.removeTombstone(captureID: captureID) }
             if recordedLocalDelete { try? remoteState.removeLocalDelete(captureID: captureID) }
             throw error

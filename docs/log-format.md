@@ -59,7 +59,7 @@ Per capture (carry `capture_id`):
 | Event | Meaning |
 |---|---|
 | `capture.saved` | A capture was committed to disk (`proc` says app or extension; `trigger` is the capture method) |
-| `capture.deleted` | The capture was deleted from this phone |
+| `capture.deleted` | The capture was deleted from this phone (`trigger` is `remote` when it was deleted in the destination and applied here) |
 | `enrich.queued` | A facet task was queued (`kind`) |
 | `enrich.started` | A task began (`kind`, `attempt`) |
 | `enrich.finished` | A task finished (`kind`, `outcome`, `count`, `ms`) |

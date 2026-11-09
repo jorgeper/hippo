@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import CaptureCore
 import LocalRepository
-import SyncEngine
+@testable import SyncEngine
 import FilesystemAdapter
 
 private struct Setup {
@@ -130,7 +130,8 @@ struct RemoteDeleterTests {
         let h = try SyncHarness()
         defer { h.cleanup() }
         let store = try HippoStore.open(root: h.root.appendingPathComponent("store"),
-                                        producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"))
+                                        producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"),
+                                        leaseWaitLimit: .seconds(5))
         _ = try store.destinations.connect(Destination(id: "dest-fs", providerKind: "filesystem",
                                                        accountIdentifier: "local", remoteRoot: "/",
                                                        displayName: "Local folder", status: .active))
@@ -147,20 +148,29 @@ struct RemoteDeleterTests {
         let run = Task { let r = await worker.runOnce(); pausing.paused.open(); return r }
         await pausing.paused.wait()
 
-        // The worker's lease stays live while it is paused, so deletion waits its (shortened) limit.
-        let deletion = Task { try await store.deleteEverywhere(captureID: pkg.metadata.captureID) }
-        try await Task.sleep(for: .milliseconds(300))
-        pausing.release.open()
-        _ = try await deletion.value
-        _ = await run.value
-
+        // The upload is genuinely mid-file: a partial remote package exists, with no marker.
         let remoteDir = h.remote.appendingPathComponent(pkg.relativeDirectory)
+        #expect(FileManager.default.fileExists(atPath: remoteDir.path))
         #expect(!FileManager.default.fileExists(atPath: remoteDir.appendingPathComponent("complete.json").path))
-        #expect(try store.remoteState.hasTombstone(captureID: pkg.metadata.captureID))
+
+        let id = pkg.metadata.captureID
+        let deletion = Task { try await store.deleteEverywhere(captureID: id) }
+        // Deletion waits for the worker's lease; wait until its cancel request is visible, then let go.
+        while try !store.jobs.jobs(captureID: id).contains(where: \.cancelRequested) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        pausing.release.open()
+        let deletionResult = try await deletion.value
+        _ = await run.value
+        #expect(deletionResult.hadActiveUpload)
+
+        #expect(!FileManager.default.fileExists(atPath: remoteDir.appendingPathComponent("complete.json").path))
+        #expect(FileManager.default.fileExists(atPath: remoteDir.path))
+        #expect(try store.remoteState.hasTombstone(captureID: id))
         let deleter = store.makeRemoteDeleter(adapterFor: { _ in h.adapter })
         let result = await deleter.runOnce()
         #expect(result.deleted == 1)
         #expect(!FileManager.default.fileExists(atPath: remoteDir.path))
-        #expect(try !store.remoteState.hasTombstone(captureID: pkg.metadata.captureID))
+        #expect(try !store.remoteState.hasTombstone(captureID: id))
     }
 }

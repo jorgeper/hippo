@@ -76,6 +76,8 @@ public final class RemoteDeleter: Sendable {
             } catch StorageError.needsAuthentication {
                 return result
             } catch {
+                // A cancelled call may surface as any error; it is not a failure of the tombstone.
+                if Task.isCancelled { return result }
                 result.failed += 1
                 record(error, tombstone, active)
             }

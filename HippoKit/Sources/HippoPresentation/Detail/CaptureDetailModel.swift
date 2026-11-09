@@ -77,8 +77,9 @@ public final class CaptureDetailModel {
                                                 isOnline: isOnline(), goldArrivedAt: goldArrivedAt, destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName)
-                let name = jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName
-                let everywhere = jobs.isEmpty ? nil : DeletionPrompt.everywhere(destinationName: name ?? "your storage")
+                // The destination `deleteEverywhere` binds to: the job with the lowest destination ID.
+                let boundName = jobs.map(\.destinationID).min().flatMap { names[$0] ?? nil }?.displayName
+                let everywhere = boundName.map { DeletionPrompt.everywhere(destinationName: $0) }
                 return Loaded(detail: detail, prompt: prompt, everywherePrompt: everywhere, capturedAt: metadata.capturedAt)
             } catch {
                 Self.log.error("\("load_failed", privacy: .public)")
