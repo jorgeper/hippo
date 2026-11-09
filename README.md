@@ -75,7 +75,7 @@ Run `make dropbox-setup` (see [Dropbox setup](#dropbox-setup) above for what it 
 
 ### Connect and disconnect
 
-With the key present, Settings, Storage offers "Connect Dropbox" (PKCE sign-in in a system web sheet). Once connected it shows the account's display name, "Save space…", "Download from Dropbox…" and "Disconnect". Captures saved before connecting upload too. Disconnecting deletes nothing anywhere, and a second account never receives the first account's captures. If access is revoked on dropbox.com, Settings shows "Reconnect Dropbox".
+With the key present, Settings, Storage offers "Connect Dropbox" (PKCE sign-in in a system web sheet). Once connected it shows "Dropbox" with the account's display name beside it, "Save space…", "Download from Dropbox…" and "Disconnect". Captures saved before connecting upload too. Disconnecting deletes nothing anywhere, and a second account never receives the first account's captures. If access is revoked on dropbox.com, Settings shows "Reconnect Dropbox".
 
 ### What lands where
 
@@ -103,6 +103,10 @@ Settings, Storage, "Download from Dropbox…" brings captures back, for example 
 ### When it syncs
 
 On launch, on activation, while the app is open, when connectivity returns, on a foreground retry timer, in iOS background tasks, and through background `URLSession` uploads. On cellular, log uploads happen at most once every 15 minutes.
+
+### Known limits
+
+- A background upload still in flight when you "Delete everywhere" can finish a few seconds later and leave that file in Dropbox without the capture's `complete.json`; readers ignore packages without the marker, so it is clutter, not a capture, and you can delete it on dropbox.com.
 
 ### Integration tests
 
@@ -170,7 +174,7 @@ The server that produces gold is not built yet. The phone already pulls and show
 | `LocalRepository` | The on-phone SQLite store: `Database`, `CaptureIndex` (timeline, filters, full-text search), `JobStore` (upload jobs, leases, receipts, checkpoints), `DestinationStore` (accounts and binding rules), `Reconciler` (startup recovery), `Diagnostics`. |
 | `SyncEngine` | The `StorageAdapter` contract, `SyncWorker` (marker-last uploads, retry policy), and `HippoStore`, the facade the app and Share Extension use for everything. |
 | `FilesystemAdapter` | A `StorageAdapter` that writes to a local folder, with `FaultPlan` for injected failures. For development and contract tests; not a cloud provider. |
-| `DropboxAdapter` | Dropbox-specific code: the content hash today, the Dropbox `StorageAdapter` to follow. The only HippoKit module that may know about Dropbox. |
+| `DropboxAdapter` | Dropbox-specific code: the Dropbox `StorageAdapter` over the HTTP API, PKCE sign-in and token refresh, the token stores, background-session uploads and the content hash. The only HippoKit module that may know about Dropbox. |
 | `HippoTestSupport` | Generates small media files (images, audio, video, PDF) for tests and fixtures. |
 | `hippo-fixtures` | Command-line tool that regenerates the committed fixture packages. |
 

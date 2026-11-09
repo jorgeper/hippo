@@ -23,6 +23,8 @@ logs/
 - On the destination: `logs/<install-id>/<same file name>`. `<install-id>` is a random lowercase UUID created
   once per install. **The phone never deletes remote copies.** Local files older than 30 days are pruned;
   remote files stay until you remove them.
+- Uploads: on cellular or in Low Data Mode, log files upload at most once every 15 minutes. A skipped
+  upload reports `throttled` as its result code; that is not an event and is not written to the log.
 - Size cap: 2,097,152 bytes per segment file. When a segment is full, one `log.truncated` event is written and
   further events for that segment are dropped.
 - Two processes append (the app and the share extension), each line in a single `write` under an advisory
@@ -70,7 +72,7 @@ Per capture (carry `capture_id`):
 | `silver.uploaded`, `silver.upload_failed` | Silver enrichment uploaded or failed (`dest`, `code`) |
 | `package.uploaded`, `package.upload_failed` | Capture package uploaded or failed (`dest`, `code`) |
 | `remote.delete` | "Delete everywhere": no `outcome` when queued, `ok` once removed in the destination, `failed` with `code` (`dest`) |
-| `remote.changed` | A file of the capture is missing or different in the destination, so it is marked changed (`dest`); `code` `unverified` when the capture's package or marker is gone there but its upload isn't verified, so it was not removed |
+| `remote.changed` | A file of the capture is missing or different in the destination, so it is marked changed (`dest`); `code` `unverified` when the capture's package or marker is gone there but its upload isn't verified, so it was not removed; `code` `remove_failed` when it was deleted there but removing it from this phone failed, so it waits for review instead (a `remote.review` with `threshold` follows) |
 | `attachment.restored` | A trimmed file was downloaded back (`dest`); `ok`, or `failed` with `code` |
 | `download.capture` | "Download from <destination>" handled the capture (`dest`): `ok` when it was downloaded and indexed as synced; `skipped` with `code` (`outside_window`: its `captured_at` is before the window; `already_present`: it is on this phone already, or a package is in its place that doesn't validate); `failed` with `code` (`incomplete_package`: a file is missing, over the light limit or doesn't match the manifest; `invalid_package`: the marker or metadata is unusable or the capture is in another date's folder; `index_failed`: it couldn't be indexed or its synced job or trimmed records couldn't be written, so it was undone; `download_failed`: a local file operation failed; `offline` or `needs_authentication`, which also end the run; or another adapter code such as `transient:<code>`) |
 | `gold.applied`, `gold.removed`, `gold.skipped` | Server enrichment applied, removed, or skipped (`code`) |
@@ -85,7 +87,7 @@ Global (no `capture_id`):
 | `sync.pass` | A sync pass started or ended (`phase`, `trigger`, `count`, `code`) |
 | `bg.task` | A background task started, expired or ended (`phase`) |
 | `gold.pull` | A gold pull ended (`count` applied, `code`, `on` if the change cursor was reset) |
-| `remote.review` | Deletes found in the destination were not applied and wait for review (`count` captures, `dest`); `code` is `threshold` (too many at once), `root_missing` (the `captures/` folder is gone) or `cursor_reset` (the change cursor was reset and a full listing missed them) |
+| `remote.review` | Deletes found in the destination were not applied and wait for review (`count` captures, `dest`); `code` is `threshold` (too many at once, or removing them from this phone failed), `root_missing` (the `captures/` folder is gone) or `cursor_reset` (the change cursor was reset and a full listing missed them) |
 | `trim.run` | Save space ended (`count` files trimmed, `bytes` freed, `code` = the last skip or stop reason, if any) |
 | `download.run` | "Download from <destination>" ended (`count` captures downloaded, `dest`, `code` = the last failure or stop reason, if any: a `download.capture` failure code, `cancelled`, `no_destination` when none is connected, or `unavailable` when the destination couldn't be read or opened) |
 | `auth.connected` | A destination was connected in Settings (`dest`); never the account's name, email or ID |

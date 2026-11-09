@@ -63,3 +63,20 @@ should be checked in a browser before the adapter depends on them.
 - Unverified: `auth/token/revoke` also invalidates the refresh token. The OAuth guide only says
   apps can revoke tokens they hold through that endpoint.
   https://www.dropbox.com/developers/documentation/http/documentation#auth-token-revoke
+
+## Watch on the first live runs
+
+Behaviour the adapter assumes but that only a run against real Dropbox shows. Check each, and
+update the adapter or this list.
+
+- `files/list_folder/continue` after the listed root itself (`captures/`) was deleted: the adapter
+  expects a 409 `path/not_found` (or `path_lookup/not_found`) and treats it as a cursor reset, so the
+  change detector re-baselines and queues a review. If Dropbox instead returns `reset`, or keeps
+  answering with an empty page, deleting the whole folder must still reach the review sheet (D5).
+- Whether the `db-<APP KEY>://2/token` redirect URI must be registered in the App Console for the
+  PKCE flow with a custom scheme, or is accepted unregistered.
+- `files/get_thumbnail_v2` for videos and HEIC photos: whether it returns an image, and in which
+  format, or an unsupported-extension error (the thumbnail is then omitted).
+- `auth/token/revoke` called with an expired access token on Disconnect: whether it fails with 401
+  (the refresh token then stays valid on Dropbox's side until it is revoked on dropbox.com) or
+  revokes anyway.

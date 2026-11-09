@@ -3,10 +3,11 @@ import SyncEngine
 import HippoPresentation
 
 /// "Download from <name>" (design §4.5): choose how far back, see what it brings in, then download.
+/// A run keeps going in iOS background time, and after the sheet is closed; only running out of background
+/// time stops it. Resumable by design: what was downloaded stays, and the next run picks up the rest.
 struct DownloadSheet: View {
     @State private var model: DownloadModel
     @State private var runTask: Task<Void, Never>?
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     private let coordinator: SyncCoordinator?
 
@@ -64,15 +65,12 @@ struct DownloadSheet: View {
         .task { await model.refreshEstimate() }
         .onChange(of: model.window) { _, _ in Task { await model.refreshEstimate() } }
         .onChange(of: model.includeLocallyDeleted) { _, _ in Task { await model.refreshEstimate() } }
-        .onChange(of: scenePhase) { _, phase in
-            // Resumable by design: what was downloaded stays, and the next run picks up the rest.
-            if phase == .background { runTask?.cancel() }
-        }
-        .onDisappear { runTask?.cancel() }
     }
 
     private func start() {
         guard runTask == nil else { return }
+        // Held strongly by the run, so it outlives the sheet; its progress UI simply goes with the sheet.
+        let model = model
         runTask = TaskBox.runInBackground(name: "download", coordinator: coordinator, finished: {
             runTask = nil
         }) {
