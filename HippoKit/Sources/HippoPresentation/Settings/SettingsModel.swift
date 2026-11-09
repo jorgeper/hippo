@@ -41,6 +41,10 @@ public final class SettingsModel {
     /// The active destination's sign-in state from its provider; set by `refresh()`.
     public private(set) var accountStatus: ProviderAccountStatus = .ok
 
+    /// The active destination's account holder name from its provider, nil when unknown; set by `refresh()`.
+    /// Shown beside the destination's name, never in a `<name>` slot.
+    public private(set) var accountName: String?
+
     /// The active destination's sign-in expired: its provider says so, or a job is waiting for a new
     /// sign-in. Settings then offers "Reconnect <name>" and the summary says why; set by `refresh()`.
     public private(set) var needsReconnect = false
@@ -180,13 +184,16 @@ public final class SettingsModel {
         }.value
         guard let snapshot else { loadFailed = true; return }
         let status: ProviderAccountStatus
+        var account: String?
         if let d = snapshot.destination, let provider = registry.provider(kind: d.providerKind) {
             status = await provider.accountStatus(d)
+            account = await provider.accountName(d)
         } else {
             status = .ok
         }
         loadFailed = false
         accountStatus = status
+        accountName = account
         needsReconnect = status == .needsSignIn || snapshot.needsAuthentication > 0
         activeDestination = snapshot.destination
         counts = snapshot.counts

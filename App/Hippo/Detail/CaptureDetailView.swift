@@ -41,7 +41,7 @@ struct CaptureDetailView: View {
             isOnline: { EnrichmentScheduling.isOnline },
             sync: { [coordinator = environment.coordinator] in _ = await coordinator?.syncNow(trigger: "manual") },
             adapterFor: adapterFor,
-            providerName: { kind in registry?.provider(kind: kind)?.displayName }))
+            accountName: { destination in await registry?.provider(kind: destination.providerKind)?.accountName(destination) }))
     }
 
     var body: some View {

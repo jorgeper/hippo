@@ -273,6 +273,29 @@ struct SettingsTests {
                 == "1 delete waiting to reach Dropbox · Sign in again to Dropbox · Dropbox looks different · review")
     }
 
+    @Test func refreshReadsTheAccountNameApartFromTheDestinationName() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        try await h.model.connect(h.provider)
+        #expect(h.model.accountName == nil)
+
+        h.provider.setAccountName("Sample Holder")
+        await h.model.refresh()
+        #expect(h.model.accountName == "Sample Holder")
+        // Every `<name>` slot keeps reading the destination's (provider's) name.
+        #expect(h.model.activeDestination?.displayName == "Developer folder")
+        #expect(h.model.disconnectPrompt(name: "Developer folder")
+                == "Disconnect Developer folder? Nothing is deleted on this iPhone or in Developer folder.")
+
+        try await h.model.signOut()
+        #expect(h.model.accountName == nil)
+
+        // Provider-specific connect behaviour defaults off (Dropbox turns both on).
+        let provider: any StorageProvider = h.provider
+        #expect(!provider.explainsBeforeConnect)
+        #expect(!provider.isUserCancellation(CancellationError()))
+    }
+
     @Test func connectAndDisconnectAreLogged() async throws {
         let h = try Harness()
         defer { h.cleanup() }

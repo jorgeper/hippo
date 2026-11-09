@@ -25,6 +25,8 @@ final class DropboxProvider: StorageProvider {
 
     let kind = "dropbox"
     let displayName = "Dropbox"
+    /// Settings shows the connect sheet (what Hippo will create) before sign-in.
+    let explainsBeforeConnect = true
 
     private let appKey: String
     private let storeRoot: URL
@@ -77,14 +79,21 @@ final class DropboxProvider: StorageProvider {
             await auth.signOut()
             throw error
         }
+        // The account holder's name stays with the tokens; the destination is named after the provider.
+        // Connect is interactive, so no lock is needed against a concurrent save. If the save fails, only the
+        // name shown beside "Dropbox" in Settings and Detail is missing; the connection stands.
+        try? auth.saveAccountName(account.name.display_name)
         return Destination(id: "dropbox:\(account.account_id)", providerKind: kind,
                            accountIdentifier: account.account_id, remoteRoot: "",
-                           displayName: account.name.display_name, status: .active)
+                           displayName: displayName, status: .active)
     }
 
     func makeAdapter(for d: Destination) throws -> any StorageAdapter {
-        DropboxAdapter(client: client, accountID: d.accountIdentifier, rootPrefix: "",
-                       scratchDirectory: storeRoot.appendingPathComponent("transfers", isDirectory: true))
+        // Never hand out an adapter for one account while the Keychain holds another's sign-in, whatever the
+        // destination rows say.
+        try auth.checkAccount(d.accountIdentifier)
+        return DropboxAdapter(client: client, accountID: d.accountIdentifier, rootPrefix: "",
+                              scratchDirectory: storeRoot.appendingPathComponent("transfers", isDirectory: true))
     }
 
     func signOut(_ d: Destination) async { await auth.signOut() }
@@ -93,6 +102,10 @@ final class DropboxProvider: StorageProvider {
         guard d.status == .active else { return .ok }
         return auth.needsReauthentication || auth.storedAccountID == nil ? .needsSignIn : .ok
     }
+
+    func accountName(_ d: Destination) async -> String? { auth.storedAccountName(accountID: d.accountIdentifier) }
+
+    func isUserCancellation(_ error: Error) -> Bool { error as? DropboxProviderError == .cancelled }
 
     // MARK: Background session
 

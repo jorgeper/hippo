@@ -56,14 +56,15 @@ public struct CaptureDetail: Equatable, Sendable {
     public var pending: [FacetKind: PendingLine]
 
     /// `now` is accepted for symmetry with the timeline; nothing here is relative to it, because
-    /// ages are measured against the capture time. `calendar.timeZone` is the current zone.
+    /// ages are measured against the capture time. `calendar.timeZone` is the current zone. `accountName` gives the
+    /// account holder's name by destination ID, for a trimmed file whose account isn't the connected one.
     public static func make(metadata m: CaptureMetadata, packageURL: URL, noteBody: String?, jobs: [UploadJob],
                             enrichment: ResolvedEnrichment, tasks: [EnrichmentTask] = [],
                             changed: RemoteChangedRecord? = nil, trimmedPaths: Set<String> = [],
                             destinationName: String? = nil,
                             trimmed: [TrimmedAttachment] = [], thumbnailURL: (String) -> URL? = { _ in nil },
                             activeDestination: Destination? = nil,
-                            providerName: (String) -> String? = { _ in nil },
+                            accountName: (String) -> String? = { _ in nil },
                             isEnabled: (FacetKind) -> Bool = { _ in true }, isOnline: Bool = true,
                             goldArrivedAt: Date? = nil, destination: (String) -> Destination?, now: Date,
                             locale: Locale, calendar: Calendar) -> CaptureDetail {
@@ -81,8 +82,8 @@ public struct CaptureDetail: Equatable, Sendable {
             } else if let name, activeDestination?.id == t.destinationID {
                 state = .available(destinationName: name)
             } else {
-                state = .unavailable(message: RemoteOnlyAttachment.unavailableText(providerName: owner.flatMap { providerName($0.providerKind) },
-                                                                                accountName: name))
+                state = .unavailable(message: RemoteOnlyAttachment.unavailableText(destinationName: name,
+                                                                                accountName: accountName(t.destinationID)))
             }
             return (t.attachmentID, RemoteOnlyAttachment(attachmentID: t.attachmentID, relativePath: t.relativePath,
                                                          byteCount: t.byteCount, thumbnailURL: thumbnailURL(t.attachmentID),

@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import Testing
+import SyncEngine
 @testable import DropboxAdapter
 
 @Suite struct DropboxAuthTests {
@@ -186,6 +187,34 @@ import Testing
             let text = String(describing: e) + String(reflecting: e) + e.localizedDescription
             #expect(!text.contains(Self.oldAccess) && !text.contains(Self.refresh) && !text.contains(Self.newAccess))
         }
+    }
+
+    @Test func accountNameIsStoredApartAndOldTokensStillDecode() throws {
+        // Tokens saved before the account name was kept carry no `accountName` key.
+        let old = #"{"accessToken":"A","expiresAt":0,"refreshToken":"R","accountID":"dbid:FAKE","needsReauthentication":false}"#
+        let decoded = try JSONDecoder().decode(DropboxTokens.self, from: Data(old.utf8))
+        #expect(decoded.accountName == nil && decoded.accountID == "dbid:FAKE")
+
+        let store = MemoryTokenStore(tokens(expiresIn: 3600))
+        let a = auth(store, ScriptedTransport())
+        #expect(a.storedAccountName(accountID: "dbid:FAKE") == nil)
+        try a.saveAccountName("Fake Person")
+        #expect(try store.load()?.accountName == "Fake Person")
+        #expect(a.storedAccountName(accountID: "dbid:FAKE") == "Fake Person")
+        // Another account's destination never gets this account's name.
+        #expect(a.storedAccountName(accountID: "dbid:OTHER") == nil)
+        // Round-trips, and stays out of the redacted description.
+        let encoded = try JSONEncoder().encode(try #require(try store.load()))
+        #expect(try JSONDecoder().decode(DropboxTokens.self, from: encoded).accountName == "Fake Person")
+        #expect(!String(describing: try #require(try store.load())).contains("Fake Person"))
+    }
+
+    @Test func checkAccountRejectsAnotherAccountsDestination() throws {
+        let a = auth(MemoryTokenStore(tokens(expiresIn: 3600)), ScriptedTransport())
+        try a.checkAccount("dbid:FAKE")
+        #expect(throws: StorageError.permanent(code: "account_mismatch")) { try a.checkAccount("dbid:OTHER") }
+        // Signed out: nothing stored to compare, so the adapter's own calls report the missing sign-in.
+        try auth(MemoryTokenStore(), ScriptedTransport()).checkAccount("dbid:OTHER")
     }
 
     @Test func timeoutIsTransientNotOffline() async throws {

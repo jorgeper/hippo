@@ -23,8 +23,18 @@ public protocol StorageProvider: Sendable {
     func signOut(_ d: Destination) async
     /// The account's sign-in state for `d`, read locally (no network).
     func accountStatus(_ d: Destination) async -> ProviderAccountStatus
+    /// The account holder's display name for `d`, read locally; nil when unknown. `Destination.displayName`
+    /// is the provider's name ("Dropbox"); this one is shown beside it, never in its place.
+    func accountName(_ d: Destination) async -> String?
+    /// True when Settings shows what connecting will create before sign-in starts.
+    var explainsBeforeConnect: Bool { get }
+    /// True when `error` from `connect()` means the person closed sign-in: nothing to report.
+    func isUserCancellation(_ error: Error) -> Bool
 }
 
 extension StorageProvider {
     public func accountStatus(_ d: Destination) async -> ProviderAccountStatus { .ok }
+    public func accountName(_ d: Destination) async -> String? { nil }
+    public var explainsBeforeConnect: Bool { false }
+    public func isUserCancellation(_ error: Error) -> Bool { false }
 }

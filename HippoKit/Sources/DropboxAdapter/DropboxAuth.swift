@@ -1,4 +1,5 @@
 import Foundation
+import SyncEngine
 
 /// Carries no token strings and no response bodies.
 public enum DropboxAuthError: Error, Equatable, Sendable {
@@ -28,6 +29,28 @@ public final class DropboxAuth: Sendable {
 
     public var storedAccountID: String? { (try? tokens.load())??.accountID }
     public var needsReauthentication: Bool { (try? tokens.load())??.needsReauthentication ?? false }
+
+    /// The stored account's display name, when the stored sign-in is `accountID`'s.
+    public func storedAccountName(accountID: String) -> String? {
+        guard let t = (try? tokens.load()) ?? nil, t.accountID == accountID else { return nil }
+        return t.accountName
+    }
+
+    /// Keeps the signed-in account's display name with its tokens. Does nothing when signed out.
+    public func saveAccountName(_ name: String) throws {
+        guard var t = try tokens.load() else { return }
+        t.accountName = name
+        try tokens.save(t)
+    }
+
+    /// Throws `StorageError.permanent(code: "account_mismatch")` when the stored sign-in belongs to another
+    /// account than `accountID`, so one account's adapter never uploads into another's Dropbox. Signed out
+    /// passes: the adapter's calls then report the missing sign-in themselves.
+    public func checkAccount(_ accountID: String) throws {
+        if let stored = storedAccountID, stored != accountID {
+            throw StorageError.permanent(code: "account_mismatch")
+        }
+    }
 
     public func authorizationURL(pkce: PKCE, redirectURI: String?) -> URL {
         var c = URLComponents(string: "https://www.dropbox.com/oauth2/authorize")!

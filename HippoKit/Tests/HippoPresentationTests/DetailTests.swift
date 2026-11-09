@@ -344,16 +344,17 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
     }
 
     @Test func trimmedAttachmentRowsAndPreview() {
-        let other = Destination(id: "d2", providerKind: "filesystem", accountIdentifier: "x", remoteRoot: "/",
-                                displayName: "Jorge", status: .active)
+        // Another Dropbox account: its destination is named after the provider; the account name is kept apart.
+        let other = Destination(id: "d2", providerKind: "dropbox", accountIdentifier: "x", remoteRoot: "/",
+                                displayName: "Dropbox", status: .active)
         func detail(_ state: TrimState, dest: String = "d1", active: Destination? = dropbox,
-                    thumb: URL? = nil, provider: @escaping (String) -> String? = { _ in nil }) -> CaptureDetail {
+                    thumb: URL? = nil, account: @escaping (String) -> String? = { _ in nil }) -> CaptureDetail {
             let t = TrimmedAttachment(captureID: "c1", attachmentID: "a1", relativePath: "content/a1.bin",
                                       byteCount: 2_500_000, sha256: "x", destinationID: dest, state: state, trimmedAt: now)
             return CaptureDetail.make(metadata: meta(attachments: [att()]), packageURL: pkg, noteBody: nil,
                                       jobs: [job(.synced, dest: dest)], enrichment: .empty,
                                       trimmed: [t], thumbnailURL: { _ in thumb }, activeDestination: active,
-                                      providerName: provider,
+                                      accountName: account,
                                       destination: { ["d1": dropbox, "d2": other][$0] }, now: now,
                                       locale: locale, calendar: calendar)
         }
@@ -367,14 +368,17 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(available.exportURLs.isEmpty)
 
         let elsewhere = detail(.trimmed, dest: "d2", active: dropbox)
-        let message = "Connect Jorge to download"
+        let message = "Connect Dropbox to download"
         #expect(elsewhere.remoteOnly["a1"]?.state == .unavailable(message: message))
         #expect(elsewhere.attachments[0].contains(DetailRow(label: "Storage", value: message)))
         #expect(detail(.trimmed, dest: "d2", active: nil).remoteOnly["a1"]?.state == .unavailable(message: message))
 
-        let named = detail(.trimmed, dest: "d2", active: dropbox, provider: { $0 == "filesystem" ? "Developer folder" : nil })
+        // The account name is looked up by the trimmed file's destination ID.
+        let named = detail(.trimmed, dest: "d2", active: dropbox, account: { $0 == "d2" ? "Sample Holder" : nil })
         #expect(named.remoteOnly["a1"]?.state
-                == .unavailable(message: "Connect Developer folder (account Jorge) to download"))
+                == .unavailable(message: "Connect Dropbox (account Sample Holder) to download"))
+        #expect(RemoteOnlyAttachment.unavailableText(destinationName: nil, accountName: nil)
+                == "Connect your storage to download")
 
         let mismatch = detail(.mismatch)
         let changed = "Changed in Dropbox: this file no longer matches"
@@ -421,6 +425,39 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         await model.restore(attachmentID: a.attachmentID)
         #expect(await model.restoreMessages[a.attachmentID] == "Connect to the internet to download")
         #expect(await model.restoreProgress[a.attachmentID] == nil)
+    }
+
+    @Test func modelNamesTheAccountOfAnUnavailableOrSignedOutFile() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        func dest(_ id: String) -> Destination {
+            Destination(id: id, providerKind: "dropbox", accountIdentifier: id, remoteRoot: "/", displayName: "Dropbox",
+                        status: .active)
+        }
+        _ = try t.store.destinations.connect(dest("dest-a"))
+        let p = try await t.note("will be trimmed", at: now)
+        let id = p.metadata.captureID
+        let a = try #require(p.metadata.attachments.first)
+        try t.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: a.attachmentID, relativePath: a.relativePath,
+                                                   byteCount: a.byteCount, sha256: a.sha256, destinationID: "dest-a",
+                                                   state: .trimmed, trimmedAt: now))
+        try FileManager.default.removeItem(at: t.store.layout.packageURL(relativeDirectory: p.relativeDirectory)
+            .appendingPathComponent(a.relativePath))
+        let names: [String: String] = ["dest-a": "Alpha Person", "dest-b": "Beta Person"]
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale,
+                                             adapterFor: { _ in throw StorageError.needsAuthentication },
+                                             accountName: { names[$0.id] })
+        // Signed out of the file's account while it is still the active one.
+        await model.load()
+        #expect(await model.detail?.remoteOnly[a.attachmentID]?.state == .available(destinationName: "Dropbox"))
+        await model.restore(attachmentID: a.attachmentID)
+        #expect(await model.restoreMessages[a.attachmentID] == "Connect Dropbox (account Alpha Person) to download")
+
+        // Another account is active: the file's own account is named.
+        _ = try t.store.destinations.connect(dest("dest-b"))
+        await model.load()
+        #expect(await model.detail?.remoteOnly[a.attachmentID]?.state
+                == .unavailable(message: "Connect Dropbox (account Alpha Person) to download"))
     }
 
     @Test func storageLineNamesTheBoundDestinationNotTheActiveOne() async throws {

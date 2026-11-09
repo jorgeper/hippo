@@ -101,7 +101,9 @@ struct SettingsView: View {
         let destination = model.activeDestination
         Section {
             if let destination {
-                if providerName(destination) == destination.displayName {
+                if let account = model.accountName {
+                    LabeledContent(providerName(destination), value: account)
+                } else if providerName(destination) == destination.displayName {
                     Text(destination.displayName)
                 } else {
                     LabeledContent(destination.displayName, value: providerName(destination))
@@ -143,7 +145,7 @@ struct SettingsView: View {
                 ForEach(registry.providers, id: \.kind) { provider in
                     Button(SettingsModel.connectTitle(provider)) {
                         // Dropbox explains what it will create first; the Developer folder connects at once.
-                        if provider.kind == "dropbox" { connectSheet = ConnectSheetItem(provider: provider) }
+                        if provider.explainsBeforeConnect { connectSheet = ConnectSheetItem(provider: provider) }
                         else { connect(provider) }
                     }
                     .disabled(busy)
@@ -302,7 +304,7 @@ struct SettingsView: View {
 
     /// Signs in with `provider`; closing its sign-in sheet is not a failure.
     private func connect(_ provider: any StorageProvider) {
-        perform("settings-connect", quietly: { $0 as? DropboxProviderError == .cancelled }) {
+        perform("settings-connect", quietly: { provider.isUserCancellation($0) }) {
             try await model.connect(provider)
         }
     }

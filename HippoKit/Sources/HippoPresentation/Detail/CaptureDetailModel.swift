@@ -29,7 +29,9 @@ public final class CaptureDetailModel {
     @ObservationIgnored private let isEnabled: @Sendable (FacetKind) -> Bool
     @ObservationIgnored private let isOnline: @Sendable () -> Bool
     @ObservationIgnored private let sync: @Sendable () async -> Void
-    @ObservationIgnored private let providerName: @Sendable (String) -> String?
+    @ObservationIgnored private let accountName: @Sendable (Destination) async -> String?
+    /// The account holder's name of each trimmed attachment's destination, by attachment ID; set by `load()`.
+    @ObservationIgnored private var restoreAccountNames: [String: String] = [:]
     @ObservationIgnored private let adapterFor: (@Sendable (Destination) throws -> any StorageAdapter)?
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "detail")
     /// Runs after a load's read and before it applies. Set only by tests, to finish loads out of order.
@@ -43,8 +45,8 @@ public final class CaptureDetailModel {
                 isOnline: @escaping @Sendable () -> Bool = { true },
                 sync: @escaping @Sendable () async -> Void = {},
                 adapterFor: (@Sendable (Destination) throws -> any StorageAdapter)? = nil,
-                providerName: @escaping @Sendable (String) -> String? = { _ in nil }) {
-        self.providerName = providerName
+                accountName: @escaping @Sendable (Destination) async -> String? = { _ in nil }) {
+        self.accountName = accountName
         self.adapterFor = adapterFor
         self.sync = sync
         self.isEnabled = isEnabled
@@ -61,6 +63,8 @@ public final class CaptureDetailModel {
         var prompt: DeletionPrompt
         var everywherePrompt: DeletionPrompt?
         var capturedAt: Date
+        /// By attachment ID.
+        var accountNames: [String: String]
     }
 
     /// Reads the capture's metadata, note body and upload jobs. Leaves `detail` nil if it can't be read.
@@ -69,7 +73,7 @@ public final class CaptureDetailModel {
         generation += 1
         let mine = generation
         let store = store, id = captureID, now = now(), calendar = calendar, locale = locale
-        let isEnabled = isEnabled, isOnline = isOnline, providerName = providerName
+        let isEnabled = isEnabled, isOnline = isOnline, accountName = accountName
         let loaded: Loaded? = await Task.detached {
             do {
                 guard let metadata = try store.index.metadata(captureID: id, layout: store.layout),
@@ -84,6 +88,8 @@ public final class CaptureDetailModel {
                     ($0, try? store.destinations.destination(id: $0))
                 })
                 let active = (try? store.destinations.active()) ?? nil
+                var accountNames: [String: String] = [:]
+                for case let d? in names.values { accountNames[d.id] = await accountName(d) }
                 let enrichment = ResolvedEnrichment.load(store: store, captureID: id)
                 let tasks = try store.enrichmentTasks.tasks(captureIDs: [id])
                 let goldArrivedAt = (try? store.enrichments.document(.server, captureID: id))?.generatedAt
@@ -101,14 +107,15 @@ public final class CaptureDetailModel {
                                                     let url = store.layout.thumbnailURL(attachmentID: aid)
                                                     return FileManager.default.fileExists(atPath: url.path) ? url : nil
                                                 },
-                                                activeDestination: active, providerName: providerName, isEnabled: isEnabled,
+                                                activeDestination: active, accountName: { accountNames[$0] }, isEnabled: isEnabled,
                                                 isOnline: isOnline(), goldArrivedAt: goldArrivedAt, destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: jobs.first.flatMap { names[$0.destinationID] ?? nil }?.displayName)
                 // The destination `deleteEverywhere` binds to: the job with the lowest destination ID.
                 let boundName = jobs.map(\.destinationID).min().flatMap { names[$0] ?? nil }?.displayName
                 let everywhere = boundName.map { DeletionPrompt.everywhere(destinationName: $0) }
-                return Loaded(detail: detail, prompt: prompt, everywherePrompt: everywhere, capturedAt: metadata.capturedAt)
+                return Loaded(detail: detail, prompt: prompt, everywherePrompt: everywhere, capturedAt: metadata.capturedAt,
+                              accountNames: trimmed.reduce(into: [:]) { $0[$1.attachmentID] = accountNames[$1.destinationID] })
             } catch {
                 Self.log.error("\("load_failed", privacy: .public)")
                 return nil
@@ -122,6 +129,7 @@ public final class CaptureDetailModel {
         deletionPrompt = loaded.prompt
         everywherePrompt = loaded.everywherePrompt
         capturedAt = loaded.capturedAt
+        restoreAccountNames = loaded.accountNames
     }
 
     /// Makes this capture's blocked and retry-waiting uploads claimable now, then reloads.
@@ -180,9 +188,12 @@ public final class CaptureDetailModel {
             Self.log.error("\("restore_failed", privacy: .public)")
             restoreMessages[attachmentID] = switch error {
             case .offline: "Connect to the internet to download"
-            case .notConnected(let account):
+            case .notConnected(let destinationName):
                 if case .unavailable(let message)? = detail?.remoteOnly[attachmentID]?.state { message }
-                else { RemoteOnlyAttachment.unavailableText(providerName: nil, accountName: account) }
+                else {
+                    RemoteOnlyAttachment.unavailableText(destinationName: destinationName,
+                                                         accountName: restoreAccountNames[attachmentID])
+                }
             case .mismatch: RemoteOnlyAttachment.mismatchText(destinationName: name)
             case .notFound: RemoteOnlyAttachment.goneText(destinationName: name)
             case .failed: "Couldn't download this file"
