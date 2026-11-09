@@ -506,8 +506,17 @@ private struct MorePagesAdapter: StorageAdapter {
     func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
         try await inner.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
     }
-    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
-        try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes)
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
+                      progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {
+        try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes, progress: progress)
+    }
+    func deleteFolder(relativePath: String) async throws { try await inner.deleteFolder(relativePath: relativePath) }
+    func latestCursor(under prefix: String) async throws -> String { try await inner.latestCursor(under: prefix) }
+    func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
+        try await inner.listFolder(relativePath: relativePath, recursive: recursive, cursor: cursor)
+    }
+    func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data? {
+        try await inner.thumbnail(relativePath: relativePath, maxPixelSize: maxPixelSize)
     }
     func validateDestination() async throws { try await inner.validateDestination() }
     func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }

@@ -1,6 +1,7 @@
 import Foundation
 import CaptureCore
 import SyncEngine
+import UniformTypeIdentifiers
 
 /// Local-directory storage adapter for development and contract tests. Not a cloud provider.
 public struct FilesystemAdapter: StorageAdapter {
@@ -25,7 +26,7 @@ public struct FilesystemAdapter: StorageAdapter {
     public var capabilities: StorageCapabilities {
         StorageCapabilities(supportsFolders: true, supportsResumableUpload: true,
                             supportsBackgroundTransfers: false, serverSideSHA256: true,
-                            maxSingleRequestBytes: Int64(Self.chunkSize))
+                            maxSingleRequestBytes: Int64(Self.chunkSize), supportsThumbnails: true)
     }
 
     public func validateDestination() async throws {
@@ -183,6 +184,10 @@ public struct FilesystemAdapter: StorageAdapter {
 
     public func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
         faults.record("list \(prefix)")
+        return try changePage(under: prefix, cursor: cursor)
+    }
+
+    private func changePage(under prefix: String, cursor: String?) throws -> ChangePage {
         guard !prefix.hasPrefix("/"), !prefix.contains("\\"), !prefix.contains("\0"),
               !prefix.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0 == ".." || $0 == "." })
         else { throw StorageError.permanent(code: "invalid_path") }
@@ -252,7 +257,8 @@ public struct FilesystemAdapter: StorageAdapter {
         return (result, unreadable)
     }
 
-    public func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
+    public func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
+                             progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {
         faults.record("download \(relativePath)")
         let url = try resolve(relativePath)
         let fm = FileManager.default
@@ -280,8 +286,88 @@ public struct FilesystemAdapter: StorageAdapter {
             try? fm.removeItem(at: localURL)
             throw StorageError.permanent(code: "too_large")
         }
+        progress?(digest.byteCount)
         return RemoteFileInfo(relativePath: relativePath, byteCount: digest.byteCount,
                               providerHash: ProviderHash(algorithm: "sha256", value: digest.sha256))
+    }
+
+    // MARK: - Folders, cursor, thumbnails
+
+    public func deleteFolder(relativePath: String) async throws {
+        faults.record("deleteFolder \(relativePath)")
+        let url = try resolve(relativePath)
+        let segments = relativePath.split(separator: "/")
+        guard segments.count >= 2, segments[0] == "captures" || segments[0] == "enrichments" else {
+            throw StorageError.permanent(code: "delete_not_allowed")
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            if !FileManager.default.fileExists(atPath: url.path) { return }
+            throw StorageError.transient(code: "delete_failed")
+        }
+    }
+
+    public func latestCursor(under prefix: String) async throws -> String {
+        faults.record("latestCursor \(prefix)")
+        let dirPart = prefix.contains("/") ? String(prefix[..<prefix.lastIndex(of: "/")!]) : ""
+        if !dirPart.isEmpty {
+            let dir = try resolve(dirPart)
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            } catch {
+                throw StorageError.transient(code: "create_directory_failed")
+            }
+        }
+        return try changePage(under: prefix, cursor: nil).cursor
+    }
+
+    public func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
+        faults.record("listFolder \(relativePath)")
+        let start = try resolve(relativePath)
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: start.path, isDirectory: &isDir), isDir.boolValue else {
+            return ListPage(entries: [], cursor: nil, hasMore: false)
+        }
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        var urls: [URL] = []
+        if recursive {
+            guard let walker = fm.enumerator(at: start, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else {
+                return ListPage(entries: [], cursor: nil, hasMore: false)
+            }
+            urls = walker.compactMap { $0 as? URL }
+        } else {
+            urls = (try? fm.contentsOfDirectory(at: start, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
+        }
+        let basePath = root.resolvingSymlinksInPath().path
+        var entries: [RemoteEntry] = []
+        for url in urls {
+            let full = url.resolvingSymlinksInPath().path
+            guard full.hasPrefix(basePath + "/") else { continue }
+            let rel = String(full.dropFirst(basePath.count + 1))
+            guard !rel.split(separator: "/").contains(where: { $0.hasPrefix(".") }) else { continue }
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                entries.append(RemoteEntry(relativePath: rel, isFolder: true, byteCount: 0, providerHash: nil))
+            } else if let digest = try? StreamingHasher.digest(of: url) {
+                entries.append(RemoteEntry(relativePath: rel, isFolder: false, byteCount: digest.byteCount,
+                                           providerHash: ProviderHash(algorithm: "sha256", value: digest.sha256)))
+            }
+        }
+        entries.sort { $0.relativePath < $1.relativePath }
+        return ListPage(entries: entries, cursor: nil, hasMore: false)
+    }
+
+    public func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data? {
+        faults.record("thumbnail \(relativePath)")
+        let url = try resolve(relativePath)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else {
+            throw StorageError.permanent(code: "not_found")
+        }
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return nil }
+        return await LocalThumbnailer.jpeg(for: url, uti: type.identifier, maxPixelSize: maxPixelSize)
     }
 
     // MARK: - Helpers

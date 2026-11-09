@@ -64,8 +64,17 @@ final class HeldAdapter: StorageAdapter {
     func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
         try await base.listChanges(under: prefix, cursor: cursor)
     }
-    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
-        try await base.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes)
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
+                      progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {
+        try await base.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes, progress: progress)
+    }
+    func deleteFolder(relativePath: String) async throws { try await base.deleteFolder(relativePath: relativePath) }
+    func latestCursor(under prefix: String) async throws -> String { try await base.latestCursor(under: prefix) }
+    func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
+        try await base.listFolder(relativePath: relativePath, recursive: recursive, cursor: cursor)
+    }
+    func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data? {
+        try await base.thumbnail(relativePath: relativePath, maxPixelSize: maxPixelSize)
     }
     func validateDestination() async throws { try await base.validateDestination() }
     func ensureContainer(relativePath: String) async throws { try await base.ensureContainer(relativePath: relativePath) }

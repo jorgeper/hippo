@@ -6,14 +6,17 @@ public struct StorageCapabilities: Sendable {
     public var supportsBackgroundTransfers: Bool
     public var serverSideSHA256: Bool
     public var maxSingleRequestBytes: Int64
+    /// True when `thumbnail(relativePath:maxPixelSize:)` can return an image.
+    public var supportsThumbnails: Bool
 
     public init(supportsFolders: Bool, supportsResumableUpload: Bool, supportsBackgroundTransfers: Bool,
-                serverSideSHA256: Bool, maxSingleRequestBytes: Int64) {
+                serverSideSHA256: Bool, maxSingleRequestBytes: Int64, supportsThumbnails: Bool = false) {
         self.supportsFolders = supportsFolders
         self.supportsResumableUpload = supportsResumableUpload
         self.supportsBackgroundTransfers = supportsBackgroundTransfers
         self.serverSideSHA256 = serverSideSHA256
         self.maxSingleRequestBytes = maxSingleRequestBytes
+        self.supportsThumbnails = supportsThumbnails
     }
 }
 
@@ -97,6 +100,32 @@ public struct ChangePage: Sendable, Equatable {
     }
 }
 
+public struct RemoteEntry: Sendable, Equatable {
+    public var relativePath: String
+    public var isFolder: Bool
+    public var byteCount: Int64
+    public var providerHash: ProviderHash?
+
+    public init(relativePath: String, isFolder: Bool, byteCount: Int64, providerHash: ProviderHash?) {
+        self.relativePath = relativePath
+        self.isFolder = isFolder
+        self.byteCount = byteCount
+        self.providerHash = providerHash
+    }
+}
+
+public struct ListPage: Sendable, Equatable {
+    public var entries: [RemoteEntry]
+    public var cursor: String?
+    public var hasMore: Bool
+
+    public init(entries: [RemoteEntry], cursor: String?, hasMore: Bool) {
+        self.entries = entries
+        self.cursor = cursor
+        self.hasMore = hasMore
+    }
+}
+
 public enum StorageError: Error, Sendable, Equatable {
     case offline
     case needsAuthentication
@@ -126,10 +155,29 @@ public protocol StorageAdapter: Sendable {
     /// `enrichments/` or `logs/`. A provider's overwrite-capable upload (Plan 3) must allow both prefixes.
     func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt
     /// A nil cursor returns every file under `prefix` as `.upserted`; otherwise the changes since `cursor`.
-    /// An unknown or garbled cursor throws `.cursorReset`. Directories and hidden or temporary entries
+    /// A `.deleted` entry may name a folder (the whole subtree is gone) or a file; implementations may
+    /// report either. An unknown or garbled cursor throws `.cursorReset`. Directories and hidden or temporary entries
     /// (any path segment starting with `.`) are never reported.
     func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage
     /// Over `maxBytes` throws `.permanent(code: "too_large")` and leaves no file at `localURL`.
-    /// A missing file throws `.permanent(code: "not_found")`.
-    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo
+    /// A missing file throws `.permanent(code: "not_found")`. `progress` receives the bytes written so far.
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
+                      progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo
+    /// Recursive and idempotent: a missing folder is success. Throws `.permanent(code: "invalid_path")` for an
+    /// unsafe path and `.permanent(code: "delete_not_allowed")` unless the path starts with `captures/` or
+    /// `enrichments/` and has at least two segments.
+    func deleteFolder(relativePath: String) async throws
+    /// A cursor for changes from now on under `prefix`, listing nothing. Creates the prefix folder if missing.
+    func latestCursor(under prefix: String) async throws -> String
+    /// Files and folders with sizes and hashes. A nil `cursor` starts; a missing folder returns an empty page
+    /// with `hasMore == false`. Hidden entries (a segment starting with `.`) are never reported.
+    func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage
+    /// JPEG bytes, or nil when the provider can't make one. Callers check `capabilities.supportsThumbnails` first.
+    func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data?
+}
+
+extension StorageAdapter {
+    public func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
+        try await downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes, progress: nil)
+    }
 }
