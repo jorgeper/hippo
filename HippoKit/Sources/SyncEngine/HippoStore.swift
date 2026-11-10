@@ -150,13 +150,30 @@ public final class HippoStore: Sendable {
         }
     }
 
+    /// `saveFailureCode`, with the two refusals of `addComment` named apart from real I/O errors.
+    private static func commentFailureCode(_ error: Error) -> String {
+        switch error as? CaptureError {
+        case .io(commentCaptureMissing)?: "capture_missing"
+        case .io(commentPackageInvalid)?: "local_package_invalid"
+        default: saveFailureCode(error)
+        }
+    }
+
+    /// `CaptureError.io` payload when `addComment` finds no indexed capture (logged as `capture_missing`).
+    public static let commentCaptureMissing = "capture missing"
+    /// `CaptureError.io` payload when `addComment` finds a package that doesn't validate
+    /// (logged as `local_package_invalid`).
+    public static let commentPackageInvalid = "package invalid"
+
     /// Adds a comment to a saved capture (comments design §5.3). Loads the package (throwing
-    /// `CaptureError.io("capture missing")` when the capture isn't indexed, `.io("package invalid")` when its
-    /// package doesn't validate), writes the comment into its `comments/` folder, records it in the index,
-    /// requeues the capture's synced uploads, forgets the transcript task for an audio comment, and logs
-    /// `comment.added`. A failure before the comment is written logs `comment.save_failed` and is thrown.
-    /// Once the comment is written it is saved: the package is the truth, so index, requeue and task
-    /// failures are only logged (as fixed categories) and `recover()` registers the comment with the package.
+    /// `CaptureError.io(Self.commentCaptureMissing)` when the capture isn't indexed,
+    /// `.io(Self.commentPackageInvalid)` when its package doesn't validate), writes the comment into its
+    /// `comments/` folder, records it in the index, requeues the capture's synced uploads, forgets the transcript
+    /// task for an audio comment, and logs `comment.added`. A failure before the comment is written logs
+    /// `comment.save_failed` and is thrown.
+    /// Once the comment is written it is saved: it is on disk and shown from the package. Index, requeue and
+    /// task failures are only logged (as fixed categories); the next comment, or an upload-again, catches the
+    /// upload up.
     /// Trimmed attachments don't stop a comment: their originals are in the destination.
     public func addComment(captureID: String, _ draft: CommentDraft, now: Date = Date(),
                            timeZone: TimeZone = .current) async throws -> CaptureComment {
@@ -170,16 +187,16 @@ public final class HippoStore: Sendable {
         let comment: CaptureComment
         do {
             guard let directory = try index.relativeDirectory(captureID: captureID) else {
-                throw CaptureError.io("capture missing")
+                throw CaptureError.io(Self.commentCaptureMissing)
             }
             guard let loaded = CommittedPackage.load(directory: layout.packageURL(relativeDirectory: directory),
                                                      layout: layout, trimmed: try trims.trimmedPaths(captureID: captureID))
-            else { throw CaptureError.io("package invalid") }
+            else { throw CaptureError.io(Self.commentPackageInvalid) }
             package = loaded
             comment = try commentWriter.add(draft, to: package, now: now, timeZone: timeZone)
         } catch {
             log.append(LogEvent(event: .commentSaveFailed, captureID: captureID, kind: kind,
-                                code: Self.saveFailureCode(error)))
+                                code: Self.commentFailureCode(error)))
             throw error
         }
         log.append(LogEvent(event: .commentAdded, captureID: captureID, kind: kind))

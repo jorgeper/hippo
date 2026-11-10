@@ -181,6 +181,31 @@ private struct FakeSpace: SpaceChecking {
         #expect(entries(in: layout.stagingDir).isEmpty)
     }
 
+    @Test func existingCommentsDirectoryIsReusedAndKept() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let package = try await commit()
+        let comments = package.directoryURL.appendingPathComponent("comments")
+        // Created by someone else (another writer, an earlier comment) before this call.
+        try FileManager.default.createDirectory(at: comments, withIntermediateDirectories: false)
+        let id = UUID(uuidString: "00000000-0000-4000-8000-0000000000aa")!
+        let fixed = CommentWriter(layout: layout, producer: producer, space: FakeSpace(bytes: 1 << 40), makeID: { id })
+
+        let first = try fixed.add(.text("first"), to: package, now: now, timeZone: la)
+        #expect(entries(in: comments) == [first.relativePath.replacingOccurrences(of: "comments/", with: "")])
+
+        // A later add that fails (the same id: the json rename refuses to replace) leaves comments/ and its file.
+        do {
+            _ = try fixed.add(audioDraft(try audioSource()), to: package, now: now, timeZone: la)
+            Issue.record("expected io error")
+        } catch CaptureError.io {
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
+        #expect(entries(in: comments) == ["\(id.uuidString.lowercased()).json"])
+        #expect(PackageComments.load(directory: package.directoryURL).comments.map(\.text) == ["first"])
+        #expect(entries(in: layout.stagingDir).isEmpty)
+    }
+
     @Test func missingPackageIsNotResurrected() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let package = try await commit()

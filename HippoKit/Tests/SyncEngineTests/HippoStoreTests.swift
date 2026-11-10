@@ -930,26 +930,36 @@ extension HippoStoreTests {
         let t = try StoreHarness(); defer { t.cleanup() }
         let missing = UUID().uuidString.lowercased()
 
-        await #expect(throws: CaptureError.io("capture missing")) {
+        await #expect(throws: CaptureError.io(HippoStore.commentCaptureMissing)) {
             try await t.store.addComment(captureID: missing, .text("orphan"))
         }
 
         let failed = t.store.log.events(captureID: missing, from: Date().addingTimeInterval(-86_400))
         #expect(failed.map(\.event) == [.commentSaveFailed])
-        #expect(failed.first?.code == "io")
+        #expect(failed.first?.code == "capture_missing")
         #expect(failed.first?.kind == "text")
 
         // A package that no longer validates is refused the same way, and nothing is written.
         let pkg = try await t.store.capture(t.urlDraft())
         let id = pkg.metadata.captureID
         try FileManager.default.removeItem(at: pkg.directoryURL.appendingPathComponent("complete.json"))
-        await #expect(throws: CaptureError.io("package invalid")) {
+        await #expect(throws: CaptureError.io(HippoStore.commentPackageInvalid)) {
             try await t.store.addComment(captureID: id, .text("damaged"))
         }
         #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.appendingPathComponent("comments").path))
         #expect(try t.store.index.commentCount(captureID: id) == 0)
-        #expect(t.store.log.events(captureID: id, from: Date().addingTimeInterval(-86_400)).map(\.event)
-                == [.captureSaved, .commentSaveFailed])
+        let damaged = t.store.log.events(captureID: id, from: Date().addingTimeInterval(-86_400))
+        #expect(damaged.map(\.event) == [.captureSaved, .commentSaveFailed])
+        #expect(damaged.last?.code == "local_package_invalid")
+        #expect(HippoStore.commentCaptureMissing != HippoStore.commentPackageInvalid)
+
+        // A real write failure keeps the plain `io` code.
+        let good = try await t.store.capture(t.urlDraft("https://example.com/c"))
+        let gid = good.metadata.captureID
+        let blocked = good.directoryURL.appendingPathComponent("comments")
+        try Data("not a directory".utf8).write(to: blocked)
+        await #expect(throws: CaptureError.self) { try await t.store.addComment(captureID: gid, .text("blocked")) }
+        #expect(t.store.log.events(captureID: gid, from: Date().addingTimeInterval(-86_400)).last?.code == "io")
     }
 
     @Test func deleteEverywhereRemovesComments() async throws {

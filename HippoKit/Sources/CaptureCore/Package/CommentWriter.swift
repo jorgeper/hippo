@@ -49,7 +49,8 @@ public struct CommentWriter: Sendable {
         let lock = try StagingLock.acquire(at: layout.stagingDir.appendingPathComponent("\(stagingName).lock"))
         let staging = layout.stagingDir.appendingPathComponent(stagingName, isDirectory: true)
         let commentsDir = package.directoryURL.appendingPathComponent(PackageComments.directoryName, isDirectory: true)
-        let createdCommentsDir = !fm.fileExists(atPath: commentsDir.path)
+        // True only once this call itself created comments/: cleanup may then remove it (if still empty).
+        var createdCommentsDir = false
         var movedAudio: URL?
 
         do {
@@ -94,8 +95,15 @@ public struct CommentWriter: Sendable {
             guard fm.fileExists(atPath: package.directoryURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
                 throw CaptureError.io("package is gone")
             }
-            if createdCommentsDir {
-                try PackageWriter.io("create comments") { try fm.createDirectory(at: commentsDir, withIntermediateDirectories: false) }
+            // Another writer (or an earlier comment) may have created it first: "already exists" is success.
+            if mkdir(commentsDir.path, 0o755) == 0 {
+                createdCommentsDir = true
+            } else if errno != EEXIST {
+                throw CaptureError.io("create comments failed: errno \(errno)")
+            }
+            isDirectory = false
+            guard fm.fileExists(atPath: commentsDir.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw CaptureError.io("comments is not a directory")
             }
             if let stagedAudio, let audio {
                 let destination = package.directoryURL.appendingPathComponent(audio.relativePath)

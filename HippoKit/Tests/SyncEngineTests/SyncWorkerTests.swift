@@ -742,6 +742,36 @@ extension SyncWorkerTests {
         try expectByteIdentical(h, pkg)
     }
 
+    // The same race with the default `maxJobs`: the job the mark sent back to pending is reclaimed and finished
+    // within the one pass.
+    @Test func commentAddedDuringUploadIsReclaimedInTheSamePass() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        #expect(await h.worker().runOnce().synced == 1)
+        let first = try h.comment(.text("first"), on: pkg)
+
+        let calls = Counter()
+        let added = HookBox<CaptureComment>()
+        let (writer, index, jobs) = (h.commentWriter, h.index, h.jobs)
+        let adapter = HookedAdapter(inner: h.adapter, beforeUpload: { _ in
+            guard calls.next() == 1 else { return }
+            let c = try writer.add(.text("second"), to: pkg, now: t0.addingTimeInterval(1), timeZone: TimeZone(identifier: "UTC")!)
+            try index.recordComment(captureID: pkg.metadata.captureID, c, replacesExcerpt: false)
+            _ = try jobs.requeueSynced(captureID: pkg.metadata.captureID)
+            added.value = c
+        })
+
+        #expect(await h.worker(adapter).runOnce() == SyncPassResult(synced: 1, failed: 0, idle: false))
+
+        let second = try #require(added.value)
+        #expect(calls.next() == 3)  // two uploads in the pass (first's json, then second's json)
+        let job = try h.job(pkg)
+        #expect(job.state == .synced)
+        let receipted = Set(try h.jobs.receipts(jobID: job.jobID).map(\.relativePath))
+        #expect(receipted.isSuperset(of: [first.relativePath, second.relativePath]))
+        try expectByteIdentical(h, pkg)
+    }
+
     @Test func pendingCommentIsSkipped() async throws {
         let h = try SyncHarness(); defer { h.cleanup() }
         let pkg = try await h.capture()
