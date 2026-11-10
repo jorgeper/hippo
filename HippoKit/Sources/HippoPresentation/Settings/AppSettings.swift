@@ -35,6 +35,12 @@ public struct AppSettings: @unchecked Sendable {
         nonmutating set { defaults.set(newValue, forKey: "layer_stripes") }
     }
 
+    /// Whether pictures and videos taken in Hippo are also saved to Photos. Off unless the user turns it on.
+    public var cameraSavesToPhotos: Bool {
+        get { defaults.bool(forKey: "camera_saves_to_photos") }
+        nonmutating set { defaults.set(newValue, forKey: "camera_saves_to_photos") }
+    }
+
     /// When the last sync chain ended un-cancelled, and whether anything in it failed.
     public var lastSync: (at: Date, failed: Bool)? {
         guard let at = defaults.object(forKey: "last_sync_at") as? Date else { return nil }

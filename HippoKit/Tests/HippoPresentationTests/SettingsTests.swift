@@ -90,6 +90,19 @@ struct SettingsTests {
         #expect(events.map(\.on) == [false, true])
     }
 
+    @Test func cameraSavesToPhotosDefaultsOff() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        #expect(!h.settings.cameraSavesToPhotos)
+        #expect(!h.model.cameraSavesToPhotos)
+        h.model.setCameraSavesToPhotos(true)
+        #expect(h.model.cameraSavesToPhotos)
+        #expect(h.settings.cameraSavesToPhotos)
+        let events = h.t.store.log.globalEvents(limit: 10, before: nil).filter { $0.event == .settingsChanged }
+        #expect(events.map(\.kind) == ["camera_saves_to_photos"])
+        #expect(events.map(\.on) == [true])
+    }
+
     @Test func developerModeToggleIsLogged() async throws {
         let h = try Harness()
         defer { h.cleanup() }
