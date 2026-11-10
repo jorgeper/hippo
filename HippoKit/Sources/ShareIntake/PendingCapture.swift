@@ -102,14 +102,25 @@ extension IntakeDirectory {
 
     /// Oldest first. A pending capture whose files are missing is removed and reported in `dropped`.
     public func pendingCaptures() -> (captures: [PendingCapture], dropped: Int) {
+        let result = pendingCaptures(isCommitted: { _ in false })
+        return (result.captures, result.dropped)
+    }
+
+    /// Like `pendingCaptures()`, and a pending capture that `isCommitted` says is already in the store (the app
+    /// was killed between the commit and the intake discard) is removed and counted in `committed`.
+    public func pendingCaptures(isCommitted: (UUID) -> Bool) -> (captures: [PendingCapture], dropped: Int, committed: Int) {
         let fm = FileManager.default
         let entries = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         var captures: [PendingCapture] = []
         var dropped = 0
+        var committed = 0
         for entry in entries {
             let jsonURL = entry.appendingPathComponent(Self.pendingFileName)
             guard fm.fileExists(atPath: jsonURL.path) else { continue }
             switch Self.load(jsonURL, in: entry) {
+            case .loaded(let pending) where isCommitted(pending.draft.captureID):
+                try? fm.removeItem(at: entry)
+                committed += 1
             case .loaded(let pending):
                 captures.append(pending)
             case .keep:
@@ -123,7 +134,7 @@ extension IntakeDirectory {
             $0.savedAt != $1.savedAt ? $0.savedAt < $1.savedAt
                 : $0.draft.captureID.uuidString < $1.draft.captureID.uuidString
         }
-        return (captures, dropped)
+        return (captures, dropped, committed)
     }
 
     /// True when `intake/<capture-id>/pending.json` exists.
@@ -155,6 +166,7 @@ extension IntakeDirectory {
         for item in file.attachments {
             let body: AttachmentSource.Body
             if let name = item.file {
+                guard isPlainName(name) else { return .discard }
                 let url = dir.appendingPathComponent(name, isDirectory: false)
                 guard fm.fileExists(atPath: url.path) else { return .discard }
                 body = .file(url)
@@ -166,6 +178,7 @@ extension IntakeDirectory {
         }
         var preview: URL?
         if let name = file.previewImage {
+            guard isPlainName(name) else { return .discard }
             let url = dir.appendingPathComponent(name, isDirectory: false)
             guard fm.fileExists(atPath: url.path) else { return .discard }
             preview = url
@@ -175,5 +188,10 @@ extension IntakeDirectory {
                                  urls: file.urls, attachments: attachments, location: file.location,
                                  observations: file.observations)
         return .loaded(PendingCapture(draft: draft, previewImageURL: preview, totalBytes: file.totalBytes, savedAt: file.savedAt))
+    }
+
+    /// A single path component naming a file inside the capture directory, as `savePending` writes them.
+    private static func isPlainName(_ name: String) -> Bool {
+        !name.isEmpty && !name.contains("/") && name != "." && name != ".."
     }
 }

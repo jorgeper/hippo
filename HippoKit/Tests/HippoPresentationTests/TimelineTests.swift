@@ -162,6 +162,33 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
         #expect(row.kind == .multi && row.thumbnailAttachmentPaths.count == 3 && row.extraCount == 2)
     }
 
+    // A voice comment is not a voice note: only a recording is a `.voice` row (design §4.6).
+    @Test func linkWithVoiceCommentIsALinkRow() {
+        let s = summary(types: [.url, .audio], attachments: 1, primary: "attachments/1.bin", title: "A page")
+        let m = metadata(urls: ["https://www.example.com/a"],
+                         attachments: [attachment(1, uti: "com.apple.m4a-audio", duration: 7)])
+        for meta in [m, nil] {
+            let row = TimelineRow.make(s, metadata: meta, enrichment: nil, locale: locale)
+            #expect(row.kind == .link && row.title == "A page", "metadata: \(meta != nil)")
+        }
+        #expect(TimelineRow.make(s, metadata: m, enrichment: nil, locale: locale).subtitle == "example.com")
+    }
+
+    // The voice comment is left out of a picture row and of the "+N" count.
+    @Test func voiceCommentIsNotCountedOnPictureRows() {
+        let photo = summary(types: [.image, .audio], method: .camera, attachments: 2, primary: "attachments/1.bin")
+        let pm = metadata(attachments: [attachment(1), attachment(2, uti: "com.apple.m4a-audio", duration: 7)])
+        for meta in [pm, nil] {
+            let row = TimelineRow.make(photo, metadata: meta, enrichment: nil, locale: locale)
+            #expect(row.kind == .media && row.thumbnailAttachmentPaths == ["attachments/1.bin"] && row.extraCount == 0,
+                    "metadata: \(meta != nil)")
+        }
+        let several = summary(types: [.image, .audio], attachments: 5, primary: "attachments/1.bin")
+        let sm = metadata(attachments: (1...4).map { attachment($0) } + [attachment(5, uti: "com.apple.m4a-audio")])
+        let row = TimelineRow.make(several, metadata: sm, enrichment: nil, locale: locale)
+        #expect(row.kind == .multi && row.thumbnailAttachmentPaths.count == 3 && row.extraCount == 1)
+    }
+
     @Test func singleMediaNoteAndFileRows() {
         let media = TimelineRow.make(summary(types: [.image], attachments: 1, primary: "attachments/1.bin"),
                                      metadata: nil, enrichment: nil, locale: locale)

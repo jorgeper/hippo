@@ -88,6 +88,16 @@ struct LogLineTests {
         #expect(line(LogEvent(event: .settingsChanged, kind: "odd_thing", on: true)).text == "odd_thing turned on")
     }
 
+    @Test func photoLibrarySaveLines() {
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .ok)).text == "Saved to Photos")
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "denied")).text
+                == "Couldn't save to Photos · denied")
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "failed")).text
+                == "Couldn't save to Photos · failed")
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "lookup_failed")).text
+                == "Couldn't save to Photos · lookup_failed")
+    }
+
     @Test func clockIgnoresTwelveHourLocale() {
         var e = LogEvent(event: .appLaunch)
         e.t = now
@@ -254,20 +264,5 @@ struct LogLineTests {
                 == "Skipped · outside_window")
         #expect(line(LogEvent(event: .downloadCapture, outcome: .failed, code: "invalid_package", dest: "dropbox")).text
                 == "Couldn't download · invalid_package")
-    }
-}
-
-@Suite struct CameraLogLineTests {
-    private func line(_ e: LogEvent) -> LogLine {
-        LogLine.make(e, id: 0, now: Date(timeIntervalSince1970: 1_800_000_000), zone: TimeZone(identifier: "UTC")!,
-                     locale: Locale(identifier: "en_US_POSIX"))
-    }
-
-    @Test func photoLibrarySaveLines() {
-        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .ok)).text == "Saved to Photos")
-        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "denied")).text
-                == "Couldn't save to Photos · denied")
-        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "failed")).text
-                == "Couldn't save to Photos · failed")
     }
 }

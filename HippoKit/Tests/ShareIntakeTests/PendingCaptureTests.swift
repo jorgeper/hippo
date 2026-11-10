@@ -165,6 +165,44 @@ import HippoTestSupport
         #expect(directory.isPending(captureID: id))
     }
 
+    // A kill between the commit and the intake discard leaves a pending draft for a capture already saved.
+    @Test func pendingForACommittedCaptureIsRemovedAndNotReturned() throws {
+        let committed = UUID(), waiting = UUID()
+        try directory.savePending(try makePending(id: committed, savedAt: t0).0)
+        try directory.savePending(try makePending(id: waiting, savedAt: t0.addingTimeInterval(1)).0)
+
+        let result = directory.pendingCaptures(isCommitted: { $0 == committed })
+        #expect(result.captures.map(\.draft.captureID) == [waiting])
+        #expect(result.committed == 1)
+        #expect(result.dropped == 0)
+        #expect(!fm.fileExists(atPath: directory.directory(for: committed).path))
+        #expect(directory.isPending(captureID: waiting))
+    }
+
+    // A name that leaves the capture directory is refused even when something exists at that path.
+    @Test func pendingFileNamesMustStayInsideTheCaptureDirectory() throws {
+        let intakeRoot = directory.directory(for: UUID()).deletingLastPathComponent()
+        try fm.createDirectory(at: intakeRoot, withIntermediateDirectories: true)
+        try Data([1]).write(to: intakeRoot.appendingPathComponent("outside.jpg"))
+        for (key, bad) in [("\"file\" : \"0.jpg\"", "\"file\" : \"../outside.jpg\""),
+                           ("\"file\" : \"0.jpg\"", "\"file\" : \"..\""),
+                           ("\"preview_image\" : \"preview.jpg\"", "\"preview_image\" : \"a/preview.jpg\"")] {
+            let id = UUID()
+            try directory.savePending(try makePending(id: id).0)
+            let dir = directory.directory(for: id)
+            try fm.createDirectory(at: dir.appendingPathComponent("a"), withIntermediateDirectories: true)
+            try Data([1]).write(to: dir.appendingPathComponent("a/preview.jpg"))
+            let json = dir.appendingPathComponent("pending.json")
+            let text = try String(contentsOf: json, encoding: .utf8)
+            try #require(text.contains(key), "\(text)")
+            try Data(text.replacingOccurrences(of: key, with: bad).utf8).write(to: json)
+
+            let result = directory.pendingCaptures()
+            #expect(result.captures.isEmpty && result.dropped == 1, "\(bad)")
+            #expect(!fm.fileExists(atPath: dir.path))
+        }
+    }
+
     @Test func savePendingCreatesMissingDirectoryForDataOnlyDrafts() throws {
         let id = UUID()
         let draft = CaptureDraft(captureID: id, startedAt: t0, timeZone: .gmt, method: .shareExtension, userNote: "x",

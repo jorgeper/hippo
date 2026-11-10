@@ -71,6 +71,10 @@ public enum CameraCapture {
         else { return false }
         var properties = metadata.properties
         properties[kCGImagePropertyOrientation as String] = orientation
+        // Keep the TIFF copy in step so no reader sees two different orientations.
+        var tiff = properties[kCGImagePropertyTIFFDictionary as String] as? [String: Any] ?? [:]
+        tiff[kCGImagePropertyTIFFOrientation as String] = orientation
+        properties[kCGImagePropertyTIFFDictionary as String] = tiff
         properties[kCGImageDestinationLossyCompressionQuality as String] = 0.9
         CGImageDestinationAddImage(destination, image, properties as CFDictionary)
         return CGImageDestinationFinalize(destination)

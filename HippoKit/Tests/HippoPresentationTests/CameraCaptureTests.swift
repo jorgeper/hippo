@@ -20,7 +20,8 @@ struct CameraCaptureTests {
         let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
         let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
         let id = UUID()
-        let metadata = PhotoMetadata(["{Exif}": ["DateTimeOriginal": "2026:11:09 10:00:00"]])
+        let metadata = PhotoMetadata(["{Exif}": ["DateTimeOriginal": "2026:11:09 10:00:00"],
+                                      "{TIFF}": ["Orientation": 1, "Make": "Apple"]])
 
         let prepared = try CameraCapture.stage(.photo(image, orientation: 6, metadata: metadata), intake: intake,
                                                captureID: id, startedAt: Date(), timeZone: .gmt, location: nil)
@@ -43,6 +44,9 @@ struct CameraCaptureTests {
         let written = try #require(CGImageSourceCreateWithURL(file as CFURL, nil))
         let props = try #require(CGImageSourceCopyPropertiesAtIndex(written, 0, nil) as? [String: Any])
         #expect(props[kCGImagePropertyOrientation as String] as? Int == 6)
+        let tiff = props[kCGImagePropertyTIFFDictionary as String] as? [String: Any]
+        #expect(tiff?[kCGImagePropertyTIFFOrientation as String] as? Int == 6)
+        #expect(tiff?[kCGImagePropertyTIFFMake as String] as? String == "Apple")
         let exif = props[kCGImagePropertyExifDictionary as String] as? [String: Any]
         #expect(exif?[kCGImagePropertyExifDateTimeOriginal as String] as? String == "2026:11:09 10:00:00")
     }
