@@ -44,7 +44,7 @@ public enum PackageComments {
 
 extension PackageComments {
     /// `comments/<comment-id>.<ext>` with a short lowercase alphanumeric extension: nothing that can escape the directory.
-    static func isSafeAudioPath(_ path: String, commentID: String) -> Bool {
+    public static func isSafeAudioPath(_ path: String, commentID: String) -> Bool {
         let prefix = "\(directoryName)/\(commentID)."
         guard path.hasPrefix(prefix) else { return false }
         let ext = path.dropFirst(prefix.count)

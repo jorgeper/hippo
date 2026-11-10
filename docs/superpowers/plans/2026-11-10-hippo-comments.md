@@ -15,7 +15,7 @@
 - Never rewrite `metadata.json`, `complete.json` or anything under `content/` of a committed package. Comments are new files only.
 - Comment json is written last, locally and remotely; an audio file is written before its json.
 - Upload of comment files is add-only (`StorageAdapter.uploadFile`); `replaceFile` is never used for them.
-- Copy, verbatim: bar accessibility labels "Note", "Camera", "Record" / "Stop"; identifiers `note-button`, `camera-button`, `record-button`; comment-mode titles "Add a comment" and "Record a comment"; placeholder "Write a comment"; Detail section title "Comments"; captions "Added today, 14:02" / "Added 3 Nov, 09:15" (locale-formatted); recorder failure copy "Hippo couldn't save this comment. It's still here. Try again."
+- Copy, verbatim: bar accessibility labels "Note", "Camera", "Record" / "Stop"; identifiers `note-button`, `camera-button`, `record-button`; comment-mode titles "Add a comment" and "Record a comment"; placeholder "Write a comment"; Detail section title "Comments"; captions "Added today, 2:02 PM" / "Added Nov 3, 9:15 AM" (en_US; en_GB "Added 3 Nov, 9:15"), formatted in the phone's locale; recorder failure copy "Hippo couldn't save this comment. It's still here. Try again."
 - Log events carry no content: `comment.added` (`kind` = `text` | `audio`), `comment.save_failed` (`code`).
 - Every new public type is `Sendable`; models stay `@MainActor` where their neighbours are.
 - Commit after each task with the `Co-Authored-By` and `Claude-Session` trailers in use on this branch. Never commit `Hippo.xcodeproj`, `Config/Secrets.xcconfig` or `.env`.
@@ -227,7 +227,7 @@
       public enum Body: Equatable, Sendable { case text(String); case audio(URL, durationText: String?) }
       public var id: String
       public var body: Body
-      public var caption: String?        // nil for capture-time comments; "Added today, 14:02" / "Added 3 Nov, 09:15"
+      public var caption: String?        // nil for capture-time comments; "Added today, 2:02 PM" / "Added Nov 3, 9:15 AM" (en_US), formatted in the phone's locale
       public var transcript: String?
       public var transcriptLayer: Layer?
   }

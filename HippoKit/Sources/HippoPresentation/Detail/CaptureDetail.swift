@@ -36,10 +36,14 @@ public struct CommentRow: Equatable, Sendable, Identifiable {
     /// An audio row's transcript, once enrichment has one.
     public var transcript: String?
     public var transcriptLayer: Layer?
+    /// Set when a capture-time recording was trimmed from this iPhone (Save space); its file is in the destination
+    /// only. Always nil for `user_note` and comment rows: comment files are never trimmed.
+    public var remoteOnly: RemoteOnlyAttachment?
 
-    public init(id: String, body: Body, caption: String? = nil, transcript: String? = nil, transcriptLayer: Layer? = nil) {
+    public init(id: String, body: Body, caption: String? = nil, transcript: String? = nil, transcriptLayer: Layer? = nil,
+                remoteOnly: RemoteOnlyAttachment? = nil) {
         self.id = id; self.body = body; self.caption = caption
-        self.transcript = transcript; self.transcriptLayer = transcriptLayer
+        self.transcript = transcript; self.transcriptLayer = transcriptLayer; self.remoteOnly = remoteOnly
     }
 }
 
@@ -123,7 +127,8 @@ public struct CaptureDetail: Equatable, Sendable {
         return CaptureDetail(
             preview: preview(metadata: m, files: files, links: links, noteBody: noteBody, remoteOnly: remoteOnly),
             comments: commentRows(m, recordings: recordings, comments: comments, packageURL: packageURL,
-                                  enrichment: enrichment, now: now, locale: locale, calendar: calendar),
+                                  enrichment: enrichment, remoteOnly: remoteOnly, now: now, locale: locale,
+                                  calendar: calendar),
             sharedTitle: nonEmpty(m.sharedTitle), sharedText: nonEmpty(m.sharedText),
             links: links,
             captured: capturedRows(m, enrichment: enrichment, locale: locale, calendar: calendar),
@@ -199,7 +204,8 @@ public struct CaptureDetail: Equatable, Sendable {
     }
 
     private static func commentRows(_ m: CaptureMetadata, recordings: [(Attachment, URL)], comments: [CaptureComment],
-                                    packageURL: URL, enrichment: ResolvedEnrichment, now: Date, locale: Locale,
+                                    packageURL: URL, enrichment: ResolvedEnrichment,
+                                    remoteOnly: [String: RemoteOnlyAttachment], now: Date, locale: Locale,
                                     calendar: Calendar) -> [CommentRow] {
         func transcript(_ id: String) -> (String?, Layer?) {
             guard let text = nonEmpty(enrichment.transcripts[id]?.text) else { return (nil, nil) }
@@ -211,13 +217,13 @@ public struct CaptureDetail: Equatable, Sendable {
             let (text, layer) = transcript(a.attachmentID)
             rows.append(CommentRow(id: a.attachmentID,
                                    body: .audio(url, durationText: a.media?.durationSeconds.flatMap(DetailFormat.duration)),
-                                   transcript: text, transcriptLayer: layer))
+                                   transcript: text, transcriptLayer: layer, remoteOnly: remoteOnly[a.attachmentID]))
         }
         for c in comments {
             let caption = addedCaption(c.addedAt, now: now, locale: locale, calendar: calendar)
             if let body = nonEmpty(c.text) {
                 rows.append(CommentRow(id: c.commentID, body: .text(body), caption: caption))
-            } else if let audio = c.audio, isCommentAudioPath(audio.relativePath, commentID: c.commentID) {
+            } else if let audio = c.audio, PackageComments.isSafeAudioPath(audio.relativePath, commentID: c.commentID) {
                 let (text, layer) = transcript(c.commentID)
                 rows.append(CommentRow(id: c.commentID,
                                        body: .audio(packageURL.appendingPathComponent(audio.relativePath),
@@ -226,14 +232,6 @@ public struct CaptureDetail: Equatable, Sendable {
             }
         }
         return rows
-    }
-
-    /// `comments/<comment-id>.<ext>`, nothing that can leave the package (`PackageComments.load` checks the same).
-    private static func isCommentAudioPath(_ path: String, commentID: String) -> Bool {
-        let prefix = "\(PackageComments.directoryName)/\(commentID)."
-        guard path.hasPrefix(prefix) else { return false }
-        let ext = path.dropFirst(prefix.count)
-        return !ext.isEmpty && !ext.contains("/") && !ext.contains(".")
     }
 
     /// "Added today, 2:02 PM" when `addedAt` falls on `now`'s day in `calendar`; else "Added Nov 3, 9:15 AM"

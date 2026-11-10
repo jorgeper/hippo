@@ -196,7 +196,7 @@ public final class ShareSessionModel {
 
     static func message(for error: CaptureError) -> String {
         switch error {
-        case .insufficientSpace: "Not enough space on this iPhone. Nothing was saved."
+        case .insufficientSpace: CommentErrorCopy.insufficientSpaceMessage
         case .attachmentsFailed(let failures): "\(items(failures.count)) couldn't be saved."
         case .emptyCapture: nothingSavableMessage
         case .io: genericFailureMessage

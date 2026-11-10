@@ -243,6 +243,13 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(plain(d.comments[2].caption) == "Added today, 10:30 AM")
         #expect(d.comments[2].transcript == "they said yes" && d.comments[2].transcriptLayer == .silver)
         #expect(d.transcripts.isEmpty)
+
+        // The phone's locale decides the day-month order and the clock.
+        let gb = Locale(identifier: "en_GB")
+        var gbCalendar = calendar
+        gbCalendar.locale = gb
+        #expect(CaptureDetail.addedCaption(typed.addedAt, now: now, locale: gb, calendar: gbCalendar) == "Added 3 Nov, 9:15")
+        #expect(CaptureDetail.addedCaption(audio.addedAt, now: now, locale: gb, calendar: gbCalendar) == "Added today, 10:30")
     }
 
     @Test func voiceRecordingIsNotAComment() {
@@ -262,14 +269,40 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         let rec = CaptureCore.Attachment(attachmentID: "r1", relativePath: "content/r1.m4a", originalFilename: nil,
                                          uti: "com.apple.m4a-audio", mimeType: "audio/mp4", byteCount: 500, sha256: "y",
                                          representationSource: "recording", media: MediaFacts(durationSeconds: 3))
+        // Audio that isn't a recording (a shared voice memo) stays an attachment with its transcript.
+        let memo = CaptureCore.Attachment(attachmentID: "m1", relativePath: "content/m1.m4a", originalFilename: "memo.m4a",
+                                          uti: "com.apple.m4a-audio", mimeType: "audio/mp4", byteCount: 800, sha256: "z",
+                                          representationSource: "item_provider_file", media: MediaFacts(durationSeconds: 9))
         let t = TranscriptItem(attachmentID: "r1", text: "the blue one", locale: "en_US", segments: [])
-        var server = resolved(transcripts: ["r1": t])
+        let tm = TranscriptItem(attachmentID: "m1", text: "shopping list", locale: "en_US", segments: [])
+        var server = resolved(transcripts: ["r1": t, "m1": tm])
         server.fromServer.transcripts = ["r1"]
-        let d = make(meta(method: .camera, attachments: [photo, rec]), enrichment: server)
+        let d = make(meta(method: .camera, attachments: [photo, rec, memo]), enrichment: server)
         #expect(d.comments == [CommentRow(id: "r1", body: .audio(pkg.appendingPathComponent("content/r1.m4a"), durationText: "0:03"),
                                           caption: nil, transcript: "the blue one", transcriptLayer: .gold)])
-        #expect(d.transcripts.isEmpty)
+        #expect(d.transcripts == [TitledText(title: "Attachment 3", text: "shopping list")])
         #expect(d.preview == .image(pkg.appendingPathComponent("content/p1.heic")))
+    }
+
+    @Test func trimmedRecordingRowCarriesRemoteOnly() {
+        let photo = CaptureCore.Attachment(attachmentID: "p1", relativePath: "content/p1.heic", originalFilename: nil,
+                                           uti: "public.heic", mimeType: "image/heic", byteCount: 1_000, sha256: "x",
+                                           representationSource: "camera", media: nil)
+        let rec = CaptureCore.Attachment(attachmentID: "r1", relativePath: "content/r1.m4a", originalFilename: nil,
+                                         uti: "com.apple.m4a-audio", mimeType: "audio/mp4", byteCount: 500, sha256: "y",
+                                         representationSource: "recording", media: MediaFacts(durationSeconds: 3))
+        var m = meta(method: .camera, attachments: [photo, rec])
+        m.userNote = "by the door"
+        let t = TrimmedAttachment(captureID: "c1", attachmentID: "r1", relativePath: "content/r1.m4a",
+                                  byteCount: 500, sha256: "y", destinationID: "d1", state: .trimmed, trimmedAt: now)
+        let d = CaptureDetail.make(metadata: m, packageURL: pkg, noteBody: nil, jobs: [job(.synced)], enrichment: .empty,
+                                   trimmed: [t], activeDestination: dropbox, destination: { $0 == "d1" ? dropbox : nil },
+                                   now: now, locale: locale, calendar: calendar)
+        #expect(d.comments.map(\.id) == ["user_note", "r1"])
+        #expect(d.comments[0].remoteOnly == nil)
+        let remote = d.comments[1].remoteOnly
+        #expect(remote != nil && remote == d.remoteOnly["r1"])
+        #expect(remote?.state == .available(destinationName: "Dropbox"))
     }
 
     @Test func omitsMissingValues() {
