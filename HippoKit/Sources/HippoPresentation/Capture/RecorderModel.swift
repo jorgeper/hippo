@@ -13,7 +13,7 @@ import SyncEngine
 
 public enum MicPermission: Sendable { case granted, denied, undetermined }
 
-/// State machine behind the voice recorder screen.
+/// State machine behind the voice recorder screen: a `RecordingSession` plus committing the capture.
 @MainActor @Observable
 public final class RecorderModel {
     public enum State: Equatable {
@@ -25,121 +25,80 @@ public final class RecorderModel {
     }
 
     public static let saveFailedMessage = "Hippo couldn't save this recording. It's still here. Try again."
-    static let startFailedMessage = "Hippo couldn't start recording. Try again."
+    static let startFailedMessage = RecordingSession.startFailedMessage
 
-    public private(set) var state: State = .idle
+    public var state: State {
+        if isSaving { return .saving }
+        if didSave { return .saved }
+        if let saveFailure { return .failed(saveFailure) }
+        switch session.state {
+        case .idle: return .idle
+        case .denied: return .denied
+        case .recording(let startedAt): return .recording(startedAt: startedAt)
+        case .stopped(let duration, let interrupted): return .stopped(duration: duration, interrupted: interrupted)
+        case .failed(let message): return .failed(message)
+        }
+    }
 
     private let store: HippoStore
-    private let intake: IntakeDirectory
-    private let recorder: AudioRecording
-    private let permission: () async -> MicPermission
+    private let session: RecordingSession
     private let location: (Date) -> CaptureLocation?
-    private let now: () -> Date
 
-    /// The recording on disk that `save()`/`discard()` act on.
-    private var pending: Pending?
-    private struct Pending {
-        var id: UUID
-        var url: URL
-        var startedAt: Date
-        var timeZone: TimeZone
-        var duration: TimeInterval
-        var interrupted: Bool
-    }
-    private var current: (id: UUID, url: URL, startedAt: Date, timeZone: TimeZone)?
+    private var isSaving = false
+    private var didSave = false
+    private var saveFailure: String?
 
     public init(store: HippoStore, intake: IntakeDirectory, recorder: AudioRecording,
                 permission: @escaping () async -> MicPermission,
                 location: @escaping (Date) -> CaptureLocation?,
                 now: @escaping () -> Date = Date.init) {
-        self.store = store; self.intake = intake; self.recorder = recorder
-        self.permission = permission; self.location = location; self.now = now
+        self.store = store; self.location = location
+        session = RecordingSession(intake: intake, recorder: recorder, permission: permission, now: now)
     }
 
     /// Asks for permission if needed, then starts recording. Ignored unless idle, denied, or failed
     /// with nothing recorded.
     public func start() async {
-        switch state {
-        case .idle, .denied: break
-        case .failed where pending == nil: break
-        default: return
-        }
-        // `.undetermined` after the request is treated as `.denied`.
-        guard await permission() == .granted else { state = .denied; return }
-        // Another call may have started while the permission prompt was up.
-        switch state {
-        case .idle, .denied, .failed: break
-        default: return
-        }
-        let id = UUID()
-        let url = intake.recordingURL(id: id)
-        do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try recorder.start(writingTo: url)
-        } catch {
-            try? FileManager.default.removeItem(at: url)
-            state = .failed(Self.startFailedMessage)
-            return
-        }
-        let startedAt = now()
-        current = (id, url, startedAt, .current)
-        state = .recording(startedAt: startedAt)
+        guard !isSaving, !didSave, saveFailure == nil else { return }
+        await session.start()
     }
 
     /// True once a recording is on disk awaiting `save()` or `discard()`.
-    public var hasPendingRecording: Bool { pending != nil }
+    public var hasPendingRecording: Bool { isSaving || session.pending != nil }
 
-    public func stop() { finish(interrupted: false) }
+    public func stop() { session.stop() }
 
     /// A call, Siri or similar took the microphone: keep what was recorded and offer to save it.
-    public func interruptionBegan() { finish(interrupted: true) }
-
-    private func finish(interrupted: Bool) {
-        guard case .recording = state, let current else { return }
-        // Read before stop(), which can reset it. After a system stop the recorder may report 0, so fall
-        // back to the wall-clock time since the start.
-        var duration = max(0, recorder.currentTime)
-        if duration == 0 { duration = max(0, now().timeIntervalSince(current.startedAt)) }
-        recorder.stop()
-        self.current = nil
-        pending = Pending(id: current.id, url: current.url, startedAt: current.startedAt,
-                          timeZone: current.timeZone,
-                          duration: duration, interrupted: interrupted)
-        state = .stopped(duration: duration, interrupted: interrupted)
-    }
+    public func interruptionBegan() { session.interruptionBegan() }
 
     /// Commits the recording. On failure the file stays and `save()` can be tried again.
     public func save() async {
-        guard let p = pending else { return }
-        switch state {
-        case .stopped, .failed: break
-        default: return
-        }
-        state = .saving
+        guard !isSaving, !didSave, let taken = session.takePending() else { return }
+        isSaving = true
+        saveFailure = nil
         let draft = CaptureDraft(
-            captureID: p.id, startedAt: p.startedAt, timeZone: p.timeZone, method: .voiceRecording,
-            attachments: [AttachmentSource(body: .file(p.url), originalFilename: nil,
+            captureID: UUID(), startedAt: taken.startedAt, timeZone: taken.timeZone, method: .voiceRecording,
+            attachments: [AttachmentSource(body: .file(taken.url), originalFilename: nil,
                                            uti: "com.apple.m4a-audio", mimeType: "audio/mp4",
                                            representationSource: "recording")],
-            location: location(p.startedAt))
+            location: location(taken.startedAt))
         do {
             _ = try await store.capture(draft)
-            try? FileManager.default.removeItem(at: p.url)
-            pending = nil
-            state = .saved
+            try? FileManager.default.removeItem(at: taken.url)
+            didSave = true
         } catch {
-            state = .failed(Self.saveFailedMessage)
+            session.restorePending(taken)
+            saveFailure = Self.saveFailedMessage
         }
+        isSaving = false
     }
 
     /// Throws the recording away (stopping it first if it is still running). Ignored while saving.
     public func discard() {
-        if case .saving = state { return }   // the commit is in flight; it decides the outcome
-        if case .recording = state { recorder.stop() }
-        if let url = current?.url ?? pending?.url { try? FileManager.default.removeItem(at: url) }
-        current = nil
-        pending = nil
-        state = .idle
+        if isSaving { return }   // the commit is in flight; it decides the outcome
+        session.discard()
+        didSave = false
+        saveFailure = nil
     }
 
     /// "0:07", "12:05", "1:02:03".
