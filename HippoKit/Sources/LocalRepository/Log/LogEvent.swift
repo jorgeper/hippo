@@ -15,6 +15,8 @@ public enum LogEventName: String, Codable, Sendable, CaseIterable {
     case captureSaved = "capture.saved"
     case captureDeleted = "capture.deleted"
     case captureSaveFailed = "capture.save_failed"
+    case commentAdded = "comment.added"
+    case commentSaveFailed = "comment.save_failed"
     case enrichQueued = "enrich.queued"
     case enrichStarted = "enrich.started"
     case enrichFinished = "enrich.finished"

@@ -17,8 +17,9 @@ public struct SyncPassResult: Sendable, Equatable {
 }
 
 /// Uploads claimed jobs with the marker-last protocol (spec §9, §10). Every manifest file is uploaded
-/// or found, then inspected and verified remotely, before `complete.json`; a job is marked synced only
-/// once the marker itself is verified. Error codes recorded on jobs never carry content, file names,
+/// or found, then inspected and verified remotely, before `complete.json`; then each complete comment
+/// (audio before json). A job is marked synced only once the marker and every listed comment file are verified
+/// and no comment was recorded since the listing. Error codes recorded on jobs never carry content, file names,
 /// URLs or account identifiers.
 public final class SyncWorker: Sendable {
     public static let lease: TimeInterval = 120
@@ -116,8 +117,13 @@ public final class SyncWorker: Sendable {
 
     private func process(_ job: UploadJob) async -> Outcome {
         do {
-            try await upload(job)
-            try jobs.markSynced(jobID: job.jobID, owner: leaseOwner)
+            let commentCount = try await upload(job)
+            // A comment recorded since `upload` read the count may not be uploaded: the job goes back to
+            // pending (lease released) and the next claim uploads it.
+            guard try jobs.markSyncedIfCommentsUnchanged(jobID: job.jobID, owner: leaseOwner, captureID: job.captureID,
+                                                         commentCount: commentCount) else {
+                return .abandoned
+            }
             clearVerifiedChanges(job.captureID)
             log?.append(LogEvent(event: .packageUploaded, captureID: job.captureID, dest: destinationKind(job)))
             return .synced
@@ -146,7 +152,9 @@ public final class SyncWorker: Sendable {
         }
     }
 
-    private func upload(_ job: UploadJob) async throws {
+    /// Uploads the package, its marker and its complete comments. Returns the capture's `comment_count` as
+    /// read before comments were listed.
+    private func upload(_ job: UploadJob) async throws -> Int {
         guard let destination = try destinations.active(), destination.id == job.destinationID else {
             throw Failure(state: .paused, code: "destination_inactive")
         }
@@ -197,12 +205,37 @@ public final class SyncWorker: Sendable {
         guard files.allSatisfy({ stored.contains($0.relativePath) }) else {
             throw Failure(state: .retryableFailure, code: "verify_failed")
         }
-        guard !stored.contains(Self.markerName) else { return }
-        let markerURL = package.directoryURL.appendingPathComponent(Self.markerName)
-        let digest = try StreamingHasher.digest(of: markerURL)
-        try await syncFile(Self.markerName, local: markerURL,
-                           expected: FileIntegrity(byteCount: digest.byteCount, sha256: digest.sha256),
-                           directory: directory, job: job, adapter: adapter)
+        if !stored.contains(Self.markerName) {
+            let markerURL = package.directoryURL.appendingPathComponent(Self.markerName)
+            let digest = try StreamingHasher.digest(of: markerURL)
+            try await syncFile(Self.markerName, local: markerURL,
+                               expected: FileIntegrity(byteCount: digest.byteCount, sha256: digest.sha256),
+                               directory: directory, job: job, adapter: adapter)
+        }
+
+        // Comments are append-only files outside the manifest, uploaded after the marker: each audio file
+        // before its json, which is the comment's own marker (comments design §3). The count is read before
+        // listing, so a comment recorded after it is either listed now or makes `markSyncedIfCommentsUnchanged`
+        // requeue the job. Pending comments (json without matching audio) wait.
+        let commentCount = try index.commentCount(captureID: job.captureID)
+        let comments = PackageComments.load(directory: package.directoryURL).comments
+        let commentFiles = comments.flatMap { comment in comment.filePaths.map { (comment, $0) } }
+            .filter { !stored.contains($0.1) }
+        if !commentFiles.isEmpty {
+            try await adapter.ensureContainer(relativePath: directory + "/" + PackageComments.directoryName)
+        }
+        for (comment, path) in commentFiles {
+            let local = package.directoryURL.appendingPathComponent(path)
+            let expected: FileIntegrity
+            if let audio = comment.audio, audio.relativePath == path {
+                expected = FileIntegrity(byteCount: audio.byteCount, sha256: audio.sha256)
+            } else {
+                let digest = try StreamingHasher.digest(of: local)
+                expected = FileIntegrity(byteCount: digest.byteCount, sha256: digest.sha256)
+            }
+            try await syncFile(path, local: local, expected: expected, directory: directory, job: job, adapter: adapter)
+        }
+        return commentCount
     }
 
     /// Gets one package file to the destination and stores a receipt from remote verification.

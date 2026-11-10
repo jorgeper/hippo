@@ -835,3 +835,142 @@ private func enrichmentDocument(_ pkg: CommittedPackage, _ layer: EnrichmentLaye
         #expect(globals.first?.code == "empty_capture")
     }
 }
+
+// MARK: - Comments (comments design §5.3)
+
+extension StoreHarness {
+    /// A stand-in audio file: the writer copies and hashes bytes, it never decodes them.
+    func audioFile(bytes: Int = 2_000) throws -> URL {
+        var data = Data(count: bytes)
+        for i in 0..<bytes { data[i] = UInt8(truncatingIfNeeded: i &* 13 &+ 5) }
+        let url = base.appendingPathComponent("recording-\(UUID().uuidString).m4a")
+        try data.write(to: url)
+        return url
+    }
+
+    func audioDraft() throws -> CommentDraft {
+        .audio(fileURL: try audioFile(), uti: "com.apple.m4a-audio", mimeType: "audio/mp4", durationSeconds: 2.5)
+    }
+
+    func syncOnce() async -> SyncPassResult {
+        let adapter = self.adapter
+        return await store.makeWorker(adapterFor: { _ in adapter }, owner: "app").runOnce()
+    }
+}
+
+extension HippoStoreTests {
+    @Test func addTextCommentIndexesAndRequeues() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.urlDraft())
+        let id = pkg.metadata.captureID
+        #expect(await t.syncOnce().synced == 1)
+        #expect(try t.store.jobs.jobs(captureID: id).map(\.state) == [.synced])
+
+        let comment = try await t.store.addComment(captureID: id, .text("  Remember the blue one  "))
+
+        #expect(comment.text == "Remember the blue one")
+        #expect(comment.captureID == id)
+        #expect(FileManager.default.fileExists(atPath: pkg.directoryURL.appendingPathComponent(comment.relativePath).path))
+        #expect(try t.store.jobs.jobs(captureID: id).map(\.state) == [.pending])
+        #expect(try t.store.index.commentCount(captureID: id) == 1)
+        let row = try #require(try t.store.index.page(CaptureFilter(), after: nil, limit: 10).first)
+        #expect(row.noteExcerpt == "Remember the blue one")
+        let added = t.store.log.events(captureID: id, from: Date().addingTimeInterval(-86_400))
+            .filter { $0.event == .commentAdded }
+        #expect(added.count == 1)
+        #expect(added.first?.kind == "text")
+    }
+
+    @Test func addAudioCommentForgetsTranscript() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.urlDraft())
+        let id = pkg.metadata.captureID
+        try t.store.enrichmentTasks.set(captureID: id, kind: .transcript, version: 1, status: "ok", now: Date())
+
+        // A text comment leaves the transcript task alone.
+        _ = try await t.store.addComment(captureID: id, .text("typed"))
+        #expect(try t.store.enrichmentTasks.task(captureID: id, kind: .transcript)?.status == "ok")
+
+        let audio = try await t.store.addComment(captureID: id, try t.audioDraft())
+
+        #expect(audio.audio?.relativePath == "comments/\(audio.commentID).m4a")
+        #expect(try t.store.enrichmentTasks.task(captureID: id, kind: .transcript) == nil)
+        #expect(try t.store.index.commentCount(captureID: id) == 2)
+        let kinds = t.store.log.events(captureID: id, from: Date().addingTimeInterval(-86_400))
+            .filter { $0.event == .commentAdded }.map(\.kind)
+        #expect(kinds == ["text", "audio"])
+    }
+
+    @Test func addCommentToPendingJobDoesNotRequeue() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.urlDraft())
+        let id = pkg.metadata.captureID
+        let before = try #require(try t.store.jobs.jobs(captureID: id).first)
+        #expect(before.state == .pending)
+        // A blocked job of the same capture would be left alone too: only synced jobs are requeued.
+        try t.rawDatabase().execute("UPDATE jobs SET state = 'blocked', last_error_code = 'quota_exceeded' WHERE job_id = ?",
+                                    [.text(before.jobID)])
+
+        _ = try await t.store.addComment(captureID: id, .text("later"))
+
+        let after = try #require(try t.store.jobs.jobs(captureID: id).first)
+        #expect(after.jobID == before.jobID)
+        #expect(after.state == .blocked)
+        #expect(after.lastErrorCode == "quota_exceeded")
+        try t.rawDatabase().execute("UPDATE jobs SET state = 'pending', last_error_code = NULL WHERE job_id = ?",
+                                    [.text(before.jobID)])
+        _ = try await t.store.addComment(captureID: id, .text("again"))
+        #expect(try t.store.jobs.jobs(captureID: id).map(\.state) == [.pending])
+        #expect(try t.store.index.commentCount(captureID: id) == 2)
+    }
+
+    @Test func addCommentMissingCaptureThrowsAndLogs() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let missing = UUID().uuidString.lowercased()
+
+        await #expect(throws: CaptureError.io("capture missing")) {
+            try await t.store.addComment(captureID: missing, .text("orphan"))
+        }
+
+        let failed = t.store.log.events(captureID: missing, from: Date().addingTimeInterval(-86_400))
+        #expect(failed.map(\.event) == [.commentSaveFailed])
+        #expect(failed.first?.code == "io")
+        #expect(failed.first?.kind == "text")
+
+        // A package that no longer validates is refused the same way, and nothing is written.
+        let pkg = try await t.store.capture(t.urlDraft())
+        let id = pkg.metadata.captureID
+        try FileManager.default.removeItem(at: pkg.directoryURL.appendingPathComponent("complete.json"))
+        await #expect(throws: CaptureError.io("package invalid")) {
+            try await t.store.addComment(captureID: id, .text("damaged"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.appendingPathComponent("comments").path))
+        #expect(try t.store.index.commentCount(captureID: id) == 0)
+        #expect(t.store.log.events(captureID: id, from: Date().addingTimeInterval(-86_400)).map(\.event)
+                == [.captureSaved, .commentSaveFailed])
+    }
+
+    @Test func deleteEverywhereRemovesComments() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        let text = try await t.store.addComment(captureID: id, .text("note to self"))
+        let audio = try await t.store.addComment(captureID: id, try t.audioDraft())
+        #expect(await t.syncOnce().synced == 1)
+        let remoteComments = t.remoteURL(pkg).appendingPathComponent("comments")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: remoteComments.path).sorted()
+                == [text.relativePath, audio.relativePath, try #require(audio.audio).relativePath]
+                    .map { String($0.dropFirst("comments/".count)) }.sorted())
+
+        _ = try await t.store.deleteEverywhere(captureID: id)
+        let adapter = t.adapter
+        let result = await t.store.makeRemoteDeleter(adapterFor: { _ in adapter }).runOnce()
+
+        #expect(result.deleted == 1)
+        #expect(!FileManager.default.fileExists(atPath: t.remoteURL(pkg).path))
+        #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.path))
+    }
+}
