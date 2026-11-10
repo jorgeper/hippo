@@ -73,13 +73,15 @@ Voice comment block states (app):
 
 Save → one capture: the draft plus, when present, the recording as the last attachment (`com.apple.m4a-audio`, `audio/mp4`, `representation_source: recording`). The capture's content types then include `audio`, and the transcript enricher picks it up. Detail shows the recording as an audio attachment under the main attachment (it already renders every attachment); the first attachment stays the preview.
 
-For a **pending share** presented in the app: title "Hippo", the preview and summary of the share, comment prefilled, mic recording started at once. **Cancel saves the capture without a comment** (button reads "Save without comment" **(my call)**); there is no discard. If the app is killed with the sheet open, the pending draft is presented again next time.
+For a **pending share** presented in the app: title "Hippo", the preview and summary of the share, comment prefilled, mic recording started at once. **Cancel saves the capture without a comment** (button reads "Save without comment" **(my call)**); there is no discard. If the app is killed with the sheet open, the pending draft is presented again next time. If Save fails in a way the sheet can't retry (no space, a disk error), the only button is **"Later"** (ruled in the final review): it closes the sheet and keeps the pending draft for the next activation. A pending draft whose capture is already saved (the app was killed between the commit and clearing the intake) is removed instead of presented (`capture.save_failed`, code `pending_already_committed`).
 
 ### 4.5 Settings
 New section **Camera** under the Location section: Toggle "Also save to Photos", footer "Pictures and videos you take in Hippo stay only in Hippo unless this is on." Turning it on does not prompt for Photos permission; the prompt comes with the first save.
 
 ### 4.6 Detail
 "How" row: `camera` → "Camera". Everything else is unchanged.
+
+Timeline row (ruled in the final review): the voice-note row is only for method `voice_recording`; a voice comment never changes a row's kind and is left out of the "+N" count, so a photo with a comment shows the photo and a link with a comment shows the link.
 
 ## 5. Architecture
 

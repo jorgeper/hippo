@@ -82,7 +82,7 @@ Global (no `capture_id`):
 
 | Event | Meaning |
 |---|---|
-| `capture.save_failed` | A save failed, so there is no capture to attach it to (`code` names the failure; `pending_missing` with `count`: shares handed off to the app whose files were missing were removed instead of shown) |
+| `capture.save_failed` | A save failed, so there is no capture to attach it to (`code` names the failure; `pending_missing` with `count`: shares handed off to the app whose files were missing were removed instead of shown; `pending_already_committed` with `count`: shares handed off to the app that were already saved, because the app stopped before it cleared them, were removed instead of shown again) |
 | `enrich.scheduled` | Tasks were queued for a kind (`kind`, `count`) |
 | `enrich.pass` | An enrichment pass started or ended (`phase`, `count`, `code` = why it stopped) |
 | `sync.pass` | A sync pass started or ended (`phase`, `trigger`, `count`, `code`) |
