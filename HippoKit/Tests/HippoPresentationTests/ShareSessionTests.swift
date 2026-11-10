@@ -261,7 +261,7 @@ private func stagedPhoto(_ intake: IntakeDirectory, method: CaptureMethod = .cam
         #expect(ShareSessionModel.message(for: .attachmentsFailed([AttachmentFailure(index: 0, reason: "x")]))
                 == "1 item couldn't be saved.")
     }
-    // MARK: - Capture sheet: prepared drafts, voice comment, hand-off
+    // MARK: - Capture sheet: prepared drafts, voice comment
 
     @Test func preparedStartsReadyWithSummary() async throws {
         var staged: PreparedCapture?
