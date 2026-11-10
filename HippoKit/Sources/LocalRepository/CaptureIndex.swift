@@ -18,7 +18,7 @@ public final class CaptureIndex: Sendable {
         let types = "," + m.contentTypes.map(\.rawValue).joined(separator: ",") + ","
         let hasLocation = m.captureLocation != nil || m.attachments.contains { $0.media?.embeddedLocation != nil }
         let note = m.userNote.flatMap { $0.isEmpty ? nil : $0 }
-        let commentTexts = p.comments.compactMap(\.text)
+        let commentTexts = p.comments.compactMap(\.text).filter { !$0.isEmpty }
         let excerptSource = note ?? commentTexts.last
         let shared = [m.sharedText, noteBody].compactMap { $0 }.joined(separator: "\n")
         let now = Self.ms(Date())
@@ -59,7 +59,7 @@ public final class CaptureIndex: Sendable {
                 try tx.execute("UPDATE captures SET note_excerpt = ? WHERE capture_id = ?",
                                [.text(String(text.prefix(120))), .text(captureID)])
             }
-            try tx.execute("UPDATE captures_fts SET user_note = user_note || ' ' || ? WHERE capture_id = ?",
+            try tx.execute("UPDATE captures_fts SET user_note = COALESCE(user_note, '') || ' ' || ? WHERE capture_id = ?",
                            [.text(text), .text(captureID)])
         }
     }
