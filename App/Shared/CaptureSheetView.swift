@@ -3,25 +3,16 @@ import ImageIO
 import HippoPresentation
 
 /// The capture sheet: Cancel / Hippo / Save, a preview of the capture, an optional comment, the voice
-/// comment and the line saying where it goes. The Share Extension shows it with the mic handing off to
-/// the app; the app shows it (camera, pending share) with the mic recording in place. The host supplies
-/// the actions.
+/// comment and the line saying where it goes. The voice block shows only when `voice` is set (the camera
+/// sheet); the Share Extension passes nil. The host supplies the actions.
 struct CaptureSheetView: View {
-    enum Voice {
-        /// Share Extension: the mic hands the draft off to the app.
-        case handoff(() -> Void)
-        /// App: the mic records the voice comment in place.
-        case record(RecordingSession)
-    }
-
     let model: ShareSessionModel
-    let voice: Voice
+    /// Records the voice comment in place. Nil hides the voice block.
+    let voice: RecordingSession?
     /// Saves inside a background-activity assertion; the host owns that.
     let save: (_ acceptPartial: Bool) async -> Void
-    /// For a pending share the view never calls this: its left button reads "Save without comment" and
-    /// calls `save(false)` instead.
     let cancel: () -> Void
-    /// Called about a second after "Saved" or the hand-off message, to close the sheet.
+    /// Called about a second after "Saved", to close the sheet.
     let finish: () -> Void
 
     @FocusState private var commentFocused: Bool
@@ -32,7 +23,6 @@ struct CaptureSheetView: View {
             Divider()
             switch model.state {
             case .saved: centered("✓ Saved on this iPhone")
-            case .deferred: centered(ShareSessionModel.handoffMessage)
             default: content
             }
         }
@@ -51,8 +41,8 @@ struct CaptureSheetView: View {
         }
     }
 
-    /// Saved, or handed off to the app: either way the sheet closes after a second.
-    private var isClosing: Bool { model.state == .saved || model.state == .deferred }
+    /// Saved: the sheet closes after a second.
+    private var isClosing: Bool { model.state == .saved }
 
     private var partialAlertShown: Binding<Bool> {
         Binding(get: { partialMessage != nil },
@@ -65,17 +55,8 @@ struct CaptureSheetView: View {
 
     private var header: some View {
         HStack {
-            if model.isPendingShare {
-                // A pending share has no discard: the left button saves it without the voice comment.
-                Button("Save without comment") {
-                    if case .record(let session) = voice { session.discard() }
-                    Task { await save(false) }
-                }
-                .disabled(!canSave)
-            } else {
-                Button("Cancel", action: cancel)
-                    .disabled(model.state == .saving || isClosing)
-            }
+            Button("Cancel", action: cancel)
+                .disabled(model.state == .saving || isClosing)
             Spacer()
             Text("Hippo").font(.headline)
             Spacer()
@@ -96,7 +77,7 @@ struct CaptureSheetView: View {
         }
     }
 
-    /// Nothing can start a recording or a hand-off unless the sheet is editable.
+    /// Nothing can start a recording unless the sheet is editable.
     private var voiceDisabled: Bool {
         switch model.state {
         case .ready, .confirmPartial: false
@@ -129,11 +110,8 @@ struct CaptureSheetView: View {
                     .padding(12)
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                     .disabled(model.state == .saving)
-                VoiceCommentControl(voice: voice, disabled: voiceDisabled)
-                if model.handoffFailed {
-                    Text(ShareSessionModel.handoffFailedMessage)
-                        .font(.subheadline)
-                        .foregroundStyle(.red)
+                if let voice {
+                    VoiceCommentControl(session: voice, disabled: voiceDisabled)
                 }
                 Text(model.destinationLine)
                     .font(.footnote)

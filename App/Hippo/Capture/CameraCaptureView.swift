@@ -82,7 +82,7 @@ struct CameraCaptureView: View {
                     Button("OK", role: .cancel) {}
                 }
         case .sheet(let staged):
-            CaptureSheetView(model: staged.model, voice: .record(staged.session),
+            CaptureSheetView(model: staged.model, voice: staged.session,
                              save: { accept in await save(staged.model, acceptPartial: accept) },
                              cancel: { confirmingDiscard = true },
                              finish: { dismiss() })
@@ -143,7 +143,7 @@ struct CameraCaptureView: View {
                                        permission: { await SystemAudioRecorder.requestMicPermission() })
         recorder.onInterruption = { [weak session] in session?.interruptionBegan() }
         let model = ShareSessionModel(
-            store: environment.store, intake: environment.intake, prepared: prepared, isPendingShare: false,
+            store: environment.store, intake: environment.intake, prepared: prepared,
             destinationName: (try? environment.store.destinations.active())?.displayName, voice: session,
             location: { [location] in location.location(startedAt: $0) })
         phase = .sheet(Staged(model: model, session: session, recorder: recorder, isVideo: isVideo,

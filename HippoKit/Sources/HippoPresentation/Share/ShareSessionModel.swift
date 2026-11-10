@@ -5,7 +5,7 @@ import CaptureCore
 import ShareIntake
 import SyncEngine
 
-/// A draft already on disk: from the camera or a pending share.
+/// A draft already on disk: from the camera.
 public struct PreparedCapture: Sendable {
     public var draft: CaptureDraft
     public var previewImageURL: URL?
@@ -14,16 +14,10 @@ public struct PreparedCapture: Sendable {
     public init(draft: CaptureDraft, previewImageURL: URL?, totalBytes: Int64) {
         self.draft = draft; self.previewImageURL = previewImageURL; self.totalBytes = totalBytes
     }
-
-    /// The sheet's comment starts as `pending.draft.userNote`.
-    public init(_ pending: PendingCapture) {
-        self.init(draft: pending.draft, previewImageURL: pending.previewImageURL, totalBytes: pending.totalBytes)
-    }
 }
 
-/// State machine behind the capture sheet: the Share Extension (gathers the shared items; the mic hands
-/// off to the app), the in-app camera, and a pending share shown in the app. Takes an optional comment
-/// and voice comment, and commits one capture.
+/// State machine behind the capture sheet: the Share Extension (gathers the shared items) and the in-app
+/// camera. Takes an optional comment and voice comment, and commits one capture.
 @MainActor @Observable
 public final class ShareSessionModel {
     public enum State: Equatable {
@@ -33,14 +27,10 @@ public final class ShareSessionModel {
         case saving
         case saved
         case failed(message: String, canSave: Bool)
-        /// The draft was handed off to the app as a pending capture.
-        case deferred
     }
 
     static let nothingSavableMessage = "Nothing Hippo can save was shared."
     static let genericFailureMessage = "Hippo couldn't save this. Nothing was saved."
-    public static let handoffFailedMessage = "Hippo couldn't hand this off. Save without a comment, or try again."
-    public static let handoffMessage = "Open Hippo to record your comment"
 
     public private(set) var state: State
     public var comment: String = ""
@@ -50,12 +40,8 @@ public final class ShareSessionModel {
     public private(set) var partialNotice: String?
     /// SF Symbol for the preview when there is no thumbnail.
     public private(set) var previewSymbol: String = "doc"
-    /// Records the voice comment in place (camera, pending share). Nil in the extension, which hands off.
+    /// Records the voice comment in place (camera). Nil in the extension.
     public let voice: RecordingSession?
-    /// The draft came from a pending share: the sheet offers "Save without comment" instead of Cancel.
-    public let isPendingShare: Bool
-    /// The last hand-off write failed; the sheet shows `handoffFailedMessage` under the mic.
-    public private(set) var handoffFailed = false
 
     public var destinationLine: String {
         if let destinationName {
@@ -87,13 +73,11 @@ public final class ShareSessionModel {
         self.destinationName = destinationName; self.location = location; self.now = now; self.timeZone = timeZone
         captureID = UUID()
         voice = nil
-        isPendingShare = false
         state = .preparing(done: 0, total: input.providers.count)
     }
 
-    /// Camera or pending share. State starts `.ready`; `prepare()` is a no-op. `isPendingShare` is true
-    /// when the draft came from a pending share (the sheet then offers "Save without comment").
-    public init(store: HippoStore, intake: IntakeDirectory, prepared: PreparedCapture, isPendingShare: Bool,
+    /// Camera. State starts `.ready`; `prepare()` is a no-op.
+    public init(store: HippoStore, intake: IntakeDirectory, prepared: PreparedCapture,
                 destinationName: String?, voice: RecordingSession?,
                 location: @escaping (Date) -> CaptureLocation?, now: @escaping () -> Date = Date.init) {
         self.store = store; self.intake = intake; input = nil
@@ -101,7 +85,6 @@ public final class ShareSessionModel {
         timeZone = prepared.draft.timeZone
         captureID = prepared.draft.captureID
         self.voice = voice
-        self.isPendingShare = isPendingShare
         draft = prepared.draft
         totalBytes = prepared.totalBytes
         comment = prepared.draft.userNote ?? ""
@@ -202,28 +185,11 @@ public final class ShareSessionModel {
     }
 
     /// Removes the intake files, now or when a running `prepare()` returns, and any voice comment. The
-    /// sheet closes afterwards. A pending share or a handed-off draft keeps its intake files: the app owns them.
+    /// sheet closes afterwards.
     public func cancel() {
         cancelled = true
         voice?.discard()
-        guard !isPendingShare, state != .deferred else { return }
         intake.discard(captureID: captureID)
-    }
-
-    // MARK: - Hand-off
-
-    /// Extension only: writes the pending draft (comment + location now) and sets `.deferred`. On failure
-    /// the state stays `.ready` and `handoffFailed` is set.
-    public func deferForVoiceComment() async {
-        guard !cancelled, state == .ready, let draft = finishedDraft() else { return }
-        do {
-            try intake.savePending(PendingCapture(draft: draft, previewImageURL: previewImageURL,
-                                                  totalBytes: totalBytes, savedAt: now()))
-            handoffFailed = false
-            state = .deferred
-        } catch {
-            handoffFailed = true
-        }
     }
 
     // MARK: - Copy

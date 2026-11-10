@@ -3,31 +3,10 @@ import UIKit
 import HippoPresentation
 
 /// The capture sheet's voice comment block: a 56 pt version of the recorder's Record button with a
-/// caption. In `.handoff` mode a tap hands the draft to the app; in `.record` mode it records in place.
+/// caption. States: idle, recording, stopped (or interrupted), denied and failed.
 struct VoiceCommentControl: View {
-    let voice: CaptureSheetView.Voice
-    let disabled: Bool
-
-    var body: some View {
-        Group {
-            switch voice {
-            case .handoff(let handOff):
-                HStack(spacing: 12) {
-                    MicButton(recording: false, action: handOff)
-                    Text("Record a comment").foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-            case .record(let session):
-                RecordingBlock(session: session)
-            }
-        }
-        .disabled(disabled)
-    }
-}
-
-/// The in-place states: idle, recording, stopped (or interrupted), denied and failed.
-private struct RecordingBlock: View {
     let session: RecordingSession
+    let disabled: Bool
     @State private var confirmingReplace = false
 
     var body: some View {
@@ -54,6 +33,7 @@ private struct RecordingBlock: View {
             }
             Button("Keep", role: .cancel) {}
         }
+        .disabled(disabled)
     }
 
     private var isRecording: Bool {
