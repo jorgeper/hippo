@@ -14,7 +14,7 @@ struct AttachmentPreview: View {
         switch kind {
         case .image(let url): ImagePreview(url: url)
         case .video(let url): VideoPreview(url: url)
-        case .audio(let url): AudioPreview(url: url)
+        case .audio(let url): AudioPlayerRow(url: url)
         case .pdf(let url): fileCard(url: url, symbol: "doc.richtext", previewable: true, name: nil)
         case .text(let body):
             Text(body)
@@ -188,8 +188,11 @@ private struct VideoPreview: View {
     }
 }
 
-private struct AudioPreview: View {
+/// A play/pause row for one audio file: the large preview and the Detail comment rows.
+struct AudioPlayerRow: View {
     let url: URL
+    /// Shown instead of the duration read from the file, when the caller already has it.
+    var durationText: String? = nil
     @State private var model = PlayerModel()
 
     var body: some View {
@@ -200,7 +203,9 @@ private struct AudioPreview: View {
             .accessibilityLabel(model.playing ? "Pause" : "Play")
             VStack(alignment: .leading, spacing: 2) {
                 Text("Voice recording").font(.headline)
-                if let duration = model.duration { Text(Self.format(duration)).font(.footnote).foregroundStyle(.secondary) }
+                if let text = durationText ?? model.duration.map(Self.format) {
+                    Text(text).font(.footnote).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 0)
         }

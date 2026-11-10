@@ -11,14 +11,15 @@ struct RecorderView: View {
     @State private var recorder: SystemAudioRecorder
     @State private var confirmingDiscard = false
 
-    init(environment: AppEnvironment, location: LocationService) {
+    init(environment: AppEnvironment, location: LocationService, target: SaveTarget = .newCapture) {
         self.environment = environment
         self.location = location
         let recorder = SystemAudioRecorder()
         let model = RecorderModel(
             store: environment.store, intake: environment.intake, recorder: recorder,
             permission: { await SystemAudioRecorder.requestMicPermission() },
-            location: { [location] in location.location(startedAt: $0) })
+            location: { [location] in location.location(startedAt: $0) },
+            target: target)
         recorder.onInterruption = { [weak model] in model?.interruptionBegan() }
         _model = State(initialValue: model)
         _recorder = State(initialValue: recorder)
@@ -34,7 +35,7 @@ struct RecorderView: View {
             }
             .padding(24)
             .frame(maxWidth: .infinity)
-            .navigationTitle("Record")
+            .navigationTitle(isComment ? "Record a comment" : "Record")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -52,7 +53,7 @@ struct RecorderView: View {
             Button("Keep recording", role: .cancel) {}
         }
         .onAppear {
-            location.beginSessionFix()
+            if !isComment { location.beginSessionFix() }
         }
         // One tap: recording begins as soon as the sheet appears. `start()` handles permission, denial and repeats.
         .task { await model.start() }
@@ -65,13 +66,21 @@ struct RecorderView: View {
             if state == .saved {
                 recorder.deactivate()
                 dismiss()
+                let isComment = isComment
                 if let coordinator = environment.coordinator {
-                    Task { await SyncScheduling.runPass(coordinator, name: "record-sync", trigger: "after_save") }
+                    Task {
+                        await SyncScheduling.runPass(coordinator, name: isComment ? "comment-sync" : "record-sync",
+                                                     trigger: "after_save")
+                    }
                 }
                 let environment = environment
-                Task { await EnrichmentScheduling.run(environment, reason: "recording") }
+                Task { await EnrichmentScheduling.run(environment, reason: isComment ? "comment" : "recording") }
             }
         }
+    }
+
+    private var isComment: Bool {
+        if case .comment = model.target { true } else { false }
     }
 
     private var isRecording: Bool {
@@ -142,23 +151,13 @@ struct RecorderView: View {
     }
 
     private func save() async {
-        await BackgroundActivity.run(name: "recording-save") { @MainActor in await model.save() }
+        await BackgroundActivity.run(name: isComment ? "comment-save" : "recording-save") { @MainActor in await model.save() }
     }
 
     private func recordButton(recording: Bool) -> some View {
-        Button {
+        CaptureButton(kind: .record(recording: recording), size: 88) {
             if recording { model.stop() } else { Task { await model.start() } }
-        } label: {
-            ZStack {
-                Circle().strokeBorder(.secondary, lineWidth: 4).frame(width: 88, height: 88)
-                if recording {
-                    RoundedRectangle(cornerRadius: 8).fill(.red).frame(width: 36, height: 36)
-                } else {
-                    Circle().fill(.red).frame(width: 72, height: 72)
-                }
-            }
         }
-        .accessibilityLabel(recording ? "Stop" : "Record")
     }
 }
 

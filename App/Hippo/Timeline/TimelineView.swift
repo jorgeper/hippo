@@ -125,21 +125,14 @@ struct TimelineView: View {
 
     private var bottomBar: some View {
         HStack {
-            Button { presented = .note } label: { Label("Note", systemImage: "square.and.pencil") }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("note-button")
             Spacer()
-            Button { presented = .camera } label: { Label("Camera", systemImage: "camera") }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("camera-button")
+            CaptureButton(kind: .note) { presented = .note }
             Spacer()
-            Button { presented = .record } label: { Label("Record", systemImage: "record.circle") }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
+            CaptureButton(kind: .camera) { presented = .camera }
+            Spacer()
+            CaptureButton(kind: .record(recording: false)) { presented = .record }
+            Spacer()
         }
-        .labelStyle(.titleAndIcon)
-        .controlSize(.large)
-        .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.bar)
     }
