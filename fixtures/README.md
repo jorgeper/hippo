@@ -16,9 +16,13 @@ Packages live at `fixtures/packages/captures/2026/11/07/<capture-id>/`. Clock, t
 - `text-note`: UTF-8 text attachment, no URLs.
 - `url-only`: no attachments; the URL and shared title are in `metadata.json`.
 - `image`: PNG whose embedded capture time has no UTC offset (`has_utc_offset: false`).
-- `mixed`: PNG, JPEG (embedded time with offset, GPS, camera make/model), blank one-page PDF, one URL, and a user note.
+- `mixed`: PNG, JPEG (embedded time with offset, GPS, camera make/model), blank one-page PDF, one URL, and a user note. Also has two comments (see below).
 - `video`: 1 s H.264 `.mov`, 64x48.
 - `voice-recording`: 1 s AAC `.m4a`.
+
+## Comments
+
+The `mixed` package has two append-only comments under `comments/` (layout and rules in `docs/package-format.md`): `00000000-0000-4000-8000-00000000c001` (typed, "Bought this one.", added one hour after the capture) and `00000000-0000-4000-8000-00000000c002` (a 1 s AAC `.m4a` plus its json, added two hours after). Neither is listed in `complete.json`, so the package digest is the same as without them. Validated against `schema/capture-comment-v1.schema.json`.
 
 ## Enrichment fixtures
 

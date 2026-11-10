@@ -2,7 +2,7 @@
   "attachments" : [
     {
       "attachment_id" : "00000000-0000-4000-8000-000500000001",
-      "byte_count" : 2346,
+      "byte_count" : 2357,
       "media" : {
         "duration_seconds" : 1,
         "height_pixels" : 48,
@@ -12,7 +12,7 @@
       "original_filename" : "clip.mov",
       "relative_path" : "content/00000000-0000-4000-8000-000500000001.mov",
       "representation_source" : "item_provider_file",
-      "sha256" : "6b08f8bae91df845512bb3f937f1a53de229818dfffedea24666bb6fe32d4d19",
+      "sha256" : "e16f21aa08c95dc2efe01ffa3f5b347d0f762cfd7b9ffdf351f4dad8ba830abb",
       "uti" : "com.apple.quicktime-movie"
     }
   ],

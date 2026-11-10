@@ -90,6 +90,7 @@ extension CommittedPackage {
         let parts = date.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2 else { return nil }
         guard relative == "captures/\(parts[0])/\(parts[1])/\(parts[2])/\(metadata.captureID)" else { return nil }
-        return CommittedPackage(metadata: metadata, marker: marker, relativeDirectory: relative, directoryURL: directory)
+        return CommittedPackage(metadata: metadata, marker: marker, relativeDirectory: relative, directoryURL: directory,
+                                comments: PackageComments.load(directory: directory).comments)
     }
 }

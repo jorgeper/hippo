@@ -115,6 +115,20 @@ do {
         })
         let package = try await writer.commit(fixture.draft)
         print("\(fixture.name) -> \(package.relativeDirectory)")
+        if fixture.name == "mixed" {
+            // One typed and one spoken comment, added after the capture (ids fixed: ...c001, ...c002).
+            let ids = Mutex(0)
+            let commentWriter = CommentWriter(layout: layout, producer: producer, makeID: {
+                let m = ids.withLock { value -> Int in value += 1; return value }
+                return UUID(uuidString: String(format: "00000000-0000-4000-8000-00000000c%03d", m))!
+            })
+            let typed = try commentWriter.add(.text("Bought this one."), to: package,
+                                              now: started(4).addingTimeInterval(3_600), timeZone: zone)
+            let spoken = try commentWriter.add(
+                .audio(fileURL: audioURL, uti: "com.apple.m4a-audio", mimeType: "audio/mp4", durationSeconds: 1),
+                to: package, now: started(4).addingTimeInterval(7_200), timeZone: zone)
+            print("  comments: \(typed.relativePath), \(spoken.filePaths.joined(separator: ", "))")
+        }
     }
     rmdir(layout.stagingDir.path) // removes only an empty directory
 } catch {
