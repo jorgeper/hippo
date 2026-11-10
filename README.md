@@ -53,6 +53,16 @@ Device scenarios to run by hand are in [`docs/acceptance.md`](docs/acceptance.md
 
 Debug builds offer a "Developer folder" destination in Settings. It "uploads" into `HippoDevRemote/` next to the store in the App Group container, so the full sync path can be exercised without an account. Release builds do not include it. The UI tests launch with `-HippoResetStore YES` (DEBUG only), which wipes the store and this folder first.
 
+### Camera and voice comments
+
+The Camera button on the timeline opens the system camera. A photo or video you take becomes one capture (method `camera`, saved as HEIC or QuickTime), and the capture sheet opens so you can add a typed note and a voice comment before saving. The camera sheet records the comment in place.
+
+The share sheet can take a voice comment too, but iOS does not let a Share Extension use the microphone. So tapping the mic there saves what you have so far as a pending share, shows "Open Hippo to record your comment", and tries to open Hippo (`hippo://pending`). Hippo may not open by itself. If it does not, the share waits in Hippo and appears when you open the app. Hippo then shows the capture sheet with the mic recording at once. Saving makes one capture that keeps the time of the share. "Save without comment" drops the voice recording and keeps any typed note. If a share cannot be saved for good, the sheet offers "Discard".
+
+Settings → Camera → "Also save to Photos" is off by default. When it is on, photos and videos you take in Hippo are also added to your Photos library (Hippo asks for add-only access the first time). If that save fails, Hippo only writes a `camera.library_save` line to its log.
+
+The app declares three usage strings: camera, Photos (add only), and microphone.
+
 ### Location is opt-in
 
 Hippo saves a location with a capture only if you turn on "Save location with captures" in Settings and allow the iOS permission. It is read at the moment you save, never in the background.
@@ -65,6 +75,7 @@ Hippo saves a location with a capture only if you turn on "Save location with ca
 - Uploads are a copy, not a backup policy. Deleting the app deletes local captures that have not been uploaded.
 - A new install starts empty; Settings → Download from Dropbox brings recent captures back in light form.
 - Background upload timing is up to iOS.
+- A pending share may not appear while another sheet is open; it appears on the next launch or activation.
 
 ## Dropbox
 

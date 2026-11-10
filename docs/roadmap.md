@@ -8,8 +8,8 @@ What comes after Plan 3 (Dropbox, merged 2026-11-09). Items are not ordered yet;
 
 ## Decided: capture features
 
-- **Camera button.** Next to the Record button, a button that opens the camera to take a picture or record a video and saves it as a capture (`capture_method` to be chosen, e.g. `camera`). Same note/comment flow as a recording.
-- **Audio comment on share.** The share sheet already offers a typed note; add the option to record a voice comment instead of, or in addition to, typing. The recording is an attachment of the shared capture and goes through the same transcript enrichment as a voice note.
+- **Done: Camera button (2026-11-09, [design](superpowers/specs/2026-11-09-hippo-camera-voice-comment-design.md)).** Next to the Record button, a button that opens the camera to take a picture or record a video and saves it as a capture (`capture_method` to be chosen, e.g. `camera`). Same note/comment flow as a recording.
+- **Done: Audio comment on share (2026-11-09, [design](superpowers/specs/2026-11-09-hippo-camera-voice-comment-design.md)).** The share sheet already offers a typed note; add the option to record a voice comment instead of, or in addition to, typing. The recording is an attachment of the shared capture and goes through the same transcript enrichment as a voice note.
 - **One-tap intent chips.** Optional chips on the share sheet and in-app capture flows (for example: read later, buy, idea, todo, for someone). Off by default; a Settings toggle turns them on, and the chip set is editable there. Chosen chips are recorded as observations, never required.
 
 ## Decided: capture context (all behind Settings toggles and the relevant permission)

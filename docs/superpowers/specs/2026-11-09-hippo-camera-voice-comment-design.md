@@ -40,6 +40,8 @@ So the share sheet's mic cannot record in place. The design keeps the capture sa
 
 The in-app camera sheet records in place; it is the same view and model, with the mic in record mode instead of hand-off mode.
 
+Device confirmation of the hand-off (whether Hippo opens by itself) is acceptance row C4/C7.
+
 ## 4. User-visible behaviour
 
 ### 4.1 Main screen
