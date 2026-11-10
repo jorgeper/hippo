@@ -79,7 +79,7 @@
 
 ```swift
 /// A capture gathered by the Share Extension, waiting for the app to add a voice comment and commit it.
-public struct PendingCapture: Sendable, Equatable {
+public struct PendingCapture: Sendable {
     public var draft: CaptureDraft          // userNote = the typed comment so far; location already set
     public var previewImageURL: URL?
     public var totalBytes: Int64
@@ -147,10 +147,12 @@ public final class RecordingSession {
     public func discard()              // stops if recording, deletes the file, state .idle
     /// Hands the file to the caller (who commits it) and returns to idle without deleting it.
     public func takePending() -> (url: URL, duration: TimeInterval, startedAt: Date, timeZone: TimeZone)?
+    /// Puts a taken recording back (a commit failed): state .stopped(duration, false), `pending` set again.
+    public func restorePending(_ taken: (url: URL, duration: TimeInterval, startedAt: Date, timeZone: TimeZone))
 }
 ```
 
-- `RecorderModel` keeps its public API (`State` incl. `.saving/.saved`, `start/stop/interruptionBegan/save/discard/hasPendingRecording/elapsedText`) and delegates to a `RecordingSession`. `RecorderModel.State` is derived: the session's state mapped 1:1, plus `.saving/.saved` while committing. `save()` calls `takePending()`, builds the draft as today, commits, deletes the file; on failure it must keep the file and allow retry, so the session needs `restorePending(_:)` or `save()` must not call `takePending()` until the commit succeeded — builder's choice, but the existing test `failedSaveKeepsFileAndCanRetry` must stay green.
+- `RecorderModel` keeps its public API (`State` incl. `.saving/.saved`, `start/stop/interruptionBegan/save/discard/hasPendingRecording/elapsedText`) and delegates to a `RecordingSession`. `RecorderModel.State` is derived: the session's state mapped 1:1, plus `.saving/.saved` while committing. `save()` calls `takePending()`, builds the draft as today, commits, deletes the file; on failure it calls `restorePending(_:)` so the file stays and `save()` can be retried (the existing test `failedSaveKeepsFileAndCanRetry` must stay green).
 
 - [ ] **Step 1: Write failing tests** in `RecordingSessionTests.swift` (copy the `FakeRecorder` and rig shape from `CaptureModelTests.swift`):
 
