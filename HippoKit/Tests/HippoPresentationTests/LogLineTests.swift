@@ -256,3 +256,18 @@ struct LogLineTests {
                 == "Couldn't download · invalid_package")
     }
 }
+
+@Suite struct CameraLogLineTests {
+    private func line(_ e: LogEvent) -> LogLine {
+        LogLine.make(e, id: 0, now: Date(timeIntervalSince1970: 1_800_000_000), zone: TimeZone(identifier: "UTC")!,
+                     locale: Locale(identifier: "en_US_POSIX"))
+    }
+
+    @Test func photoLibrarySaveLines() {
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .ok)).text == "Saved to Photos")
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "denied")).text
+                == "Couldn't save to Photos · denied")
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "failed")).text
+                == "Couldn't save to Photos · failed")
+    }
+}

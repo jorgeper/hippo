@@ -36,6 +36,7 @@ public enum LogEventName: String, Codable, Sendable, CaseIterable {
     case remoteReview = "remote.review"
     case trimRun = "trim.run"
     case attachmentRestored = "attachment.restored"
+    case cameraLibrarySave = "camera.library_save"
     case downloadRun = "download.run"
     case downloadCapture = "download.capture"
     case authConnected = "auth.connected"
