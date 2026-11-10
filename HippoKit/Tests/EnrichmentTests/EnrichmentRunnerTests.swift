@@ -5,11 +5,40 @@ import LocalRepository
 import SyncEngine
 import Enrichment
 import FilesystemAdapter
+import HippoTestSupport
 @testable import HippoPresentation
 
 private let t0 = RunnerHarness.t0
 
+private struct CommentTranscriber: Transcribing {
+    func transcribe(fileURL: URL, locale: Locale) async throws -> (text: String, segments: [TranscriptSegment]) {
+        ("spoken words", [])
+    }
+}
+
 @Suite struct EnrichmentRunnerTests {
+    @Test func audioCommentSchedulesAndTranscribes() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let id = try await h.note("no audio here")
+        let runner = h.runner([TranscriptEnricher(transcriber: CommentTranscriber(), locale: Locale(identifier: "en_US"))])
+        #expect(try await runner.schedule() == 0)
+        #expect(try h.task(id, .transcript)?.status == "not_applicable")
+
+        let url = h.base.appendingPathComponent("voice.m4a")
+        try MediaMaker.writeAudio(to: url)
+        let comment = try await h.store.addComment(
+            captureID: id, .audio(fileURL: url, uti: "com.apple.m4a-audio", mimeType: "audio/mp4", durationSeconds: 1))
+
+        #expect(try await runner.schedule() == 1)
+        #expect(try h.task(id, .transcript)?.status == "pending")
+        #expect(await runner.runPending().ran == 1)
+        #expect(try h.task(id, .transcript)?.status == "ok")
+        let facet = try #require(try h.deviceDoc(id)?[.transcript])
+        let data = try JSONDecoder().decode(TranscriptData.self, from: JSONEncoder().encode(try #require(facet.data)))
+        #expect(data.items.map(\.attachmentID) == [comment.commentID])
+        #expect(data.items.first?.text == "spoken words")
+    }
+
     @Test func scheduleMarksApplicability() async throws {
         let h = try RunnerHarness(); defer { h.cleanup() }
         let linkID = try await h.link("https://example.com/a")

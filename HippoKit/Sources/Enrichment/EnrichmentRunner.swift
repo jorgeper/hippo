@@ -119,9 +119,12 @@ public actor EnrichmentRunner {
     private func scheduleOne(captureID id: String, _ e: any Enricher) throws -> Bool {
         let t = now()
         let metadata: CaptureMetadata
+        let comments: [CaptureComment]
         do {
-            guard let m = try index.metadata(captureID: id, layout: layout) else { return false }  // deleted
+            guard let m = try index.metadata(captureID: id, layout: layout),
+                  let dir = try index.relativeDirectory(captureID: id) else { return false }  // deleted
             metadata = m
+            comments = PackageComments.load(directory: layout.packageURL(relativeDirectory: dir)).comments
         } catch let error as DatabaseError {
             throw error
         } catch {
@@ -144,7 +147,7 @@ public actor EnrichmentRunner {
             }
             return false
         }
-        let applies = e.applies(to: metadata)
+        let applies = e.applies(to: metadata, comments: comments)
         try tasks.set(captureID: id, kind: e.kind, version: e.version, status: applies ? "pending" : "not_applicable",
                       now: t)
         return applies
@@ -272,11 +275,13 @@ public actor EnrichmentRunner {
 
         let metadata: CaptureMetadata
         let packageURL: URL
+        let comments: [CaptureComment]
         do {
             guard let m = try index.metadata(captureID: id, layout: layout),
                   let dir = try index.relativeDirectory(captureID: id) else { return .skipped }  // deleted
             metadata = m
             packageURL = layout.packageURL(relativeDirectory: dir)
+            comments = PackageComments.load(directory: packageURL).comments
         } catch {
             Self.log.error("\("enrichment_metadata_unreadable", privacy: .public)")
             record(task, status: "failed", code: "metadata_unreadable", nextAttemptAt: nil, countsAttempt: true)
@@ -294,7 +299,7 @@ public actor EnrichmentRunner {
         }
 
         let input = EnricherInput(captureID: id, metadata: metadata, packageURL: packageURL, noteBody: noteBody,
-                                  current: attempt.current)
+                                  current: attempt.current, comments: comments)
         let output: EnricherOutput
         log?.append(LogEvent(event: .enrichStarted, captureID: id, kind: task.kind.rawValue,
                              attempt: task.attemptCount + 1))

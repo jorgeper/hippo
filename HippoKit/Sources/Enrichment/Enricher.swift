@@ -11,11 +11,13 @@ public struct EnricherInput: Sendable {
     public var noteBody: String?
     /// The capture's current device (silver) document, if any. Enrichers with `inputs` read them here.
     public var current: EnrichmentDocument?
+    /// The capture's comments, oldest first, as loaded from its package.
+    public var comments: [CaptureComment]
 
     public init(captureID: String, metadata: CaptureMetadata, packageURL: URL, noteBody: String?,
-                current: EnrichmentDocument?) {
+                current: EnrichmentDocument?, comments: [CaptureComment] = []) {
         self.captureID = captureID; self.metadata = metadata; self.packageURL = packageURL
-        self.noteBody = noteBody; self.current = current
+        self.noteBody = noteBody; self.current = current; self.comments = comments
     }
 }
 
@@ -57,6 +59,8 @@ public protocol Enricher: Sendable {
     var inputs: Set<FacetKind> { get }
     /// Whether the capture has anything for this enricher. False records `not_applicable`.
     func applies(to m: CaptureMetadata) -> Bool
+    /// Like `applies(to:)`, for enrichers that also read comments. The default ignores them.
+    func applies(to m: CaptureMetadata, comments: [CaptureComment]) -> Bool
     /// True when `run` reads the attachment files' bytes. Such a kind isn't scheduled for a capture with a
     /// trimmed attachment (its local original is gone).
     var readsAttachmentBytes: Bool { get }
@@ -65,4 +69,5 @@ public protocol Enricher: Sendable {
 
 extension Enricher {
     public var readsAttachmentBytes: Bool { false }
+    public func applies(to m: CaptureMetadata, comments: [CaptureComment]) -> Bool { applies(to: m) }
 }

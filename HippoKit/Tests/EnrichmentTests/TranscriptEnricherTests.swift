@@ -70,4 +70,30 @@ private func audio(_ id: String, seconds: Double? = 10) -> CaptureCore.Attachmen
             _ = try await e.run(fixtureInput(fixtureMetadata(attachments: [audio("a1")])))
         }
     }
+
+    @Test func audioCommentIsTranscribedByCommentID() async throws {
+        let e = TranscriptEnricher(transcriber: FakeTranscriber { _ in ("spoken", []) }, locale: Locale(identifier: "en_US"))
+        let m = fixtureMetadata()
+        let c = commentFixture(id: "c1", audio: CommentAudio(relativePath: "comments/c1.m4a", uti: "com.apple.m4a-audio",
+                                                              mimeType: "audio/mp4", byteCount: 1, sha256: "x",
+                                                              media: MediaFacts(durationSeconds: 5)))
+        #expect(e.applies(to: m, comments: [c]))
+        var input = fixtureInput(m)
+        input.comments = [c]
+        let out = try await e.run(input)
+        #expect(out.status == .ok)
+        let data = try JSONDecoder().decode(TranscriptData.self, from: JSONEncoder().encode(try #require(out.data)))
+        #expect(data.items.map(\.attachmentID) == ["c1"])
+    }
+
+    @Test func textCommentOnlyIsNotApplicable() {
+        let e = TranscriptEnricher(transcriber: FakeTranscriber { _ in ("", []) }, locale: Locale(identifier: "en_US"))
+        #expect(!e.applies(to: fixtureMetadata(), comments: [commentFixture(id: "c1", text: "hi")]))
+    }
+}
+
+private func commentFixture(id: String, text: String? = nil, audio: CommentAudio? = nil) -> CaptureComment {
+    CaptureComment(captureID: "cap", commentID: id, addedAt: Date(timeIntervalSince1970: 0),
+                   localDatetime: "1970-01-01T00:00:00", timezoneIdentifier: "UTC", utcOffsetSeconds: 0,
+                   producer: Producer(appVersion: "1", build: "1", osVersion: "t"), text: text, audio: audio)
 }
