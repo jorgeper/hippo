@@ -57,7 +57,7 @@ Debug builds offer a "Developer folder" destination in Settings. It "uploads" in
 
 The Camera button on the timeline opens the system camera. A photo or video you take becomes one capture (method `camera`, saved as HEIC or QuickTime), and the capture sheet opens so you can add a typed note and a voice comment before saving. The camera sheet records the comment in place.
 
-The share sheet takes a typed comment only. Any capture's screen has Note and Record buttons under "Comments" that add a comment after the fact. Comments live in `comments/` inside the capture's package, are uploaded with it, are searchable when typed, and are transcribed when they are audio. A comment cannot be edited or deleted; add another instead.
+The share sheet takes a typed comment only. Any capture's screen has a "Comments" section (the note and recording from capture time, then anything added later with when it was added) and a bottom bar with Note and Record buttons that add a comment after the fact. Comments live in `comments/` inside the capture's package, are uploaded with it, are searchable when typed, and are transcribed when they are audio. A comment cannot be edited or deleted; add another instead.
 
 Settings → Camera → "Also save to Photos" is off by default. When it is on, photos and videos you take in Hippo are also added to your Photos library (Hippo asks for add-only access the first time). If that save fails, Hippo only writes a `camera.library_save` line to its log.
 
