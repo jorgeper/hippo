@@ -46,6 +46,7 @@ Dropped for now: Health (heart rate, workout in progress, sleep). Judged too har
 - Enrichment follow-ups: relative dates resolve against enrichment time, stale gold survives a cursor reset, LinkPresentation may fetch subresources uncapped.
 - Editing or deleting a comment.
 - A desktop reader must list `comments/` on rescan (the package digest does not change).
+- Download from Dropbox should also fetch `comments/` so comments come back to a new phone.
 
 ## The desktop reader (separate project)
 

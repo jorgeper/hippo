@@ -146,11 +146,15 @@ public final class JobStore: Sendable {
         return outcome
     }
 
-    /// Requeues every job of the capture whose state is synced; returns how many.
+    /// Requeues the capture's synced jobs whose destination is `active` or `signed_out` (claimed again once it
+    /// is active); returns how many. A job on a `disabled` destination (a previous account) stays synced: it would
+    /// never be claimed, and the capture would wait to upload for good.
     public func requeueSynced(captureID: String) throws -> Int {
         try db.query("""
             UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at_ms = NULL,
-              next_attempt_at_ms = NULL, updated_at_ms = ? WHERE capture_id = ? AND state = 'synced' RETURNING job_id
+              next_attempt_at_ms = NULL, updated_at_ms = ? WHERE capture_id = ? AND state = 'synced'
+              AND destination_id IN (SELECT destination_id FROM destinations WHERE status IN ('active', 'signed_out'))
+            RETURNING job_id
             """, [.int(Self.ms(Date())), .text(captureID)]).count
     }
 

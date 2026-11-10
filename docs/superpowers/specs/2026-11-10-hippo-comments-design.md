@@ -125,7 +125,7 @@ Typed comments are searchable (FTS `user_note` column gets the comments' text ap
 - Comment while the capture's upload is in progress: the worker finishes the core files, finds the comment files without receipts on the same run or the next, uploads them, and only then marks the job synced.
 - Comment on a capture whose job is blocked or needs authentication: the comment waits with the job; nothing special.
 - Comment on a capture that was deleted everywhere from another device: the job's remote-change handling applies as for any upload to a missing directory (today's behaviour).
-- Kill during an audio comment save after the m4a is in place but before the json: no json means no comment; the orphan m4a is removed by the sweep of `staging/` **(my call: the writer stages both files and moves the json last, so an orphan can only be in staging)**.
+- Kill during an audio comment save: the writer stages both files and moves the json last, so a kill before the first rename leaves an orphan in `staging/` (removed by its sweep), and a kill between the two renames leaves `comments/<id>.m4a` in the package without its json. No json means no comment: readers and uploaders list `comments/*.json` only, so that audio file is invisible to them and harmless.
 - Two comments in the same second: distinct ids, ordered by `added_at` then id.
 - A comment on a package that `PackageValidator` reports incomplete: refused with the store's existing error ("This capture is damaged…", code `local_package_invalid`).
 - Not enough space: the existing insufficient-space error; nothing written.

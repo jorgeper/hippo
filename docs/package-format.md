@@ -105,7 +105,7 @@ A comment the user adds after the capture is a new file in `comments/`; the mani
 | `text` | one of | The typed comment, trimmed, non-empty. |
 | `audio` | one of | `{relative_path, uti, mime_type, byte_count, sha256, media: {duration_seconds}}`; `relative_path` is `comments/<comment-id>.<ext>`. |
 
-Exactly one of `text` or `audio` is present. The json is the comment's own marker: it is written after its audio file, on the phone (staging, then rename) and on the destination (audio uploaded first). A json whose audio file is missing, or does not match `byte_count` and `sha256`, is a pending comment, exactly like a package whose manifest entry has not arrived yet: retry on later scans. A `schema_version` other than 1 is unsupported; unknown keys are ignored. Deleting a package deletes its comments with it.
+Exactly one of `text` or `audio` is present. The json is the comment's own marker: it is written after its audio file, on the phone (staging, then rename) and on the destination (audio uploaded first). An interrupted save can leave an audio file in `comments/` with no json beside it; no json means no comment, so ignore it (readers and the phone's uploader list `comments/*.json` only). A json whose audio file is missing, or does not match `byte_count` and `sha256`, is a pending comment, exactly like a package whose manifest entry has not arrived yet: retry on later scans. A `schema_version` other than 1 is unsupported; unknown keys are ignored. Deleting a package deletes its comments with it.
 
 ## Reader algorithm
 
@@ -116,8 +116,8 @@ Follows the spec's future desktop-reader contract. Locate the configured Hippo r
 3. Check every manifest `relative_path` is safe: relative, not empty, no `.` or `..` segment, no backslash, no NUL, and either `metadata.json` or under `content/`. Any unsafe path means corrupt. The manifest must include `metadata.json`.
 4. For each manifest entry, the file must exist and match `byte_count` and `sha256`. A missing or mismatched file means the package is incomplete or still syncing: leave it pending and retry on later scans. Only after repeated failures over a reasonable period surface it as corrupt.
 5. Decode `metadata.json` (version 1, unknown keys ignored). `metadata.capture_id` must equal the marker's and the directory name, and every attachment `relative_path` must be in the manifest; otherwise corrupt.
-6. Index by `capture_id` plus package digest plus the set of comment ids. The same combination already indexed means nothing to do; the same ID with a new digest replaces the entry. This makes rescans idempotent.
-7. List `comments/*.json`; index each new comment id; a comment whose audio is missing or mismatched is pending.
+6. Index by `capture_id` plus package digest. The same pair already indexed means nothing to do for the package; the same ID with a new digest replaces the entry. This makes rescans idempotent.
+7. List `comments/*.json` (ignore any other file there) and index the package's comments by the set of comment ids: a comment id already indexed means nothing to do, a new one is added. A comment whose audio is missing or mismatched is pending.
 
 Keep your search/SQLite/vector indexes outside the synced folder; they must be rebuildable from packages alone. Store derived (AI) output separately, keyed by `capture_id`; see [`enrichment-format.md`](enrichment-format.md) for the format the phone and a server use for it. Never modify a package.
 

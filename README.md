@@ -76,6 +76,7 @@ Hippo saves a location with a capture only if you turn on "Save location with ca
 - A new install starts empty; Settings → Download from Dropbox brings recent captures back in light form.
 - Background upload timing is up to iOS.
 - Comments can't be edited or deleted.
+- Download from Dropbox brings back captures without their comments; the comments stay in Dropbox.
 
 ## Dropbox
 

@@ -62,12 +62,17 @@ public protocol Enricher: Sendable {
     /// Like `applies(to:)`, for enrichers that also read comments. The default ignores them.
     func applies(to m: CaptureMetadata, comments: [CaptureComment]) -> Bool
     /// True when `run` reads the attachment files' bytes. Such a kind isn't scheduled for a capture with a
-    /// trimmed attachment (its local original is gone).
+    /// trimmed attachment (its local original is gone), unless it also `readsCommentAudio` and the capture
+    /// has an audio comment.
     var readsAttachmentBytes: Bool { get }
+    /// True when `run` reads audio comments' files. Comment files are never trimmed, so such a kind still
+    /// runs for a capture with a trimmed attachment once it has an audio comment, and skips absent attachments.
+    var readsCommentAudio: Bool { get }
     func run(_ input: EnricherInput) async throws -> EnricherOutput
 }
 
 extension Enricher {
     public var readsAttachmentBytes: Bool { false }
+    public var readsCommentAudio: Bool { false }
     public func applies(to m: CaptureMetadata, comments: [CaptureComment]) -> Bool { applies(to: m) }
 }

@@ -756,6 +756,64 @@ extension RunnerHarness {
 }
 
 @Suite struct EnrichmentRunnerTrimmedTests {
+    @Test func audioCommentOnATrimmedCaptureIsTranscribed() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        _ = try h.store.destinations.connect(Destination(id: "d", providerKind: "filesystem", accountIdentifier: "a",
+                                                         remoteRoot: "/", displayName: "A", status: .active))
+        let id = try await h.store.capture(CaptureDraft(
+            captureID: UUID(), startedAt: t0, timeZone: RunnerHarness.zone, method: .shareExtension,
+            attachments: [AttachmentSource(body: .data(Data("aud".utf8)), originalFilename: "a.m4a",
+                                           uti: "com.apple.m4a-audio", mimeType: "audio/mp4",
+                                           representationSource: "item_provider_data")]))
+            .metadata.captureID
+        let attachment = try #require(try h.store.index.metadata(captureID: id, layout: h.store.layout)?.attachments.first)
+        try h.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: attachment.attachmentID,
+                                                   relativePath: attachment.relativePath, byteCount: attachment.byteCount,
+                                                   sha256: attachment.sha256, destinationID: "d", state: .trimmed,
+                                                   trimmedAt: t0))
+        let directory = try #require(try h.store.index.relativeDirectory(captureID: id))
+        try FileManager.default.removeItem(at: h.store.layout.packageURL(relativeDirectory: directory)
+            .appendingPathComponent(attachment.relativePath))
+        let runner = h.runner([TranscriptEnricher(transcriber: CommentTranscriber(), locale: Locale(identifier: "en_US"))])
+        #expect(try await runner.schedule() == 0)
+        #expect(try h.task(id, .transcript)?.status == "not_applicable")
+
+        let url = h.base.appendingPathComponent("voice.m4a")
+        try MediaMaker.writeAudio(to: url)
+        let comment = try await h.store.addComment(
+            captureID: id, .audio(fileURL: url, uti: "com.apple.m4a-audio", mimeType: "audio/mp4", durationSeconds: 1))
+
+        #expect(try await runner.schedule() == 1)
+        #expect(await runner.runPending().ran == 1)
+        #expect(try h.task(id, .transcript)?.status == "ok")
+        let facet = try #require(try h.deviceDoc(id)?[.transcript])
+        let data = try JSONDecoder().decode(TranscriptData.self, from: JSONEncoder().encode(try #require(facet.data)))
+        #expect(data.items.map(\.attachmentID) == [comment.commentID])
+    }
+
+    @Test func audioCommentDoesNotLiftTheGuardForOtherKinds() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        _ = try h.store.destinations.connect(Destination(id: "d", providerKind: "filesystem", accountIdentifier: "a",
+                                                         remoteRoot: "/", displayName: "A", status: .active))
+        let id = try await h.store.capture(CaptureDraft(
+            captureID: UUID(), startedAt: t0, timeZone: RunnerHarness.zone, method: .shareExtension,
+            attachments: [AttachmentSource(body: .data(Data("img".utf8)), originalFilename: "a.png", uti: "public.png",
+                                           mimeType: "image/png", representationSource: "item_provider_data")]))
+            .metadata.captureID
+        let attachment = try #require(try h.store.index.metadata(captureID: id, layout: h.store.layout)?.attachments.first)
+        try h.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: attachment.attachmentID,
+                                                   relativePath: attachment.relativePath, byteCount: attachment.byteCount,
+                                                   sha256: attachment.sha256, destinationID: "d", state: .trimmed,
+                                                   trimmedAt: t0))
+        let url = h.base.appendingPathComponent("voice.m4a")
+        try MediaMaker.writeAudio(to: url)
+        _ = try await h.store.addComment(
+            captureID: id, .audio(fileURL: url, uti: "com.apple.m4a-audio", mimeType: "audio/mp4", durationSeconds: 1))
+        // Text recognition reads only attachment bytes, so the audio comment leaves it not applicable.
+        _ = try await h.runner([FakeEnricher(kind: .textRecognition, readsAttachmentBytes: true)]).schedule()
+        #expect(try h.task(id, .textRecognition)?.status == "not_applicable")
+    }
+
     @Test func trimmedAttachmentKindsAreNotScheduled() async throws {
         let h = try RunnerHarness(); defer { h.cleanup() }
         _ = try h.store.destinations.connect(Destination(id: "d", providerKind: "filesystem", accountIdentifier: "a",
