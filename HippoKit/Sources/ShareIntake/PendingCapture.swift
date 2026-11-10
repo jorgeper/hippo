@@ -72,6 +72,7 @@ extension IntakeDirectory {
     /// Writes `intake/<capture-id>/pending.json`. File bodies must already live inside that directory.
     public func savePending(_ pending: PendingCapture) throws {
         let draft = pending.draft
+        try FileManager.default.createDirectory(at: directory(for: draft.captureID), withIntermediateDirectories: true)
         let dir = directory(for: draft.captureID).standardizedFileURL.resolvingSymlinksInPath()
 
         func relativeName(_ url: URL) throws -> String {
@@ -108,14 +109,20 @@ extension IntakeDirectory {
         for entry in entries {
             let jsonURL = entry.appendingPathComponent(Self.pendingFileName)
             guard fm.fileExists(atPath: jsonURL.path) else { continue }
-            if let pending = Self.load(jsonURL, in: entry) {
+            switch Self.load(jsonURL, in: entry) {
+            case .loaded(let pending):
                 captures.append(pending)
-            } else {
+            case .keep:
+                continue
+            case .discard:
                 try? fm.removeItem(at: entry)
                 dropped += 1
             }
         }
-        captures.sort { $0.savedAt < $1.savedAt }
+        captures.sort {
+            $0.savedAt != $1.savedAt ? $0.savedAt < $1.savedAt
+                : $0.draft.captureID.uuidString < $1.draft.captureID.uuidString
+        }
         return (captures, dropped)
     }
 
@@ -124,34 +131,49 @@ extension IntakeDirectory {
         FileManager.default.fileExists(atPath: pendingURL(captureID: captureID).path)
     }
 
-    private static func load(_ jsonURL: URL, in dir: URL) -> PendingCapture? {
+    private enum LoadOutcome {
+        case loaded(PendingCapture)
+        /// Unreadable for now, or written by a newer version: leave it on disk.
+        case keep
+        /// Confirmed corrupt or missing a file: remove it.
+        case discard
+    }
+
+    private static func load(_ jsonURL: URL, in dir: URL) -> LoadOutcome {
         let fm = FileManager.default
-        guard let bytes = try? Data(contentsOf: jsonURL),
-              let file = try? HippoJSON.decode(PendingFile.self, from: bytes),
-              let zone = TimeZone(identifier: file.timeZone) else { return nil }
+        guard let bytes = try? Data(contentsOf: jsonURL) else { return .keep }
+        let file: PendingFile
+        do {
+            file = try HippoJSON.decode(PendingFile.self, from: bytes)
+        } catch FormatError.unsupportedSchemaVersion {
+            return .keep
+        } catch {
+            return .discard
+        }
+        guard let zone = TimeZone(identifier: file.timeZone) else { return .discard }
         var attachments: [AttachmentSource] = []
         for item in file.attachments {
             let body: AttachmentSource.Body
             if let name = item.file {
                 let url = dir.appendingPathComponent(name, isDirectory: false)
-                guard fm.fileExists(atPath: url.path) else { return nil }
+                guard fm.fileExists(atPath: url.path) else { return .discard }
                 body = .file(url)
             } else if let data = item.data {
                 body = .data(data)
-            } else { return nil }
+            } else { return .discard }
             attachments.append(AttachmentSource(body: body, originalFilename: item.originalFilename, uti: item.uti,
                                                 mimeType: item.mimeType, representationSource: item.representationSource))
         }
         var preview: URL?
         if let name = file.previewImage {
             let url = dir.appendingPathComponent(name, isDirectory: false)
-            guard fm.fileExists(atPath: url.path) else { return nil }
+            guard fm.fileExists(atPath: url.path) else { return .discard }
             preview = url
         }
         let draft = CaptureDraft(captureID: file.captureID, startedAt: file.startedAt, timeZone: zone, method: file.method,
                                  userNote: file.userNote, sharedTitle: file.sharedTitle, sharedText: file.sharedText,
                                  urls: file.urls, attachments: attachments, location: file.location,
                                  observations: file.observations)
-        return PendingCapture(draft: draft, previewImageURL: preview, totalBytes: file.totalBytes, savedAt: file.savedAt)
+        return .loaded(PendingCapture(draft: draft, previewImageURL: preview, totalBytes: file.totalBytes, savedAt: file.savedAt))
     }
 }

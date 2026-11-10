@@ -115,6 +115,7 @@ import HippoTestSupport
 
         #expect(fm.fileExists(atPath: directory.directory(for: pendingID).path))
         #expect(!fm.fileExists(atPath: plain.path))
+        #expect(directory.pendingCaptures().captures.map(\.draft.captureID) == [pendingID])
     }
 
     @Test func pendingOrderIsOldestFirst() throws {
@@ -124,5 +125,51 @@ import HippoTestSupport
 
         let ids = directory.pendingCaptures().captures.map(\.draft.captureID)
         #expect(ids == [earlier, later])
+    }
+
+    @Test func corruptPendingJSONIsDropped() throws {
+        let id = UUID()
+        try directory.savePending(try makePending(id: id).0)
+        try Data("not json".utf8).write(to: directory.directory(for: id).appendingPathComponent("pending.json"))
+
+        let result = directory.pendingCaptures()
+        #expect(result.captures.isEmpty)
+        #expect(result.dropped == 1)
+        #expect(!fm.fileExists(atPath: directory.directory(for: id).path))
+    }
+
+    @Test func newerSchemaVersionIsKeptAndNotReturned() throws {
+        let id = UUID()
+        try directory.savePending(try makePending(id: id).0)
+        let json = directory.directory(for: id).appendingPathComponent("pending.json")
+        let text = try String(contentsOf: json, encoding: .utf8).replacingOccurrences(of: "\"schema_version\" : 1", with: "\"schema_version\" : 2")
+        try Data(text.utf8).write(to: json)
+
+        let result = directory.pendingCaptures()
+        #expect(result.captures.isEmpty)
+        #expect(result.dropped == 0)
+        #expect(directory.isPending(captureID: id))
+    }
+
+    @Test func unreadablePendingJSONIsKept() throws {
+        if getuid() == 0 { return }   // root ignores POSIX permissions; this case cannot be exercised
+        let id = UUID()
+        try directory.savePending(try makePending(id: id).0)
+        let json = directory.directory(for: id).appendingPathComponent("pending.json")
+        try fm.setAttributes([.posixPermissions: 0], ofItemAtPath: json.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: json.path) }
+
+        let result = directory.pendingCaptures()
+        #expect(result.captures.isEmpty)
+        #expect(result.dropped == 0)
+        #expect(directory.isPending(captureID: id))
+    }
+
+    @Test func savePendingCreatesMissingDirectoryForDataOnlyDrafts() throws {
+        let id = UUID()
+        let draft = CaptureDraft(captureID: id, startedAt: t0, timeZone: .gmt, method: .shareExtension, userNote: "x",
+                                 attachments: [AttachmentSource(body: .data(Data([1])), uti: "public.data", representationSource: "typed_note")])
+        try directory.savePending(PendingCapture(draft: draft, previewImageURL: nil, totalBytes: 1, savedAt: t0))
+        #expect(directory.pendingCaptures().captures.count == 1)
     }
 }
