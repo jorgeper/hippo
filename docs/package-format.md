@@ -39,7 +39,7 @@ Always present (required):
 | `local_datetime` | RFC 3339 with offset | Wall-clock time at capture; names the date directory. |
 | `timezone_identifier` | IANA zone string | e.g. `America/Los_Angeles`. |
 | `utc_offset_seconds` | integer seconds | East of UTC at `captured_at`. |
-| `capture_method` | string | Known: `share_extension`, `typed_note`, `file_import`, `voice_recording`. |
+| `capture_method` | string | Known: `share_extension`, `typed_note`, `file_import`, `voice_recording`, `camera`. |
 | `content_types` | string array | Known: `text`, `url`, `image`, `video`, `audio`, `pdf`, `file`. May be empty (a comment-only capture). |
 | `urls` | array | Objects `{url, source}`; `source` e.g. `shared_payload`, `detected_in_text`. May be empty. |
 | `producer` | object | `{app_version, build, os_version}` strings of the writing app. |
@@ -66,7 +66,7 @@ Attachment object:
 | `uti` | yes | string | Uniform Type Identifier, e.g. `public.png`, `public.utf8-plain-text`. |
 | `byte_count` | yes | integer bytes | |
 | `sha256` | yes | hex string | Of the file bytes. |
-| `representation_source` | yes | string | `item_provider_file`, `item_provider_data`, `typed_note`, `recording`. |
+| `representation_source` | yes | string | `item_provider_file`, `item_provider_data`, `typed_note`, `recording`, `camera` (taken with Hippo's camera button). |
 | `original_filename` | no | string | Display only. Never use it as a path. |
 | `mime_type` | no | string | |
 | `media` | no | object | See below. |

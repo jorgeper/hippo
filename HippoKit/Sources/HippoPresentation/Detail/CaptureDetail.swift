@@ -248,6 +248,7 @@ public struct CaptureDetail: Equatable, Sendable {
         case "share_extension": "Shared"
         case "typed_note": "Typed note"
         case "voice_recording": "Recorded"
+        case "camera": "Camera"
         case "file_import": "Imported"
         default: nil
         }
