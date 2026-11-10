@@ -15,4 +15,11 @@ public enum NoteComposer {
                                            representationSource: "typed_note")],
             location: location)
     }
+
+    /// The draft for a typed comment on an existing capture: the text trimmed of surrounding whitespace, or nil
+    /// when nothing is left.
+    public static func comment(text: String) -> CommentDraft? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : .text(trimmed)
+    }
 }

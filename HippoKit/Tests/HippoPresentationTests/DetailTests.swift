@@ -216,6 +216,62 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(d.transcripts == [TitledText(title: "Attachment 1", text: "hi there")])
     }
 
+    @Test func commentsOrderAndCaptions() throws {
+        var m = meta(method: .typedNote)
+        m.userNote = "Ask about the lease"
+        // `now` is 2026-11-07 12:00 in Los Angeles.
+        let typed = CaptureComment(captureID: "c1", commentID: "k1", addedAt: Date(timeIntervalSince1970: 1_793_726_100),
+                                   localDatetime: "2026-11-03T09:15:00-08:00", timezoneIdentifier: "America/Los_Angeles",
+                                   utcOffsetSeconds: -28800, producer: Producer(appVersion: "1", build: "1", osVersion: "t"),
+                                   text: "Called them back")
+        let audio = CaptureComment(captureID: "c1", commentID: "k2", addedAt: Date(timeIntervalSince1970: 1_794_076_200),
+                                   localDatetime: "2026-11-07T10:30:00-08:00", timezoneIdentifier: "America/Los_Angeles",
+                                   utcOffsetSeconds: -28800, producer: Producer(appVersion: "1", build: "1", osVersion: "t"),
+                                   audio: CommentAudio(relativePath: "comments/k2.m4a", uti: "com.apple.m4a-audio",
+                                                       mimeType: "audio/mp4", byteCount: 10, sha256: "x",
+                                                       media: MediaFacts(durationSeconds: 7.4)))
+        let t = TranscriptItem(attachmentID: "k2", text: "they said yes", locale: "en_US", segments: [])
+        let d = CaptureDetail.make(metadata: m, packageURL: pkg, noteBody: "note", jobs: [],
+                                   enrichment: resolved(transcripts: ["k2": t]), comments: [typed, audio],
+                                   destination: { _ in nil }, now: now, locale: locale, calendar: calendar)
+        #expect(d.comments.map(\.id) == ["user_note", "k1", "k2"])
+        #expect(d.comments[0] == CommentRow(id: "user_note", body: .text("Ask about the lease")))
+        #expect(d.comments[1].body == .text("Called them back"))
+        #expect(plain(d.comments[1].caption) == "Added Nov 3, 9:15 AM")
+        #expect(d.comments[1].transcript == nil && d.comments[1].transcriptLayer == nil)
+        #expect(d.comments[2].body == .audio(pkg.appendingPathComponent("comments/k2.m4a"), durationText: "0:07"))
+        #expect(plain(d.comments[2].caption) == "Added today, 10:30 AM")
+        #expect(d.comments[2].transcript == "they said yes" && d.comments[2].transcriptLayer == .silver)
+        #expect(d.transcripts.isEmpty)
+    }
+
+    @Test func voiceRecordingIsNotAComment() {
+        var rec = att(uti: "com.apple.m4a-audio", name: nil, mime: "audio/mp4", media: MediaFacts(durationSeconds: 12))
+        rec.representationSource = "recording"
+        let t = TranscriptItem(attachmentID: "a1", text: "remember the keys", locale: "en_US", segments: [])
+        let d = make(meta(method: .voiceRecording, attachments: [rec]), enrichment: resolved(transcripts: ["a1": t]))
+        #expect(d.comments == [])
+        #expect(d.preview == .audio(pkg.appendingPathComponent("content/a1.bin")))
+        #expect(d.transcripts == [TitledText(title: "Attachment 1", text: "remember the keys")])
+    }
+
+    @Test func cameraVoiceCommentIsAComment() {
+        let photo = CaptureCore.Attachment(attachmentID: "p1", relativePath: "content/p1.heic", originalFilename: nil,
+                                           uti: "public.heic", mimeType: "image/heic", byteCount: 1_000, sha256: "x",
+                                           representationSource: "camera", media: nil)
+        let rec = CaptureCore.Attachment(attachmentID: "r1", relativePath: "content/r1.m4a", originalFilename: nil,
+                                         uti: "com.apple.m4a-audio", mimeType: "audio/mp4", byteCount: 500, sha256: "y",
+                                         representationSource: "recording", media: MediaFacts(durationSeconds: 3))
+        let t = TranscriptItem(attachmentID: "r1", text: "the blue one", locale: "en_US", segments: [])
+        var server = resolved(transcripts: ["r1": t])
+        server.fromServer.transcripts = ["r1"]
+        let d = make(meta(method: .camera, attachments: [photo, rec]), enrichment: server)
+        #expect(d.comments == [CommentRow(id: "r1", body: .audio(pkg.appendingPathComponent("content/r1.m4a"), durationText: "0:03"),
+                                          caption: nil, transcript: "the blue one", transcriptLayer: .gold)])
+        #expect(d.transcripts.isEmpty)
+        #expect(d.preview == .image(pkg.appendingPathComponent("content/p1.heic")))
+    }
+
     @Test func omitsMissingValues() {
         let d = make(meta(urls: ["https://example.com/x"]))
         #expect(d.captured.map(\.label) == ["When", "How"])
@@ -223,7 +279,7 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         let all = d.captured + d.attachments.flatMap { $0 }
         #expect(all.allSatisfy { !$0.value.isEmpty && !$0.value.contains("Unknown") })
         #expect(d.preview == .link(URL(string: "https://example.com/x")!))
-        #expect(d.links.count == 1 && d.comment == nil)
+        #expect(d.links.count == 1 && d.comments.isEmpty)
         let bare = make(meta(attachments: [att(name: nil, mime: nil)]))
         #expect(bare.attachments[0].map(\.label) == ["Name", "Type", "Size"])
         #expect(bare.attachments[0][0].value == "Attachment 1")

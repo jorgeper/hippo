@@ -13,7 +13,8 @@ import SyncEngine
 
 public enum MicPermission: Sendable { case granted, denied, undetermined }
 
-/// State machine behind the voice recorder screen: a `RecordingSession` plus committing the capture.
+/// State machine behind the voice recorder screen: a `RecordingSession` plus committing the recording, as a
+/// new capture or as an audio comment on an existing one (`target`).
 @MainActor @Observable
 public final class RecorderModel {
     public enum State: Equatable {
@@ -25,6 +26,8 @@ public final class RecorderModel {
     }
 
     public static let saveFailedMessage = "Hippo couldn't save this recording. It's still here. Try again."
+    /// A comment save failed for a reason other than those in `CommentErrorCopy`.
+    nonisolated public static let commentSaveFailedMessage = "Hippo couldn't save this comment. It's still here. Try again."
     static let startFailedMessage = RecordingSession.startFailedMessage
 
     public var state: State {
@@ -43,6 +46,8 @@ public final class RecorderModel {
     private let store: HippoStore
     private let session: RecordingSession
     private let location: (Date) -> CaptureLocation?
+    public let target: SaveTarget
+    private let now: () -> Date
 
     private var isSaving = false
     private var didSave = false
@@ -51,8 +56,8 @@ public final class RecorderModel {
     public init(store: HippoStore, intake: IntakeDirectory, recorder: AudioRecording,
                 permission: @escaping () async -> MicPermission,
                 location: @escaping (Date) -> CaptureLocation?,
-                now: @escaping () -> Date = Date.init) {
-        self.store = store; self.location = location
+                now: @escaping () -> Date = Date.init, target: SaveTarget = .newCapture) {
+        self.store = store; self.location = location; self.target = target; self.now = now
         session = RecordingSession(intake: intake, recorder: recorder, permission: permission, now: now)
     }
 
@@ -71,24 +76,37 @@ public final class RecorderModel {
     /// A call, Siri or similar took the microphone: keep what was recorded and offer to save it.
     public func interruptionBegan() { session.interruptionBegan() }
 
-    /// Commits the recording. On failure the file stays and `save()` can be tried again.
+    /// Commits the recording: a new voice capture, or an audio comment on `target`'s capture. On failure the
+    /// file stays and `save()` can be tried again.
     public func save() async {
         guard !isSaving, !didSave, let taken = session.takePending() else { return }
         isSaving = true
         saveFailure = nil
-        let draft = CaptureDraft(
-            captureID: UUID(), startedAt: taken.startedAt, timeZone: taken.timeZone, method: .voiceRecording,
-            attachments: [AttachmentSource(body: .file(taken.url), originalFilename: nil,
-                                           uti: "com.apple.m4a-audio", mimeType: "audio/mp4",
-                                           representationSource: "recording")],
-            location: location(taken.startedAt))
         do {
-            _ = try await store.capture(draft)
+            switch target {
+            case .newCapture:
+                let draft = CaptureDraft(
+                    captureID: UUID(), startedAt: taken.startedAt, timeZone: taken.timeZone, method: .voiceRecording,
+                    attachments: [AttachmentSource(body: .file(taken.url), originalFilename: nil,
+                                                   uti: "com.apple.m4a-audio", mimeType: "audio/mp4",
+                                                   representationSource: "recording")],
+                    location: location(taken.startedAt))
+                _ = try await store.capture(draft)
+            case .comment(let captureID):
+                _ = try await store.addComment(
+                    captureID: captureID,
+                    .audio(fileURL: taken.url, uti: "com.apple.m4a-audio", mimeType: "audio/mp4",
+                           durationSeconds: taken.duration),
+                    now: now(), timeZone: taken.timeZone)
+            }
             try? FileManager.default.removeItem(at: taken.url)
             didSave = true
         } catch {
             session.restorePending(taken)
-            saveFailure = Self.saveFailedMessage
+            switch target {
+            case .newCapture: saveFailure = Self.saveFailedMessage
+            case .comment: saveFailure = CommentErrorCopy.message(for: error, fallback: Self.commentSaveFailedMessage)
+            }
         }
         isSaving = false
     }

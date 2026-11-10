@@ -111,7 +111,9 @@ public final class CaptureDetailModel {
                                                     return FileManager.default.fileExists(atPath: url.path) ? url : nil
                                                 },
                                                 activeDestination: active, accountName: { accountNames[$0] }, isEnabled: isEnabled,
-                                                isOnline: isOnline(), goldArrivedAt: goldArrivedAt, destination: { names[$0] ?? nil }, now: now,
+                                                isOnline: isOnline(), goldArrivedAt: goldArrivedAt,
+                                                comments: PackageComments.load(directory: url).comments,
+                                                destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: boundName)
                 let everywhere = boundName.map { DeletionPrompt.everywhere(destinationName: $0) }
