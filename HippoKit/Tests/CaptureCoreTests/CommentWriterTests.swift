@@ -161,4 +161,75 @@ private struct FakeSpace: SpaceChecking {
         }
         #expect(after == before)
     }
+
+    @Test func failureAfterAudioMoveRemovesAudio() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let package = try await commit()
+        let id = UUID(uuidString: "00000000-0000-4000-8000-00000000c0de")!
+        let fixed = CommentWriter(layout: layout, producer: producer, space: FakeSpace(bytes: 1 << 40), makeID: { id })
+        let comments = package.directoryURL.appendingPathComponent("comments")
+        let blocker = comments.appendingPathComponent("\(id.uuidString.lowercased()).json")
+        try FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+        do {
+            _ = try fixed.add(audioDraft(try audioSource()), to: package, now: now, timeZone: la)
+            Issue.record("expected io error")
+        } catch CaptureError.io {
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
+        #expect(entries(in: comments) == ["\(id.uuidString.lowercased()).json"])  // only the blocker
+        #expect(entries(in: layout.stagingDir).isEmpty)
+    }
+
+    @Test func missingPackageIsNotResurrected() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let package = try await commit()
+        try FileManager.default.removeItem(at: package.directoryURL)
+        #expect(throws: CaptureError.self) {
+            try writer().add(.text("late"), to: package, now: now, timeZone: la)
+        }
+        #expect(!FileManager.default.fileExists(atPath: package.directoryURL.path))
+    }
+
+    /// Writes `comment` json (mutated) over a valid text comment's file and expects it to be pending.
+    private func expectPending(file: String? = nil, _ mutate: (inout CaptureComment) -> Void) async throws {
+        let package = try await commit()
+        let comment = try writer().add(.text("hi"), to: package, now: now, timeZone: la)
+        var changed = comment
+        mutate(&changed)
+        let name = file ?? comment.relativePath
+        try HippoJSON.encode(changed).write(to: package.directoryURL.appendingPathComponent(name))
+        if file != nil { try FileManager.default.removeItem(at: package.directoryURL.appendingPathComponent(comment.relativePath)) }
+        let listing = PackageComments.load(directory: package.directoryURL)
+        #expect(listing.comments == [])
+        #expect(listing.pendingCount == 1)
+    }
+
+    @Test func loaderRejectsNameMismatch() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await expectPending(file: "comments/00000000-0000-4000-8000-0000000000aa.json") { _ in }
+    }
+
+    @Test func loaderRejectsBothTextAndAudio() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await expectPending { c in
+            c.audio = CommentAudio(relativePath: "comments/\(c.commentID).m4a", uti: "com.apple.m4a-audio",
+                                   mimeType: nil, byteCount: 0, sha256: String(repeating: "0", count: 64), media: nil)
+        }
+    }
+
+    @Test func loaderRejectsNeitherTextNorAudio() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await expectPending { $0.text = nil }
+    }
+
+    @Test func loaderRejectsCaptureIDMismatch() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await expectPending { $0.captureID = "00000000-0000-4000-8000-0000000000bb" }
+    }
+
+    @Test func loaderRejectsBlankText() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await expectPending { $0.text = "  " }
+    }
 }

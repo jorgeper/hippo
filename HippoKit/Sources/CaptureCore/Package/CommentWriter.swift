@@ -89,7 +89,14 @@ public struct CommentWriter: Sendable {
                                            to: stagedJSON, step: "comment")
             try PackageWriter.io("sync staging") { try PackageWriter.fullSync(staging) }
 
-            try PackageWriter.io("create comments") { try fm.createDirectory(at: commentsDir, withIntermediateDirectories: true) }
+            // Never resurrect a package deleted mid-write: the parent must exist, so create only comments/ itself.
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: package.directoryURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw CaptureError.io("package is gone")
+            }
+            if createdCommentsDir {
+                try PackageWriter.io("create comments") { try fm.createDirectory(at: commentsDir, withIntermediateDirectories: false) }
+            }
             if let stagedAudio, let audio {
                 let destination = package.directoryURL.appendingPathComponent(audio.relativePath)
                 try Self.move(stagedAudio, to: destination)
@@ -97,8 +104,10 @@ public struct CommentWriter: Sendable {
             }
             try PackageWriter.io("sync comments") { try PackageWriter.fullSync(commentsDir) }
             try Self.move(stagedJSON, to: package.directoryURL.appendingPathComponent(comment.relativePath))
-            try PackageWriter.io("sync comments") { try PackageWriter.fullSync(commentsDir) }
 
+            // The json is in place: the comment is committed. Nothing below may fail the call or remove files.
+            try? PackageWriter.fullSync(commentsDir)
+            if createdCommentsDir { try? PackageWriter.fullSync(package.directoryURL) }
             try? fm.removeItem(at: staging)
             try? PackageWriter.fullSync(layout.stagingDir)
             lock.release()

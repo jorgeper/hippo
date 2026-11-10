@@ -27,7 +27,7 @@ captures/YYYY/MM/DD/<capture-id>/
 - Omission rule: an unavailable optional field is omitted. It is never `null` and never an empty string; unknown is not a guess. Treat a missing key as unknown.
 - Open sets: `capture_method`, `content_types` and the `source`/`provenance`/`representation_source` strings may take values you do not know. Accept and preserve them.
 - Unknown additional keys, anywhere, must be ignored.
-- `schema_version` is an integer. This document is version 1. Reject any other value (in either file) with a clear "unsupported version" error rather than guessing.
+- `schema_version` is an integer. This document is version 1. Reject any other value (in any of these files) with a clear "unsupported version" error rather than guessing.
 
 ## `metadata.json`
 
@@ -84,7 +84,7 @@ A typed note's body is its first `public.utf8-plain-text` (or `public.plain-text
   "files": [ { "relative_path": "metadata.json", "byte_count": 665, "sha256": "<hex>" }, ... ] }
 ```
 
-`files` lists every file in the package except `complete.json`: `metadata.json` first, then each attachment. Each `relative_path` is `metadata.json` or `content/<id>.<ext>`.
+`files` lists every file in the package except `complete.json` and anything under `comments/`: `metadata.json` first, then each attachment. Each `relative_path` is `metadata.json` or `content/<id>.<ext>`.
 
 Marker semantics: the writer finishes and syncs all other files, then writes `complete.json`; the uploader uploads it last. So its presence means "the writer finished", and its manifest says exactly what must be present and intact. A package without it is in progress (or abandoned) and must not be read.
 

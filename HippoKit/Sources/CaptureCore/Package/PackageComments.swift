@@ -22,6 +22,8 @@ public enum PackageComments {
             guard let data = try? Data(contentsOf: dir.appendingPathComponent(name)),
                   let comment = try? HippoJSON.decodeComment(data),
                   name == "\(comment.commentID).json",
+                  comment.captureID == directory.lastPathComponent,
+                  comment.text.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? true,
                   (comment.text == nil) != (comment.audio == nil),
                   isComplete(comment, in: directory)
             else { pending += 1; continue }
