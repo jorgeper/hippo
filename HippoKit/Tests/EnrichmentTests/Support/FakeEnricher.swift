@@ -16,14 +16,16 @@ final class FakeEnricher: Enricher {
     let version: Int
     let usesNetwork: Bool
     let inputs: Set<FacetKind>
+    let readsAttachmentBytes: Bool
     private let appliesTo: @Sendable (CaptureMetadata) -> Bool
     private let fallback: EnricherOutput
     private let state: Mutex<(steps: [Step], received: [EnricherInput])>
 
-    init(kind: FacetKind, version: Int = 1, usesNetwork: Bool = false, inputs: Set<FacetKind> = [],
+    init(kind: FacetKind, version: Int = 1, usesNetwork: Bool = false, inputs: Set<FacetKind> = [], readsAttachmentBytes: Bool = false,
          applies: @escaping @Sendable (CaptureMetadata) -> Bool = { _ in true },
          steps: [Step] = [], fallback: EnricherOutput = FakeEnricher.ok(.string("fake"))) {
         self.kind = kind; self.version = version; self.usesNetwork = usesNetwork; self.inputs = inputs
+        self.readsAttachmentBytes = readsAttachmentBytes
         self.appliesTo = applies; self.fallback = fallback
         state = Mutex((steps, []))
     }

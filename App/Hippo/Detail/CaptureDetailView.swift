@@ -1,6 +1,8 @@
 import SwiftUI
 import os
 import CaptureCore
+import LocalRepository
+import SyncEngine
 import HippoPresentation
 import Enrichment
 
@@ -13,8 +15,10 @@ struct CaptureDetailView: View {
 
     @State private var model: CaptureDetailModel
     @State private var confirmingDelete = false
+    @State private var confirmingDeleteEverywhere = false
     @State private var deleteFailed = false
     @State private var retrying = false
+    @State private var uploadingAgain = false
     @State private var developerMode = LocationService.settings.developerMode
     @State private var showsStripes = LocationService.settings.showsLayerStripes
     @State private var taskReload: Task<Void, Never>?
@@ -27,10 +31,17 @@ struct CaptureDetailView: View {
         self.environment = environment
         self.captureID = captureID
         self.onDeleted = onDeleted
+        let adapterFor: (@Sendable (Destination) throws -> any StorageAdapter)? = environment.registry.map { registry in
+            { @Sendable destination in try registry.adapter(for: destination) }
+        }
+        let registry = environment.registry
         _model = State(initialValue: CaptureDetailModel(
             store: environment.store, captureID: captureID,
             isEnabled: { LocationService.settings.isEnrichmentEnabled($0) },
-            isOnline: { EnrichmentScheduling.isOnline }))
+            isOnline: { EnrichmentScheduling.isOnline },
+            sync: { [coordinator = environment.coordinator] in _ = await coordinator?.syncNow(trigger: "manual") },
+            adapterFor: adapterFor,
+            accountName: { destination in await registry?.provider(kind: destination.providerKind)?.accountName(destination) }))
     }
 
     var body: some View {
@@ -75,6 +86,14 @@ struct CaptureDetailView: View {
             } message: { prompt in
                 Text(prompt.message)
             }
+            .confirmationDialog(model.everywherePrompt?.title ?? "Delete everywhere?",
+                                isPresented: $confirmingDeleteEverywhere, titleVisibility: .visible,
+                                presenting: model.everywherePrompt) { prompt in
+                Button(prompt.confirm, role: .destructive) { delete(everywhere: true) }
+                Button("Cancel", role: .cancel) {}
+            } message: { prompt in
+                Text(prompt.message)
+            }
             .alert("Couldn't delete this capture", isPresented: $deleteFailed) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -82,11 +101,24 @@ struct CaptureDetailView: View {
             }
     }
 
+    /// Trimmed attachments the large preview isn't already showing.
+    private func otherRemoteOnly(_ detail: CaptureDetail) -> [RemoteOnlyAttachment] {
+        var shown: String?
+        if case .remoteOnly(let first) = detail.preview { shown = first.attachmentID }
+        return detail.remoteOnly.values.filter { $0.attachmentID != shown }.sorted { $0.relativePath < $1.relativePath }
+    }
+
     @ViewBuilder private var content: some View {
         if let detail = model.detail {
             List {
                 if detail.preview != .none {
-                    AttachmentPreview(kind: detail.preview)
+                    AttachmentPreview(kind: detail.preview, model: model)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+                ForEach(otherRemoteOnly(detail), id: \.attachmentID) { attachment in
+                    RemoteOnlyAttachmentView(attachment: attachment, model: model, large: false)
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -133,7 +165,8 @@ struct CaptureDetailView: View {
                         }
                     }
                 }
-                StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry)
+                StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry,
+                              uploadingAgain: uploadingAgain, onUploadAgain: uploadAgain)
                 if developerMode, let capturedAt = model.capturedAt {
                     Section {
                         NavigationLink("Activity") {
@@ -181,11 +214,26 @@ struct CaptureDetailView: View {
             if !items.isEmpty { ShareLink("Share…", items: items) }
             Button("Delete from iPhone…", role: .destructive) { confirmingDelete = true }
                 .disabled(model.deletionPrompt == nil)
+            if model.everywherePrompt != nil {
+                Button("Delete everywhere…", role: .destructive) { confirmingDeleteEverywhere = true }
+            }
         } label: {
             Image(systemName: "ellipsis.circle")
         }
         .accessibilityLabel("More")
         .accessibilityIdentifier("detail-menu")
+    }
+
+    private func uploadAgain() {
+        guard !uploadingAgain else { return }
+        uploadingAgain = true
+        let model = model, coordinator = environment.coordinator
+        Task {
+            defer { uploadingAgain = false }
+            await BackgroundActivity.run(name: "detail-upload-again", onExpire: coordinator.map(SyncScheduling.stopper)) {
+                await model.uploadAgain()
+            }
+        }
     }
 
     private func retry() {
@@ -202,11 +250,13 @@ struct CaptureDetailView: View {
         }
     }
 
-    private func delete() {
+    private func delete(everywhere: Bool = false) {
         let model = model
         Task {
             do {
-                _ = try await BackgroundActivity.run(name: "detail-delete") { try await model.delete() }
+                _ = try await BackgroundActivity.run(name: "detail-delete") {
+                    everywhere ? try await model.deleteEverywhere() : try await model.delete()
+                }
                 onDeleted()
                 dismiss()
             } catch {

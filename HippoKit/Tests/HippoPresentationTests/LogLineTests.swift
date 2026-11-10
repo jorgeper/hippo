@@ -33,6 +33,34 @@ struct LogLineTests {
                 == "Sync finished (activation) · 3 uploaded")
     }
 
+    @Test func remoteDeleteLines() {
+        #expect(line(LogEvent(event: .remoteDelete, dest: "dropbox")).text == "Delete queued for Dropbox")
+        #expect(line(LogEvent(event: .remoteDelete, outcome: .ok, dest: "dropbox")).text == "Deleted in Dropbox")
+        #expect(line(LogEvent(event: .remoteDelete, outcome: .failed, code: "offline", dest: "dropbox")).text
+                == "Delete in Dropbox failed · offline")
+        #expect(line(LogEvent(event: .remoteDelete, dest: "filesystem")).text == "Delete queued for the Developer folder")
+    }
+
+    @Test func authLines() {
+        #expect(line(LogEvent(event: .authConnected, dest: "dropbox")).text == "Connected Dropbox")
+        #expect(line(LogEvent(event: .authDisconnected, dest: "dropbox")).text == "Disconnected Dropbox")
+        #expect(line(LogEvent(event: .authRefreshFailed, dest: "dropbox")).text == "Dropbox sign-in expired")
+        #expect(line(LogEvent(event: .authConnected, dest: "filesystem")).text == "Connected the Developer folder")
+        #expect(line(LogEvent(event: .authRefreshFailed)).text == "Sign-in expired")
+    }
+
+    @Test func remoteChangeLines() {
+        #expect(line(LogEvent(event: .remoteChanged, dest: "dropbox")).text == "Changed in Dropbox")
+        #expect(line(LogEvent(event: .remoteChanged, code: "unverified", dest: "dropbox")).text
+                == "Not removed: upload not verified")
+        #expect(line(LogEvent(event: .remoteReview, code: "threshold", count: 25, dest: "dropbox")).text
+                == "Dropbox looks different · 25 captures to review")
+        #expect(line(LogEvent(event: .remoteReview, code: "cursor_reset", count: 1, dest: "dropbox")).text
+                == "Dropbox looks different · 1 capture to review")
+        #expect(line(LogEvent(event: .remoteReview, code: "threshold", count: 2, dest: "filesystem")).text
+                == "The Developer folder looks different · 2 captures to review")
+    }
+
     @Test func unknownCombinationFallsBack() {
         #expect(line(LogEvent(event: .bgTask, outcome: .skipped, code: "stale")).text == "bg.task · skipped · stale")
         #expect(line(LogEvent(event: .goldSkipped, code: "stale")).text == "Server results skipped · stale")
@@ -191,5 +219,40 @@ struct LogLineTests {
         let model = GlobalLogModel(store: t.store)
         await model.load()
         #expect(model.lines.count == 2)
+    }
+}
+
+@Suite struct TrimLogLineTests {
+    private func line(_ e: LogEvent) -> LogLine {
+        LogLine.make(e, id: 0, now: Date(timeIntervalSince1970: 1_800_000_000), zone: TimeZone(identifier: "UTC")!,
+                     locale: Locale(identifier: "en_US_POSIX"))
+    }
+
+    @Test func trimAndRestoreLines() {
+        #expect(line(LogEvent(event: .trimRun, count: 3, bytes: 12_000_000)).text == "Saved space · 3 files · 12 MB")
+        #expect(line(LogEvent(event: .trimRun, count: 1, bytes: 1_000_000)).text == "Saved space · 1 file · 1 MB")
+        #expect(line(LogEvent(event: .attachmentRestored, outcome: .ok, dest: "dropbox")).text
+                == "Downloaded a file from Dropbox")
+        #expect(line(LogEvent(event: .attachmentRestored, outcome: .failed, code: "mismatch", dest: "dropbox")).text
+                == "Download failed · mismatch")
+    }
+}
+
+@Suite struct DownloadLogLineTests {
+    private func line(_ e: LogEvent) -> LogLine {
+        LogLine.make(e, id: 0, now: Date(timeIntervalSince1970: 1_800_000_000), zone: TimeZone(identifier: "UTC")!,
+                     locale: Locale(identifier: "en_US_POSIX"))
+    }
+
+    @Test func downloadLines() {
+        #expect(line(LogEvent(event: .downloadRun, count: 3, dest: "dropbox")).text == "Downloaded 3 captures from Dropbox")
+        #expect(line(LogEvent(event: .downloadRun, count: 1, dest: "dropbox")).text == "Downloaded 1 capture from Dropbox")
+        #expect(line(LogEvent(event: .downloadRun, code: "incomplete_package", count: 0, dest: "filesystem")).text
+                == "Downloaded 0 captures from the Developer folder · incomplete_package")
+        #expect(line(LogEvent(event: .downloadCapture, outcome: .ok, dest: "dropbox")).text == "Downloaded from Dropbox")
+        #expect(line(LogEvent(event: .downloadCapture, outcome: .skipped, code: "outside_window", dest: "dropbox")).text
+                == "Skipped · outside_window")
+        #expect(line(LogEvent(event: .downloadCapture, outcome: .failed, code: "invalid_package", dest: "dropbox")).text
+                == "Couldn't download · invalid_package")
     }
 }

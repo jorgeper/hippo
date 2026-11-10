@@ -32,7 +32,31 @@ public final class SettingsModel {
     public private(set) var statusSummary: String?
 
     /// One line for the Sync section.
-    public var summary: String { Self.summary(counts: counts) }
+    public var summary: String {
+        Self.summary(counts: counts, pendingRemoteDeletes: pendingRemoteDeletes,
+                     needsSignIn: needsReconnect,
+                     reviewPending: reviewPending, destinationName: activeDestination?.displayName)
+    }
+
+    /// The active destination's sign-in state from its provider; set by `refresh()`.
+    public private(set) var accountStatus: ProviderAccountStatus = .ok
+
+    /// The active destination's account holder name from its provider, nil when unknown; set by `refresh()`.
+    /// Shown beside the destination's name, never in a `<name>` slot.
+    public private(set) var accountName: String?
+
+    /// The active destination's sign-in expired: its provider says so, or a job is waiting for a new
+    /// sign-in. Settings then offers "Reconnect <name>" and the summary says why; set by `refresh()`.
+    public private(set) var needsReconnect = false
+
+    /// Captures in the active destination's review queue (they look different there); set by `refresh()`.
+    public private(set) var reviewPending = 0
+
+    /// Delete-everywhere requests not yet applied in the active destination; set by `refresh()`.
+    public private(set) var pendingRemoteDeletes = 0
+
+    /// Captures and bytes of the active destination's trimmed files; set by `refresh()`.
+    public private(set) var trimmedTotals: (captures: Int, bytes: Int64) = (0, 0)
 
     @ObservationIgnored private let store: HippoStore
     @ObservationIgnored private let registry: ProviderRegistry
@@ -97,12 +121,29 @@ public final class SettingsModel {
         if on { await onEnrichmentEnabled(kind) }
     }
 
-    nonisolated static func summary(counts: [SyncBucket: Int]) -> String {
+    nonisolated static func summary(counts: [SyncBucket: Int], pendingRemoteDeletes: Int = 0, needsSignIn: Bool = false,
+                                    reviewPending: Int = 0, destinationName: String? = nil) -> String {
         let attention = counts[.needsAttention] ?? 0, waiting = counts[.notSynced] ?? 0
         var parts: [String] = []
         if attention > 0 { parts.append("\(attention) need attention") }
         if waiting > 0 { parts.append("\(waiting) waiting to upload") }
+        if pendingRemoteDeletes > 0 {
+            let noun = pendingRemoteDeletes == 1 ? "delete" : "deletes"
+            parts.append("\(pendingRemoteDeletes) \(noun) waiting to reach \(destinationName ?? "your storage")")
+        }
+        if needsSignIn { parts.append("Sign in again to \(destinationName ?? "your storage")") }
+        if reviewPending > 0 { parts.append("\(destinationName ?? "Your storage") looks different · review") }
         return parts.isEmpty ? "All captures synced" : parts.joined(separator: " · ")
+    }
+
+    /// The Settings button that connects `p`.
+    public nonisolated static func connectTitle(_ p: any StorageProvider) -> String { "Connect \(p.displayName)" }
+
+    /// The Disconnect confirmation's message.
+    public func disconnectPrompt(name: String) -> String {
+        var text = "Disconnect \(name)? Nothing is deleted on this iPhone or in \(name)."
+        if trimmedTotals.captures > 0 { text += " Files kept only in \(name) can't be downloaded until you reconnect." }
+        return text
     }
 
     private struct Snapshot: Sendable {
@@ -110,6 +151,10 @@ public final class SettingsModel {
         var counts: [SyncBucket: Int]
         var bytes: Int64
         var unfinished: [EnrichmentTask]
+        var pendingDeletes: Int
+        var reviewPending: Int
+        var trimmed: (captures: Int, bytes: Int64)
+        var needsAuthentication: Int
     }
 
     /// Re-reads the destination, sync counts, storage use and location preference.
@@ -118,18 +163,43 @@ public final class SettingsModel {
         locationEnabled = settings.locationEnabled
         let snapshot: Snapshot? = await Task.detached {
             do {
-                return Snapshot(destination: try store.destinations.active(), counts: try store.index.counts(),
+                let destination = try store.destinations.active()
+                return Snapshot(destination: destination, counts: try store.index.counts(),
                                 bytes: StorageUsage.bytes(under: store.layout.root),
-                                unfinished: (try? store.enrichmentTasks.unfinished()) ?? [])
+                                unfinished: (try? store.enrichmentTasks.unfinished()) ?? [],
+                                pendingDeletes: try destination.map {
+                                    try store.remoteState.pendingTombstoneCount(destinationID: $0.id)
+                                } ?? 0,
+                                reviewPending: try destination.map {
+                                    try store.remoteState.reviewItems(destinationID: $0.id).count
+                                } ?? 0,
+                                trimmed: try destination.map { try store.trims.totals(destinationID: $0.id) } ?? (0, 0),
+                                needsAuthentication: try destination.map {
+                                    try store.jobs.count(state: .needsAuthentication, destinationID: $0.id)
+                                } ?? 0)
             } catch {
                 Self.log.error("\("refresh_failed", privacy: .public)")
                 return nil
             }
         }.value
         guard let snapshot else { loadFailed = true; return }
+        let status: ProviderAccountStatus
+        var account: String?
+        if let d = snapshot.destination, let provider = registry.provider(kind: d.providerKind) {
+            status = await provider.accountStatus(d)
+            account = await provider.accountName(d)
+        } else {
+            status = .ok
+        }
         loadFailed = false
+        accountStatus = status
+        accountName = account
+        needsReconnect = status == .needsSignIn || snapshot.needsAuthentication > 0
         activeDestination = snapshot.destination
         counts = snapshot.counts
+        pendingRemoteDeletes = snapshot.pendingDeletes
+        reviewPending = snapshot.reviewPending
+        trimmedTotals = snapshot.trimmed
         storageBytes = snapshot.bytes
         statusSummary = buildStatusSummary(unfinished: snapshot.unfinished)
     }
@@ -177,6 +247,7 @@ public final class SettingsModel {
         let destination = try await p.connect()
         let store = store
         _ = try await Task.detached { try store.destinations.connect(destination) }.value
+        store.log.append(LogEvent(event: .authConnected, dest: p.kind))
         await refresh()
         await syncThenRefresh()
     }
@@ -190,6 +261,7 @@ public final class SettingsModel {
         }
         await registry.provider(kind: active.providerKind)?.signOut(active)
         try await Task.detached { try store.destinations.signOut(destinationID: active.id) }.value
+        store.log.append(LogEvent(event: .authDisconnected, dest: active.providerKind))
         await refresh()
     }
 

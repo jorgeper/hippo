@@ -4,6 +4,9 @@ import CaptureCore
 import SyncEngine
 import ShareIntake
 import HippoPresentation
+#if !HIPPO_SHARE_EXTENSION
+import DropboxAdapter
+#endif
 
 /// Which process opened the environment. Both open the same store in the App Group.
 enum ProcessKind: Sendable {
@@ -73,16 +76,16 @@ struct AppEnvironment: Sendable {
             }
             let store = try HippoStore.open(root: storeRoot, producer: producer,
                                           process: processKind == .shareExtension ? .share : .app)
-            // Plan 3 adds Dropbox to this list.
-            #if DEBUG && !HIPPO_SHARE_EXTENSION
-            let providers: [any StorageProvider] = [DevFolderProvider()]
-            #else
+            #if HIPPO_SHARE_EXTENSION
             let providers: [any StorageProvider] = []
+            #else
+            let providers = processKind == .app ? appProviders(storeRoot: storeRoot) : []
             #endif
             let registry = processKind == .app ? ProviderRegistry(providers) : nil
             let coordinator = registry.map {
                 SyncCoordinator(store: store, registry: $0, ownerPrefix: "app", appVersion: producer.appVersion,
-                                settings: LocationService.settings)
+                                settings: LocationService.settings,
+                                isConstrained: { NetworkStatus.shared.isExpensive })
             }
             return .success(AppEnvironment(processKind: processKind, storeRoot: storeRoot, producer: producer,
                                            store: store, intake: IntakeDirectory(storeRoot: storeRoot),
@@ -92,6 +95,22 @@ struct AppEnvironment: Sendable {
             return .failure(.storeUnavailable)
         }
     }
+
+    #if !HIPPO_SHARE_EXTENSION
+    /// Dropbox first (absent when the build has no app key, i.e. no `Config/Secrets.xcconfig`), then the
+    /// Developer folder in debug builds.
+    private static func appProviders(storeRoot: URL) -> [any StorageProvider] {
+        var providers: [any StorageProvider] = []
+        if let dropbox = DropboxProvider(appKey: Bundle.main.infoDictionary?["HippoDropboxAppKey"] as? String ?? "",
+                                         storeRoot: storeRoot, accessGroup: KeychainTokenStore.sharedAccessGroup()) {
+            providers.append(dropbox)
+        }
+        #if DEBUG
+        providers.append(DevFolderProvider())
+        #endif
+        return providers
+    }
+    #endif
 
     /// App version and build from this bundle's Info.plist (the app and extension share them), and the
     /// OS version as major.minor.patch.

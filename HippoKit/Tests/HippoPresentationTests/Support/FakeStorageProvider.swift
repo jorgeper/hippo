@@ -15,6 +15,8 @@ final class FakeStorageProvider: StorageProvider {
     let faults: FaultPlan
     private let adapter: (@Sendable (Destination) -> any StorageAdapter)?
     private let signOuts = Mutex(0)
+    private let status = Mutex(ProviderAccountStatus.ok)
+    private let account = Mutex<String?>(nil)
 
     init(root: URL, id: String = "dev", kind: String = "filesystem", faults: FaultPlan = FaultPlan(),
          adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil) {
@@ -43,6 +45,14 @@ final class FakeStorageProvider: StorageProvider {
     }
 
     func signOut(_ d: Destination) async { signOuts.withLock { $0 += 1 } }
+
+    /// What `accountStatus` reports; `.ok` until set.
+    func setAccountStatus(_ s: ProviderAccountStatus) { status.withLock { $0 = s } }
+    func accountStatus(_ d: Destination) async -> ProviderAccountStatus { status.withLock { $0 } }
+
+    /// What `accountName` reports; nil until set.
+    func setAccountName(_ name: String?) { account.withLock { $0 = name } }
+    func accountName(_ d: Destination) async -> String? { account.withLock { $0 } }
 }
 
 /// Wraps an adapter and holds the first upload until `release()`; `started()` returns once it is held.
@@ -64,8 +74,17 @@ final class HeldAdapter: StorageAdapter {
     func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
         try await base.listChanges(under: prefix, cursor: cursor)
     }
-    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
-        try await base.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes)
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
+                      progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {
+        try await base.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes, progress: progress)
+    }
+    func deleteFolder(relativePath: String) async throws { try await base.deleteFolder(relativePath: relativePath) }
+    func latestCursor(under prefix: String) async throws -> String { try await base.latestCursor(under: prefix) }
+    func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
+        try await base.listFolder(relativePath: relativePath, recursive: recursive, cursor: cursor)
+    }
+    func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data? {
+        try await base.thumbnail(relativePath: relativePath, maxPixelSize: maxPixelSize)
     }
     func validateDestination() async throws { try await base.validateDestination() }
     func ensureContainer(relativePath: String) async throws { try await base.ensureContainer(relativePath: relativePath) }

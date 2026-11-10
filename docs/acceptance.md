@@ -2,6 +2,8 @@
 
 Scenarios that can only be checked on a real iPhone. Install with `make device`, run each row, then fill in Result (pass, fail with a note, or "not run") and Date. Spec refers to `hippo-v0-spec.md`; design refers to `docs/superpowers/specs/2026-11-07-hippo-v0-design.md`.
 
+Rows 1–24, whose upload halves waited for Dropbox, are re-run in the same device session as the D rows. Design D refers to `docs/superpowers/specs/2026-11-08-hippo-dropbox-design.md` §9.
+
 | # | Scenario | Steps | Expected | Result | Date |
 |---|---|---|---|---|---|
 | 1 | Spec 14.1, offline screenshot (local part; upload waits for Plan 3) | Airplane mode on. Share a screenshot from Photos to Hippo. Open Hippo. | Sheet shows "✓ Saved on this iPhone". The screenshot is in the timeline as "On iPhone". | not run | |
@@ -49,7 +51,20 @@ Scenarios that can only be checked on a real iPhone. Install with `make device`,
 | V4 | Visibility: nothing found | Type a note with nothing to find. Open it in Detail. | The Status lines read "nothing found", not blank. | pass | 2026-11-08 |
 | V5 | Visibility: Activity | Turn on Settings, Developer. Save a capture from the share extension. Open its Activity, then tap Copy and paste somewhere. | Activity shows "saved (share)" through enrichment and upload. The pasted text is readable. | pass | 2026-11-08 |
 | V6 | Visibility: global log | With Developer on, run a sync, let a BG task run, and change an Enrichment switch. Open Settings, Developer, Log. Tap Clear log. | The log shows sync passes, a BG task run and the switch change. Clear log empties it. | pass | 2026-11-08 |
-| V7 | Visibility: log upload (DEBUG build only) | With the Developer folder connected, sync several times. Look in the folder. | `logs/<install-id>/` appears with today's file and grows across syncs. It contains no content. Until Dropbox (Plan 3) exists the only destination is the DEBUG-only Developer folder, so a release build records and shows logs but has nowhere to upload. | pass | 2026-11-08 |
+| V7 | Visibility: log upload (DEBUG build only) | With the Developer folder connected, sync several times. Look in the folder. | `logs/<install-id>/` appears with today's file and grows across syncs. It contains no content. Release builds upload logs to Dropbox (see D12). | pass | 2026-11-08 |
 | V8 | Visibility: relative dates | Save a note saying "tomorrow" on one day. The next day (or after the version bump re-enriches it), open it. | Add to Calendar offers the day after the capture, not the day after today. | pass | 2026-11-08 |
+| D1 | Design §9, connect Dropbox | Connect Dropbox in Settings, Storage. Have some captures saved before connecting. | Captures saved before connecting upload, and `Apps/Hippo/captures/…` appears on the Mac. | not run | |
+| D2 | Design §9, offline uploads and background resume | Save captures in airplane mode, then reconnect. Start uploading a large video and background the app mid-upload. | Airplane-mode captures upload after reconnecting, and the large video resumes after the app is backgrounded mid-upload. | not run | |
+| D3 | Design §9, delete everywhere | Use "Delete everywhere…" on a capture while online. Repeat on another capture while offline, then sync. | Online: the capture is gone from the phone and from Dropbox. Offline: gone from the phone, and from Dropbox after the next sync. | not run | |
+| D4 | Design §9, delete a folder in Dropbox | Have at least 10 synced captures (with fewer, one delete is over the 10 % safety valve and goes to review instead). Delete a capture's folder on the Mac. Sync. | After the next sync the capture is gone from the phone. | not run | |
+| D5 | Design §9, safety valve | Have at least 10 synced captures (25 or more for the 25-folder case). Delete or rename 25 captures' folders, or the whole `captures/` folder, on the Mac. Sync. | The review sheet appears, and nothing is removed until a choice is made. "Keep and upload again" restores them. | not run | |
+| D6 | Design §9, Changed in Dropbox | Edit or delete one attachment on the Mac. Open the capture's Detail. Tap "Upload again from iPhone". | Detail shows "Changed in Dropbox", and "Upload again" restores the missing file. | not run | |
+| D7 | Design §9, Save space | Run Save space with 1 month and 10 MB. | The estimate matches. The videos show thumbnails and "Download", and tapping one restores it. | not run | |
+| D8 | Design §9, Download from Dropbox after reinstall | Delete the app and reinstall it. Run Download from Dropbox (1 month). | Recent captures appear, large files show "Download", and nothing is re-uploaded. | not run | |
+| D13 | Design §9, Download skips captures deleted from this iPhone | On the same phone, "Delete from iPhone" a capture, then run Download from Dropbox. Repeat with "Include them" on. | The sheet says it skips 1 and the capture doesn't come back. With "Include them" on, it does. | not run | |
+| D9 | Design §9, disconnect and second account | Disconnect. Then connect a second account. | Nothing is deleted anywhere. Nothing from the first account is uploaded to the second. | not run | |
+| D10 | Design §9, revoked access | Revoke Hippo's access on dropbox.com. Open Settings. Reconnect. | Settings shows "Reconnect Dropbox", and reconnecting resumes. | not run | |
+| D11 | Design §9, background sync | Save captures and background the app. Wait for a BG task. Check the device crash logs. | Background sync uploads after a BG task, with no 0xdead10cc in the crash logs. | not run | |
+| D12 | Design §9, logs in Dropbox | Sync a few times. Look in `Apps/Hippo/logs/<install-id>/` on the Mac. | Logs appear there and contain no content. | not run | |
 
 Device run 2026-11-08 (Debug build of feat/enrichment-visibility, iPhone 18 Pro, iOS 27): Jorge reported all E and V rows passing. E7, E8, E12 and E15 ask for observed values (provenance, type identifiers, LinkPresentation behaviour); those were not written down and are worth recording on the next run.

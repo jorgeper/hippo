@@ -59,6 +59,22 @@ public final class CaptureIndex: Sendable {
         }
     }
 
+    /// Captures taken before `cutoff` whose every upload job for the destination is `synced` (and that have
+    /// at least one), oldest first.
+    public func capturesSyncedBefore(destinationID: String, cutoff: Date) throws
+        -> [(captureID: String, relativeDirectory: String)] {
+        try db.query("""
+            SELECT c.capture_id, c.relative_directory FROM captures c
+            WHERE c.captured_at_ms < ?
+              AND EXISTS (SELECT 1 FROM jobs j WHERE j.capture_id = c.capture_id AND j.destination_id = ?)
+              AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.capture_id = c.capture_id AND j.destination_id = ?
+                              AND j.state <> 'synced')
+            ORDER BY c.captured_at_ms, c.capture_id
+            """, [.int(Self.ms(cutoff)), .text(destinationID), .text(destinationID)]).map {
+            ($0.string("capture_id") ?? "", $0.string("relative_directory") ?? "")
+        }
+    }
+
     /// The capture's package directory relative to the store root, or nil if it isn't indexed.
     public func relativeDirectory(captureID: String) throws -> String? {
         try db.query("SELECT relative_directory FROM captures WHERE capture_id = ?", [.text(captureID)]).first?

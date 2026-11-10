@@ -12,6 +12,10 @@ if ! grep -Eq '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[A-Z0-9]{10
   exit 1
 fi
 
+if [ ! -f Config/Secrets.xcconfig ]; then
+  echo "warning: Dropbox is not configured; run make dropbox-setup" >&2
+fi
+
 xcodegen generate
 xcodebuild -project Hippo.xcodeproj -scheme Hippo -configuration Debug \
   -destination generic/platform=iOS -derivedDataPath build/DerivedData -allowProvisioningUpdates build

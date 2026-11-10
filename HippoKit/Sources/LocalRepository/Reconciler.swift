@@ -27,8 +27,13 @@ public final class Reconciler: Sendable {
     private let jobs: JobStore
     private let destinations: DestinationStore
 
-    public init(layout: StoreLayout, index: CaptureIndex, jobs: JobStore, destinations: DestinationStore) {
+    /// A capture's trimmed attachment paths, which a package may lack on disk.
+    private let trimmedPaths: @Sendable (String) throws -> Set<String>
+
+    public init(layout: StoreLayout, index: CaptureIndex, jobs: JobStore, destinations: DestinationStore,
+                trimmedPaths: @escaping @Sendable (String) throws -> Set<String> = { _ in [] }) {
         self.layout = layout; self.index = index; self.jobs = jobs; self.destinations = destinations
+        self.trimmedPaths = trimmedPaths
     }
 
     public func run() throws -> RecoveryReport {
@@ -36,6 +41,7 @@ public final class Reconciler: Sendable {
         // One bad item must not stop the rest of the run: each is isolated, counted and logged with a
         // fixed string (never IDs, paths or error text).
         removeAbandonedStaging(into: &report)
+        removeStaleTransfers(into: &report)
 
         // `failed` counts failed operations: a persistent DB failure counts once per listing and per register.
         // Drop rows whose package is gone, so the walk below can re-register a package that came back.
@@ -53,7 +59,9 @@ public final class Reconciler: Sendable {
         do { indexed = Set(try index.indexedDirectories().map(\.captureID)) } catch { itemFailed(&report); indexed = [] }
         for directory in packageDirectories() where !indexed.contains(directory.lastPathComponent) {
             // `load` validates (hashing the package once) and checks the path.
-            guard let package = CommittedPackage.load(directory: directory, layout: layout) else {
+            let trimmed: Set<String>
+            do { trimmed = try trimmedPaths(directory.lastPathComponent) } catch { itemFailed(&report); continue }
+            guard let package = CommittedPackage.load(directory: directory, layout: layout, trimmed: trimmed) else {
                 report.invalidPackages += 1
                 continue
             }
@@ -84,8 +92,31 @@ public final class Reconciler: Sendable {
     /// A log upload copies one file and uploads it; ten minutes is far beyond any live one.
     static let logSnapshotMaxAge: TimeInterval = 600
 
+    /// A transfer file untouched for this long was left by a download that will not resume.
+    static let transferMaxAge: TimeInterval = 7 * 86_400
+
+    /// Removes regular files directly under `transfers/` older than `transferMaxAge`. Nothing else.
+    private func removeStaleTransfers(into report: inout RecoveryReport) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: layout.transfersDir.path) else { return }
+        for name in names.sorted() {
+            let file = layout.transfersDir.appendingPathComponent(name)
+            guard let attributes = try? fm.attributesOfItem(atPath: file.path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  let modified = attributes[.modificationDate] as? Date,
+                  Date().timeIntervalSince(modified) > Self.transferMaxAge else { continue }
+            do {
+                try fm.removeItem(at: file)
+                report.removedStaging += 1
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                // Already gone.
+            } catch { itemFailed(&report) }
+        }
+    }
+
     /// Deletes every `staging/<id>` whose lock is free, and lock files with no directory. A lock held
-    /// by a live writer (a package writer, or a gold pull's `staging/gold-<uuid>`) means "skip".
+    /// by a live writer (a package writer, a gold pull's `staging/gold-<uuid>`, or a remote download's
+    /// `staging/download-<uuid>`) means "skip".
     /// `staging/enrichments/` is not a package: `EnrichmentStore.sweep()` owns it. A log upload's
     /// `staging/log-<uuid>.jsonl` snapshot is removed too once it is older than `logSnapshotMaxAge`: recovery
     /// can run alongside the launch's first sync pass, so a fresh one may belong to a live upload; an old one

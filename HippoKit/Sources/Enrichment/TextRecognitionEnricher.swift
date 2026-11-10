@@ -12,6 +12,7 @@ public struct TextRecognitionEnricher: Enricher {
     public var kind: FacetKind { .textRecognition }
     public var version: Int { 1 }
     public var usesNetwork: Bool { false }
+    public var readsAttachmentBytes: Bool { true }
     public var inputs: Set<FacetKind> { [] }
 
     /// Recognizes one image: its lines in order and the languages seen. Tests substitute a failing one.

@@ -45,9 +45,20 @@ public final class LogUploader: Sendable {
     private let installID: String
     private let adapterFor: @Sendable (Destination) throws -> any StorageAdapter
     private let maxFilesPerPass: Int
+    private let isConstrained: @Sendable () -> Bool
+    private let constrainedMinInterval: TimeInterval
+    private let now: @Sendable () -> Date
 
+    /// While `isConstrained()` (cellular, Low Data Mode), a pass that ran less than `constrainedMinInterval`
+    /// seconds ago returns `throttled` without touching the network, so a whole log is not re-sent every pass.
     public init(layout: StoreLayout, log: ActivityLog, destinations: DestinationStore, installID: String,
-                adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter, maxFilesPerPass: Int = 5) {
+                adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter, maxFilesPerPass: Int = 5,
+                isConstrained: @escaping @Sendable () -> Bool = { false },
+                constrainedMinInterval: TimeInterval = 900,
+                now: @escaping @Sendable () -> Date = Date.init) {
+        self.isConstrained = isConstrained
+        self.constrainedMinInterval = constrainedMinInterval
+        self.now = now
         self.layout = layout
         self.log = log
         self.destinations = destinations
@@ -102,6 +113,12 @@ public final class LogUploader: Sendable {
             return LogUploadResult(uploaded: 0, code: "no_destination")
         }
         var state = Self.readState(layout)
+        // A `last_at` in the future (clock set back) does not throttle.
+        let current = now()
+        if isConstrained(), let last = state.lastAt, last <= current,
+           current.timeIntervalSince(last) < constrainedMinInterval {
+            return LogUploadResult(uploaded: 0, code: "throttled")
+        }
         let fm = FileManager.default
         let present = log.segmentFiles()
         let names = Set(present.map(\.lastPathComponent))
@@ -113,7 +130,7 @@ public final class LogUploader: Sendable {
         }.prefix(maxFilesPerPass)
         guard !candidates.isEmpty else {
             // Nothing changed, but the pass ran: refresh the time the UI shows.
-            state.lastAt = Date()
+            state.lastAt = now()
             state.lastCode = nil
             Self.writeState(state, layout)
             return LogUploadResult(uploaded: 0)
@@ -156,7 +173,7 @@ public final class LogUploader: Sendable {
             code = "upload_failed"
         }
         if !Task.isCancelled || uploaded > 0 {
-            state.lastAt = Date()
+            state.lastAt = now()
             state.lastCode = code
             Self.writeState(state, layout)
         }

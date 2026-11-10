@@ -31,8 +31,16 @@ public struct CaptureDetail: Equatable, Sendable {
     public var captured: [DetailRow]
     public var attachments: [[DetailRow]]
     public var sync: [SyncRow]
+    /// The destination's verdict on this capture; shown first among the sync-layer rows. Nil when there is nothing to say.
+    public var storage: StatusLine?
+    /// Files changed in the destination that "Upload again from iPhone" would put back.
+    public var changedPaths: [String]
+    /// Shown when a changed file was trimmed from this iPhone and is gone from the destination too.
+    public var unrestorableNote: String?
     /// Files offered through Share/Export: every attachment's file.
     public var exportURLs: [URL]
+    /// Trimmed attachments by attachment ID.
+    public var remoteOnly: [String: RemoteOnlyAttachment]
     public var linkCards: [ResolvedLink]
     public var transcripts: [TitledText]
     public var recognizedText: [TitledText]
@@ -48,9 +56,15 @@ public struct CaptureDetail: Equatable, Sendable {
     public var pending: [FacetKind: PendingLine]
 
     /// `now` is accepted for symmetry with the timeline; nothing here is relative to it, because
-    /// ages are measured against the capture time. `calendar.timeZone` is the current zone.
+    /// ages are measured against the capture time. `calendar.timeZone` is the current zone. `accountName` gives the
+    /// account holder's name by destination ID, for a trimmed file whose account isn't the connected one.
     public static func make(metadata m: CaptureMetadata, packageURL: URL, noteBody: String?, jobs: [UploadJob],
                             enrichment: ResolvedEnrichment, tasks: [EnrichmentTask] = [],
+                            changed: RemoteChangedRecord? = nil, trimmedPaths: Set<String> = [],
+                            destinationName: String? = nil,
+                            trimmed: [TrimmedAttachment] = [], thumbnailURL: (String) -> URL? = { _ in nil },
+                            activeDestination: Destination? = nil,
+                            accountName: (String) -> String? = { _ in nil },
                             isEnabled: (FacetKind) -> Bool = { _ in true }, isOnline: Bool = true,
                             goldArrivedAt: Date? = nil, destination: (String) -> Destination?, now: Date,
                             locale: Locale, calendar: Calendar) -> CaptureDetail {
@@ -58,6 +72,23 @@ public struct CaptureDetail: Equatable, Sendable {
             guard (try? PackagePath.validateRelative(a.relativePath)) != nil else { return nil }
             return (a, packageURL.appendingPathComponent(a.relativePath))
         }
+        let remoteOnly = Dictionary(uniqueKeysWithValues: trimmed.compactMap { t -> (String, RemoteOnlyAttachment)? in
+            guard let a = m.attachments.first(where: { $0.attachmentID == t.attachmentID }) else { return nil }
+            let owner = destination(t.destinationID)
+            let name = owner?.displayName
+            let state: RemoteOnlyAttachment.State
+            if t.state == .mismatch {
+                state = .mismatch(message: RemoteOnlyAttachment.mismatchText(destinationName: name))
+            } else if let name, activeDestination?.id == t.destinationID {
+                state = .available(destinationName: name)
+            } else {
+                state = .unavailable(message: RemoteOnlyAttachment.unavailableText(destinationName: name,
+                                                                                accountName: accountName(t.destinationID)))
+            }
+            return (t.attachmentID, RemoteOnlyAttachment(attachmentID: t.attachmentID, relativePath: t.relativePath,
+                                                         byteCount: t.byteCount, thumbnailURL: thumbnailURL(t.attachmentID),
+                                                         symbol: symbol(for: a.uti), state: state))
+        })
         let urls = LinkIdentity.deduplicated(m.urls)
         let links = urls.compactMap { URL(string: $0.url) }
         let sync = jobs.isEmpty ? [SyncRow.unassigned]
@@ -65,16 +96,25 @@ public struct CaptureDetail: Equatable, Sendable {
         let steps = EnrichmentProgress.steps(tasks, isEnabled: isEnabled, isOnline: isOnline, now: now)
         let savedZone = TimeZone(identifier: m.timezoneIdentifier) ?? TimeZone(secondsFromGMT: m.utcOffsetSeconds) ?? .gmt
         return CaptureDetail(
-            preview: preview(metadata: m, files: files, links: links, noteBody: noteBody),
+            preview: preview(metadata: m, files: files, links: links, noteBody: noteBody, remoteOnly: remoteOnly),
             comment: nonEmpty(m.userNote), sharedTitle: nonEmpty(m.sharedTitle), sharedText: nonEmpty(m.sharedText),
             links: links,
             captured: capturedRows(m, enrichment: enrichment, locale: locale, calendar: calendar),
             attachments: m.attachments.enumerated().map {
                 attachmentRows($1, number: $0 + 1, place: enrichment.places[$1.attachmentID],
-                               placeFromServer: enrichment.fromServer.places.contains($1.attachmentID), locale: locale)
+                               placeFromServer: enrichment.fromServer.places.contains($1.attachmentID), locale: locale,
+                               remoteOnly: remoteOnly[$1.attachmentID])
             },
             sync: sync,
-            exportURLs: files.map(\.1),
+            storage: storageLine(jobs: jobs, changed: changed, hasTrimmed: !trimmedPaths.isEmpty, name: destinationName),
+            changedPaths: changed?.paths ?? [],
+            unrestorableNote: destinationName.flatMap { name in
+                (changed?.paths ?? []).contains(where: trimmedPaths.contains)
+                    ? RemoteOnlyAttachment.goneText(destinationName: name)
+                    : nil
+            },
+            exportURLs: files.filter { remoteOnly[$0.0.attachmentID] == nil }.map(\.1),
+            remoteOnly: remoteOnly,
             linkCards: urls.compactMap { enrichment.links[$0.url] },
             transcripts: titled(m, enrichment.transcripts.mapValues(\.text), gold: enrichment.fromServer.transcripts),
             recognizedText: titled(m, enrichment.recognizedText, gold: enrichment.fromServer.recognizedText),
@@ -88,6 +128,20 @@ public struct CaptureDetail: Equatable, Sendable {
             pending: steps.reduce(into: [:]) { out, step in
                 if let line = EnrichmentProgress.pendingLine(step.key, step.value) { out[step.key] = line }
             })
+    }
+
+    private static func storageLine(jobs: [UploadJob], changed: RemoteChangedRecord?, hasTrimmed: Bool,
+                                    name: String?) -> StatusLine? {
+        guard let name, !jobs.isEmpty else { return nil }
+        let line: (String, StatusState)?
+        if changed != nil { line = ("Changed in \(name)", .failed) }
+        else if jobs.contains(where: { $0.state == .uploading }) { line = ("Uploading…", .working) }
+        else if jobs.contains(where: { $0.state == .retryableFailure && $0.lastErrorCode == "offline" }) {
+            line = ("Waiting for a connection", .waiting)
+        } else if hasTrimmed { line = ("Large files in \(name) only", .done) }
+        else if jobs.allSatisfy({ $0.state == .synced }) { line = ("In \(name) · verified", .done) }
+        else { line = nil }
+        return line.map { StatusLine(layer: .sync, text: $0.0, state: $0.1) }
     }
 
     /// Kinds whose shown result came from the server.
@@ -158,9 +212,10 @@ public struct CaptureDetail: Equatable, Sendable {
     // MARK: Preview
 
     private static func preview(metadata m: CaptureMetadata, files: [(Attachment, URL)], links: [URL],
-                                noteBody: String?) -> PreviewKind {
+                                noteBody: String?, remoteOnly: [String: RemoteOnlyAttachment]) -> PreviewKind {
         if m.captureMethod == .typedNote, let noteBody, !noteBody.isEmpty { return .text(noteBody) }
         if let (a, url) = files.first {
+            if let remote = remoteOnly[a.attachmentID] { return .remoteOnly(remote) }
             let name = nonEmpty(a.originalFilename)
             if a.mimeType?.lowercased() == "text/html" { return .file(url, previewable: false, name: name) }
             guard let type = UTType(a.uti) else { return .file(url, previewable: true, name: name) }
@@ -221,8 +276,15 @@ public struct CaptureDetail: Equatable, Sendable {
 
     // MARK: Attachments
 
+    private static func symbol(for uti: String) -> String {
+        guard let type = UTType(uti) else { return "doc" }
+        if type.conforms(to: .image) { return "photo" }
+        if type.conforms(to: .movie) || type.conforms(to: .video) { return "video" }
+        return "doc"
+    }
+
     private static func attachmentRows(_ a: Attachment, number: Int, place: PlaceItem?, placeFromServer: Bool,
-                                       locale: Locale) -> [DetailRow] {
+                                       locale: Locale, remoteOnly: RemoteOnlyAttachment?) -> [DetailRow] {
         var rows: [DetailRow] = []
         rows.append(DetailRow(label: "Name", value: nonEmpty(a.originalFilename) ?? "Attachment \(number)"))
         rows.append(DetailRow(label: "Type", value: nonEmpty(a.mimeType) ?? a.uti))
@@ -241,6 +303,7 @@ public struct CaptureDetail: Equatable, Sendable {
                                   value: DetailFormat.coordinates(latitude: l.latitude, longitude: l.longitude)))
         }
         if let place, let area = PlaceText.area(place) { rows.append(DetailRow(label: "Taken in", value: area, layer: placeFromServer ? .gold : .silver)) }
+        if let remoteOnly { rows.append(DetailRow(label: "Storage", value: remoteOnly.storageText)) }
         return rows
     }
 

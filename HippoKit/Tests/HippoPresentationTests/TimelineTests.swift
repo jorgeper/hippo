@@ -312,3 +312,29 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
         #expect(model.sections.flatMap(\.rows).count == 30)
     }
 }
+
+@MainActor
+struct TimelineReviewTests {
+    @Test func reviewPendingCount() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let dest = Destination(id: "dest-x", providerKind: "dropbox", accountIdentifier: "acct", remoteRoot: "/",
+                               displayName: "Dropbox", status: .active)
+        _ = try t.store.destinations.connect(dest)
+        let a = try await t.note("one", at: now)
+        let b = try await t.note("two", at: now.addingTimeInterval(60))
+        let model = TimelineModel(store: t.store, now: { now }, calendar: calendar, locale: locale)
+        await model.reload()
+        #expect(model.reviewPending == 0 && model.reviewDestinationName == nil)
+
+        try t.store.remoteState.addReviewItems([a, b].map {
+            ReviewItem(captureID: $0.metadata.captureID, destinationID: dest.id, reason: "threshold", createdAt: now)
+        })
+        await model.reload()
+        #expect(model.reviewPending == 2 && model.reviewDestinationName == "Dropbox")
+
+        try t.store.remoteState.clearReview(destinationID: dest.id)
+        await model.reload()
+        #expect(model.reviewPending == 0)
+    }
+}

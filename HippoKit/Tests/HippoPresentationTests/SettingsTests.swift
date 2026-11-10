@@ -25,7 +25,8 @@ private struct Harness {
 
     init(faults: FaultPlan = FaultPlan(), adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil,
          permission: @escaping () async -> Bool = { true }, online: Bool = true,
-         onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in }) throws {
+         onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in },
+         random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) throws {
         t = try TestStore()
         remote = t.base.appendingPathComponent("Remote", isDirectory: true)
         provider = FakeStorageProvider(root: remote, faults: faults, adapter: adapter)
@@ -35,7 +36,7 @@ private struct Harness {
         suite = "hippo-settings-\(UUID().uuidString)"
         settings = AppSettings(defaults: UserDefaults(suiteName: suite)!)
         coordinator = SyncCoordinator(store: t.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0",
-                                      settings: settings)
+                                      settings: settings, random: random)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
                               requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled,
                               isOnline: { online }, now: { Date(timeIntervalSince1970: 1_800_000_000) }, locale: Locale(identifier: "en_US"))
@@ -202,6 +203,118 @@ struct SettingsTests {
         #expect(h.model.statusSummary == "Last sync never")
     }
 
+    @Test func reviewPendingInSummary() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let dest = h.provider.destination
+        _ = try h.t.store.destinations.connect(dest)
+        let p = try await h.t.note("looks different", at: start)
+        try h.t.store.remoteState.addReviewItems([
+            ReviewItem(captureID: p.metadata.captureID, destinationID: dest.id, reason: "threshold", createdAt: start)])
+        await h.model.refresh()
+        #expect(h.model.reviewPending == 1)
+        #expect(h.model.summary.hasSuffix("\(dest.displayName) looks different · review"))
+        try h.t.store.remoteState.clearReview(destinationID: dest.id)
+        await h.model.refresh()
+        #expect(h.model.reviewPending == 0)
+        #expect(!h.model.summary.contains("looks different"))
+        #expect(SettingsModel.summary(counts: [.notSynced: 1], reviewPending: 2, destinationName: "Dropbox")
+                == "1 waiting to upload · Dropbox looks different · review")
+    }
+
+    @Test func trimmedTotalsFeedDisconnectPrompt() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let dest = h.provider.destination
+        _ = try h.t.store.destinations.connect(dest)
+        let p = try await h.t.note("big", at: start)
+        await h.model.refresh()
+        #expect(h.model.trimmedTotals.captures == 0)
+        #expect(h.model.disconnectPrompt(name: "Dropbox")
+                == "Disconnect Dropbox? Nothing is deleted on this iPhone or in Dropbox.")
+        let a = try #require(p.metadata.attachments.first)
+        try h.t.store.trims.record(TrimmedAttachment(captureID: p.metadata.captureID, attachmentID: a.attachmentID,
+                                                     relativePath: a.relativePath, byteCount: 4_000, sha256: "x",
+                                                     destinationID: dest.id, state: .trimmed, trimmedAt: start))
+        await h.model.refresh()
+        #expect(h.model.trimmedTotals.captures == 1 && h.model.trimmedTotals.bytes == 4_000)
+        #expect(h.model.disconnectPrompt(name: "Dropbox")
+                == "Disconnect Dropbox? Nothing is deleted on this iPhone or in Dropbox. Files kept only in Dropbox can't be downloaded until you reconnect.")
+    }
+
+    @Test func needsSignInShowsInSummary() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        let dest = h.provider.destination
+        _ = try h.t.store.destinations.connect(dest)
+        await h.model.refresh()
+        #expect(h.model.accountStatus == .ok)
+        #expect(!h.model.needsReconnect)
+        #expect(!h.model.summary.contains("Sign in again"))
+
+        h.provider.setAccountStatus(.needsSignIn)
+        await h.model.refresh()
+        #expect(h.model.accountStatus == .needsSignIn)
+        #expect(h.model.needsReconnect)
+        #expect(h.model.summary.contains("Sign in again to Developer folder"))
+
+        // A job that failed for lack of sign-in says so too, even while the provider reports `.ok`.
+        h.provider.setAccountStatus(.ok)
+        let p = try await h.t.note("waiting for sign-in", at: start)
+        let job = try #require(try h.t.store.jobs.claimNext(owner: "w", now: Date(), lease: 60))
+        #expect(job.captureID == p.metadata.captureID)
+        try h.t.store.jobs.markFailed(jobID: job.jobID, owner: "w", state: .needsAuthentication,
+                                      errorCode: "needs_authentication", nextAttemptAt: nil)
+        await h.model.refresh()
+        #expect(h.model.accountStatus == .ok)
+        #expect(h.model.needsReconnect)
+        #expect(h.model.summary.contains("Sign in again to Developer folder"))
+        #expect(SettingsModel.summary(counts: [:], pendingRemoteDeletes: 1, needsSignIn: true, reviewPending: 1,
+                                      destinationName: "Dropbox")
+                == "1 delete waiting to reach Dropbox · Sign in again to Dropbox · Dropbox looks different · review")
+    }
+
+    @Test func refreshReadsTheAccountNameApartFromTheDestinationName() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        try await h.model.connect(h.provider)
+        #expect(h.model.accountName == nil)
+
+        h.provider.setAccountName("Sample Holder")
+        await h.model.refresh()
+        #expect(h.model.accountName == "Sample Holder")
+        // Every `<name>` slot keeps reading the destination's (provider's) name.
+        #expect(h.model.activeDestination?.displayName == "Developer folder")
+        #expect(h.model.disconnectPrompt(name: "Developer folder")
+                == "Disconnect Developer folder? Nothing is deleted on this iPhone or in Developer folder.")
+
+        try await h.model.signOut()
+        #expect(h.model.accountName == nil)
+
+        // Provider-specific connect behaviour defaults off (Dropbox turns both on).
+        let provider: any StorageProvider = h.provider
+        #expect(!provider.explainsBeforeConnect)
+        #expect(!provider.isUserCancellation(CancellationError()))
+    }
+
+    @Test func connectAndDisconnectAreLogged() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        #expect(SettingsModel.connectTitle(h.provider) == "Connect Developer folder")
+        try await h.model.connect(h.provider)
+        try await h.model.signOut()
+        let all = h.t.store.log.globalEvents(limit: 100, before: nil)
+        let auth = all.filter { [.authConnected, .authDisconnected].contains($0.event) }.reversed()
+        #expect(auth.map(\.event) == [.authConnected, .authDisconnected])
+        #expect(auth.allSatisfy { $0.dest == "filesystem" })
+        let dest = h.provider.destination
+        for e in all {
+            let line = String(decoding: try JSONEncoder().encode(e), as: UTF8.self).lowercased()
+            #expect(!line.contains(dest.displayName.lowercased()), "\(e.event)")
+            #expect(!line.contains(dest.accountIdentifier.lowercased()), "\(e.event)")
+        }
+    }
+
     @Test func connectBindsUnassignedAndSyncs() async throws {
         let h = try Harness()
         defer { h.cleanup() }
@@ -219,6 +332,26 @@ struct SettingsTests {
         #expect(h.model.counts[.synced] == 1)
         #expect(h.model.summary == "All captures synced")
         #expect(FileManager.default.fileExists(atPath: h.t.store.layout.diagnosticsURL.path))
+    }
+
+    @Test func pendingDeletesInSummary() async throws {
+        let h = try Harness()
+        defer { h.cleanup() }
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        let dest = h.provider.destination
+        for id in ["a", "b"] {
+            try h.t.store.remoteState.addTombstone(captureID: id, relativeDirectory: "captures/2026/11/08/\(id)",
+                                                   destinationID: dest.id, accountIdentifier: dest.accountIdentifier,
+                                                   now: Date())
+        }
+        await h.model.refresh()
+        #expect(h.model.pendingRemoteDeletes == 2)
+        #expect(h.model.summary == "2 deletes waiting to reach \(dest.displayName)")
+        try h.t.store.remoteState.removeTombstone(captureID: "b")
+        await h.model.refresh()
+        #expect(h.model.summary == "1 delete waiting to reach \(dest.displayName)")
+        #expect(SettingsModel.summary(counts: [.notSynced: 1], pendingRemoteDeletes: 1, destinationName: "Dropbox")
+                == "1 waiting to upload · 1 delete waiting to reach Dropbox")
     }
 
     @Test func passUploadsSilverAfterPackagesWithoutChangingTheResult() async throws {
@@ -501,6 +634,22 @@ struct SettingsTests {
 
         #expect(try h.states(p) == [.synced])
         #expect(h.model.summary == "All captures synced")
+    }
+
+    @Test func coordinatorExposesNextRetry() async throws {
+        let faults = FaultPlan()
+        // Full jitter: the retry delay is the policy's whole first-attempt ceiling, never a near-zero draw.
+        let h = try Harness(faults: faults, random: { 1 })
+        defer { h.cleanup() }
+        #expect(await h.coordinator.nextRetryAt() == nil)
+        let p = try await h.t.note("offline", at: start)
+        let first = try #require(p.marker.files.first { $0.relativePath != "complete.json" })
+        faults.failBeforeWrite("\(p.relativeDirectory)/\(first.relativePath)", .offline)
+        _ = try h.t.store.destinations.connect(h.provider.destination)
+        _ = await h.coordinator.syncNow()
+        #expect(try h.states(p) == [.retryableFailure])
+        let next = try #require(await h.coordinator.nextRetryAt())
+        #expect(next > Date().addingTimeInterval(RetryPolicy().base / 2))
     }
 
     @Test func uploadExistingCopiesToNewDestination() async throws {

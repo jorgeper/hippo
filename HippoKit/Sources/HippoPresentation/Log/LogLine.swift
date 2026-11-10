@@ -116,6 +116,43 @@ public struct LogLine: Equatable, Sendable, Identifiable {
         case .silverUploadFailed, .packageUploadFailed:
             let d = destination(e.dest).map { "Upload to \($0) failed" } ?? "Upload failed"
             return join([d, e.code])
+        case .remoteDelete:
+            let d = destination(e.dest) ?? "storage"
+            switch e.outcome {
+            case nil: return "Delete queued for \(d)"
+            case .ok?: return "Deleted in \(d)"
+            default: return join(["Delete in \(d) failed", e.code])
+            }
+        case .remoteChanged:
+            if e.code == "unverified" { return "Not removed: upload not verified" }
+            return "Changed in \(destination(e.dest) ?? "storage")"
+        case .remoteReview:
+            let d = destination(e.dest) ?? "storage"
+            let head = d.prefix(1).uppercased() + d.dropFirst() + " looks different"
+            return join([head, e.count.map { "\($0) \($0 == 1 ? "capture" : "captures") to review" }])
+        case .trimRun:
+            let n = e.count ?? 0
+            let size = ByteCountFormatter.string(fromByteCount: e.bytes ?? 0, countStyle: .file)
+            return join(["Saved space", "\(n) \(n == 1 ? "file" : "files")", size])
+        case .attachmentRestored:
+            let d = destination(e.dest).map { " from \($0)" } ?? ""
+            if e.outcome == .failed { return join(["Download failed", e.code]) }
+            return "Downloaded a file" + d
+        case .downloadRun:
+            let n = e.count ?? 0
+            let d = destination(e.dest).map { " from \($0)" } ?? ""
+            return join(["Downloaded \(n) \(n == 1 ? "capture" : "captures")" + d, e.code])
+        case .downloadCapture:
+            switch e.outcome {
+            case .ok?, nil: return "Downloaded" + (destination(e.dest).map { " from \($0)" } ?? "")
+            case .skipped?: return join(["Skipped", e.code])
+            default: return join(["Couldn't download", e.code])
+            }
+        case .authConnected: return "Connected " + (destination(e.dest) ?? "storage")
+        case .authDisconnected: return "Disconnected " + (destination(e.dest) ?? "storage")
+        case .authRefreshFailed:
+            guard let d = destination(e.dest) else { return "Sign-in expired" }
+            return d.prefix(1).uppercased() + d.dropFirst() + " sign-in expired"
         case .goldApplied: return "Server results applied"
         case .goldRemoved: return "Server results removed"
         case .goldSkipped: return join(["Server results skipped", e.code])

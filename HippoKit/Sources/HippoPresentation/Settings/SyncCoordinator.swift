@@ -21,8 +21,10 @@ public actor SyncCoordinator {
 
     private let store: HippoStore
     private let worker: SyncWorker
+    private let deleter: RemoteDeleter
     private let uploader: EnrichmentUploader
     private let puller: GoldPuller
+    private let detector: RemoteChangeDetector
     private let logUploader: LogUploader
     private let settings: AppSettings
     private let appVersion: String
@@ -45,15 +47,27 @@ public actor SyncCoordinator {
     /// True while a pass is running or a follow-up is waiting.
     public var isBusy: Bool { running != nil || pending != nil }
 
+    /// `random` draws the upload retry jitter (0...1); tests pass a constant.
     public init(store: HippoStore, registry: ProviderRegistry, ownerPrefix: String, appVersion: String,
-                settings: AppSettings) {
+                settings: AppSettings, isConstrained: @escaping @Sendable () -> Bool = { false },
+                random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) {
         self.store = store
         self.settings = settings
         self.appVersion = appVersion
-        worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix)
+        worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix, random: random)
+        deleter = store.makeRemoteDeleter(adapterFor: { try registry.adapter(for: $0) })
         uploader = store.makeEnrichmentUploader(adapterFor: { try registry.adapter(for: $0) })
         puller = store.makeGoldPuller(adapterFor: { try registry.adapter(for: $0) })
-        logUploader = store.makeLogUploader(installID: settings.installID, adapterFor: { try registry.adapter(for: $0) })
+        detector = store.makeChangeDetector(adapterFor: { try registry.adapter(for: $0) })
+        logUploader = store.makeLogUploader(installID: settings.installID, adapterFor: { try registry.adapter(for: $0) },
+                                          isConstrained: isConstrained)
+    }
+
+    /// When the earliest waiting retry of the connected destination is due, or nil when nothing waits
+    /// or nothing is connected.
+    public func nextRetryAt() -> Date? {
+        guard let active = try? store.destinations.active() else { return nil }
+        return try? store.jobs.nextAttemptAt(destinationID: active.id)
     }
 
     /// Runs a pass, or joins the follow-up pass when one is already running, and returns that pass's
@@ -146,6 +160,9 @@ public actor SyncCoordinator {
     private func runPass() async -> (result: SyncPassResult, moreWork: Bool) {
         var total = Self.nothingDone
         var moreWork = true
+        // Delete-everywhere tombstones go first, so a deleted capture is never uploaded again. They never
+        // change the pass result or the follow-up decision.
+        if !Task.isCancelled { _ = await deleter.runOnce() }
         for _ in 0..<Self.maxRounds {
             if Task.isCancelled { moreWork = false; break }
             let round = await worker.runOnce()
@@ -164,6 +181,8 @@ public actor SyncCoordinator {
         }
         // Gold pulls never change the pass result or the follow-up decision either.
         if !Task.isCancelled { _ = await puller.pull() }
+        // Deletes and changes made in the destination, after this pass's uploads; never change the result.
+        if !Task.isCancelled { _ = await detector.run() }
         // Log uploads are not events and never change the pass result.
         if !Task.isCancelled { _ = await logUploader.upload() }
         store.log.prune()

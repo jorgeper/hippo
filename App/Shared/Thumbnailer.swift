@@ -7,9 +7,12 @@ actor Thumbnailer {
     private let cache = NSCache<NSString, UIImage>()
     private var failed = Set<String>()
     private let packageURL: @Sendable (String) -> URL
+    /// Where the kept thumbnail of a trimmed attachment lives, by attachment ID.
+    private let keptThumbnailURL: @Sendable (String) -> URL
 
-    init(layoutURL: @escaping @Sendable (String) -> URL) {
+    init(layoutURL: @escaping @Sendable (String) -> URL, thumbnailURL: @escaping @Sendable (String) -> URL) {
         packageURL = layoutURL
+        keptThumbnailURL = thumbnailURL
         cache.countLimit = 300
     }
 
@@ -19,6 +22,14 @@ actor Thumbnailer {
         if let cached = cache.object(forKey: key) { return cached }
         if failed.contains(key as String) { return nil }
         let url = packageURL(relativeDirectory).appendingPathComponent(path)
+        // A trimmed attachment's file is gone: use the thumbnail kept when it was trimmed (the file's name
+        // stem is the attachment ID). Neither outcome is cached as a failure: a restore brings the file back.
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            let kept = keptThumbnailURL(url.deletingPathExtension().lastPathComponent)
+            guard let image = UIImage(contentsOfFile: kept.path) else { return nil }
+            cache.setObject(image, forKey: key)
+            return image
+        }
         let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: 60, height: 60), scale: scale,
                                                    representationTypes: .thumbnail)
         let representation: QLThumbnailRepresentation

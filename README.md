@@ -5,7 +5,7 @@ Hippo is a fast, local-first iPhone capture app that replaces emailing yourself 
 - Spec: [`hippo-v0-spec.md`](hippo-v0-spec.md)
 - Design (where it differs from the spec, it wins): [`docs/superpowers/specs/2026-11-07-hippo-v0-design.md`](docs/superpowers/specs/2026-11-07-hippo-v0-design.md)
 
-**Status:** `HippoKit` (the core Swift package) and the iPhone app with its Share Extension exist. The app saves captures locally and syncs them to a DEBUG-only Developer folder; the Dropbox adapter (Plan 3) is not built yet, so nothing leaves the iPhone in a release build.
+**Status:** `HippoKit` (the core Swift package) and the iPhone app with its Share Extension exist. The app saves captures locally and syncs them to Dropbox (when an app key is configured; see [Dropbox](#dropbox)) and, in DEBUG builds, to a Developer folder. Release builds upload to Dropbox.
 
 ## The iPhone app
 
@@ -23,10 +23,15 @@ Timeline of captures, a detail view, a note editor, a voice recorder, a Share Ex
 2. Find your team ID in Xcode under Settings > Accounts (select your team; the ID is the 10-character value shown for it), or on the Membership page of the Apple developer portal. A free Personal Team works.
 3. Keep the ID only in `Config/Local.xcconfig`. Never put it in `project.yml`, the README, or any committed file.
 
+### Dropbox setup
+
+Dropbox is optional; without it the app still builds and the Dropbox provider is simply absent. To enable it, run `make dropbox-setup` ([`scripts/setup-dropbox.sh`](scripts/setup-dropbox.sh)). It walks you through creating the app in the Dropbox App Console (scoped access, App folder "Hippo", the four permissions, the `db-<APP KEY>://2/token` redirect URI), stores the app key in the gitignored `Config/Secrets.xcconfig`, and can optionally sign in once to write a refresh token to the gitignored `.env` for integration tests. It never prints tokens or codes; the app key is a public client ID and appears in the sign-in URL. Afterwards run `make generate`. See [ADR 0002](docs/adr/0002-dropbox-direct-http.md) for why the adapter talks to the Dropbox HTTP API directly.
+
 ### Commands
 
 | Command | What it does |
 |---|---|
+| `make dropbox-setup` | Guided Dropbox app-key setup (writes `Config/Secrets.xcconfig`). |
 | `make device` | Build and install on a connected iPhone (needs `Config/Local.xcconfig`). |
 | `make sim` | Build, install and launch in the Simulator with the fixture captures. |
 | `make test` | HippoKit unit tests on the Mac. |
@@ -57,8 +62,55 @@ Hippo saves a location with a capture only if you turn on "Save location with ca
 - Email capture is limited to what the email app shares. If an email app shares nothing useful, use Print, then Share as PDF from the print preview, and share that PDF to Hippo.
 - The free-account 7-day reinstall applies (see above).
 - Uploads are a copy, not a backup policy. Deleting the app deletes local captures that have not been uploaded.
-- A new install does not rebuild the library from Dropbox.
+- A new install starts empty; Settings → Download from Dropbox brings recent captures back in light form.
 - Background upload timing is up to iOS.
+
+## Dropbox
+
+Dropbox is the first real destination. It is optional: without an app key the provider is absent and the app still builds. The adapter talks to the Dropbox HTTP API directly ([ADR 0002](docs/adr/0002-dropbox-direct-http.md)); the design is in [`docs/superpowers/specs/2026-11-08-hippo-dropbox-design.md`](docs/superpowers/specs/2026-11-08-hippo-dropbox-design.md).
+
+### Setup
+
+Run `make dropbox-setup` (see [Dropbox setup](#dropbox-setup) above for what it does). It writes the app key to the gitignored `Config/Secrets.xcconfig` (`HIPPO_DROPBOX_APP_KEY`) and, if you choose, a refresh token to the gitignored `.env` (`HIPPO_DROPBOX_APP_KEY`, `HIPPO_DROPBOX_REFRESH_TOKEN`) for the integration tests. Never commit either file; `Config/Secrets.example.xcconfig` and `.env.example` hold placeholders. Then run `make generate`.
+
+### Connect and disconnect
+
+With the key present, Settings, Storage offers "Connect Dropbox" (PKCE sign-in in a system web sheet). Once connected it shows "Dropbox" with the account's display name beside it, "Save space…", "Download from Dropbox…" and "Disconnect". Captures saved before connecting upload too. Disconnecting deletes nothing anywhere, and a second account never receives the first account's captures. If access is revoked on dropbox.com, Settings shows "Reconnect Dropbox".
+
+### What lands where
+
+Under `Apps/Hippo/` in your Dropbox:
+
+- `captures/YYYY/MM/DD/<capture-id>/`: the capture packages;
+- `enrichments/device/YYYY/MM/DD/<capture-id>/`: the phone's enrichment;
+- `logs/<install-id>/`: the content-free logs.
+
+### Deleting, both ways
+
+- On the phone, Detail offers "Delete from iPhone…" (the Dropbox copy stays) and "Delete everywhere…". The second writes a tombstone and removes the Dropbox copy; if you are offline, the next sync applies it.
+- Deleting in Dropbox (a capture's folder, or its `complete.json`) removes the capture from the phone on the next sync.
+- Safety valve: if a sync would remove more than 20 captures or 10 % of synced captures, or the `captures/` root has gone missing, or Dropbox reports a cursor reset, nothing is applied. A "Dropbox looks different" review is queued instead, and nothing is removed until you choose. "Keep and upload again" restores them.
+- If a file inside a capture is edited or deleted in Dropbox, Detail shows "Changed in Dropbox" with "Upload again from iPhone".
+
+### Save space
+
+Settings, Storage, "Save space…" has "older than" and "larger than" pickers. It trims only files verified in Dropbox after a fresh check, and keeps thumbnails. A trimmed attachment shows "In Dropbox · Download (<size>)"; downloading happens on tap and is checked against its SHA-256.
+
+### Download from Dropbox
+
+Settings, Storage, "Download from Dropbox…" brings captures back, for example on a new install. Pick "From the last" window. Downloads are in light form: attachments up to 10 MiB come down, larger ones stay remote-only with a Download button. Captures you removed with "Delete from iPhone" are skipped unless "Include them" is on. Downloaded captures are never re-uploaded.
+
+### When it syncs
+
+On launch, on activation, while the app is open, when connectivity returns, on a foreground retry timer, in iOS background tasks, and through background `URLSession` uploads. On cellular, log uploads happen at most once every 15 minutes.
+
+### Known limits
+
+- A background upload still in flight when you "Delete everywhere" can finish a few seconds later and leave that file in Dropbox without the capture's `complete.json`; readers ignore packages without the marker, so it is clutter, not a capture, and you can delete it on dropbox.com.
+
+### Integration tests
+
+`HippoKit/Tests/AdapterContractTests/DropboxAdapterContractTests.swift` runs only when `.env` exists. It writes under `Apps/Hippo/_hippo-test/<run-id>/` and deletes that folder afterwards.
 
 ## Enrichment
 
@@ -99,7 +151,7 @@ Redirects are followed one hop at a time before LinkPresentation is called, and 
 
 ### Server and Dropbox
 
-The server that produces gold is not built yet. The phone already pulls and shows gold from the Developer folder. The Dropbox adapter (Plan 3) must implement `replaceFile` (overwrite, under `enrichments/` and `logs/` only), `listChanges` and `downloadFile`, as `FilesystemAdapter` does.
+The server that produces gold is not built yet. The phone already pulls and shows gold from the Developer folder and from Dropbox (`enrichments/server/…`).
 
 ## Seeing what enrichment did
 
@@ -108,7 +160,6 @@ The server that produces gold is not built yet. The phone already pulls and show
 - **Status.** Detail has a Status section with one line per step. The Settings Sync footer sums up: "being processed", "waiting for a connection", "waiting to retry", "couldn't be processed".
 - **Developer mode.** Settings, Developer (off by default, also in release builds) adds Log (everything, newest first, with Clear log) and, in Detail, Activity (one capture, oldest first). Both have a Copy button, to paste into a Claude session.
 - **Log files.** The phone writes `Library/Application Support/Hippo/logs/YYYY-MM-DD.jsonl` (UTC days, with `.1`, `.2` segments after Clear). It keeps 30 days, 2 MB per segment. After each sync pass the files are uploaded to `logs/<install-id>/` in the destination, and the phone never deletes them there. Logs contain no capture content. The format is in [`docs/log-format.md`](docs/log-format.md).
-- Until Dropbox (Plan 3) exists, the only destination is the DEBUG-only Developer folder, so release builds keep logs but have nowhere to upload them.
 - Relative dates such as "tomorrow" are read against the day the capture was made.
 
 ## HippoKit
@@ -123,6 +174,7 @@ The server that produces gold is not built yet. The phone already pulls and show
 | `LocalRepository` | The on-phone SQLite store: `Database`, `CaptureIndex` (timeline, filters, full-text search), `JobStore` (upload jobs, leases, receipts, checkpoints), `DestinationStore` (accounts and binding rules), `Reconciler` (startup recovery), `Diagnostics`. |
 | `SyncEngine` | The `StorageAdapter` contract, `SyncWorker` (marker-last uploads, retry policy), and `HippoStore`, the facade the app and Share Extension use for everything. |
 | `FilesystemAdapter` | A `StorageAdapter` that writes to a local folder, with `FaultPlan` for injected failures. For development and contract tests; not a cloud provider. |
+| `DropboxAdapter` | Dropbox-specific code: the Dropbox `StorageAdapter` over the HTTP API, PKCE sign-in and token refresh, the token stores, background-session uploads and the content hash. The only HippoKit module that may know about Dropbox. |
 | `HippoTestSupport` | Generates small media files (images, audio, video, PDF) for tests and fixtures. |
 | `hippo-fixtures` | Command-line tool that regenerates the committed fixture packages. |
 

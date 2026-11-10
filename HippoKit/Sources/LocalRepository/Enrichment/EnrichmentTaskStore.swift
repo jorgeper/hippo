@@ -37,6 +37,14 @@ public final class EnrichmentTaskStore: Sendable {
             .compactMap { $0.string("capture_id") }
     }
 
+    /// Deletes the capture's `not_applicable` rows for `kinds`, so the next scheduling pass reconsiders them.
+    public func clearNotApplicable(captureID: String, kinds: [FacetKind]) throws {
+        for kind in kinds {
+            try db.execute("DELETE FROM enrichment_tasks WHERE capture_id = ? AND kind = ? AND status = 'not_applicable'",
+                           [.text(captureID), .text(kind.rawValue)])
+        }
+    }
+
     /// Creates or replaces the row, resetting attempts, the retry time and the error.
     public func set(captureID: String, kind: FacetKind, version: Int, status: String, now: Date) throws {
         try db.execute("""

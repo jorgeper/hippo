@@ -15,6 +15,15 @@ public struct StoreLayout: Sendable {
     /// The event log: `logs/YYYY-MM-DD[.N].jsonl` plus bookkeeping. Never inside `captures/` or `enrichments/`.
     public var logsDir: URL { root.appendingPathComponent("logs", isDirectory: true) }
 
+    /// Cached thumbnails of attachments whose originals were trimmed: `thumbnails/<attachment-id>.jpg`.
+    public var thumbnailsDir: URL { root.appendingPathComponent("thumbnails", isDirectory: true) }
+    /// Partial downloads and other transfer scratch files; the reconciler removes old ones.
+    public var transfersDir: URL { root.appendingPathComponent("transfers", isDirectory: true) }
+
+    public func thumbnailURL(attachmentID: String) -> URL {
+        thumbnailsDir.appendingPathComponent("\(attachmentID).jpg")
+    }
+
     /// Local silver and gold, outside the packages: `enrichments/<layer>/<capture-id>/`.
     public var enrichmentsDir: URL { root.appendingPathComponent("enrichments", isDirectory: true) }
     /// Where enrichment directories are built before they are swapped into place.

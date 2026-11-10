@@ -2,3 +2,8 @@
 // DEVELOPMENT_TEAM is per developer and lives only in the gitignored Local.xcconfig;
 // copy Local.example.xcconfig to Local.xcconfig and put your team ID in it.
 #include? "Local.xcconfig"
+
+// Dropbox app key. Empty means Dropbox is not configured and the provider is absent.
+// Secrets.xcconfig (gitignored, written by `make dropbox-setup`) overrides it.
+HIPPO_DROPBOX_APP_KEY =
+#include? "Secrets.xcconfig"

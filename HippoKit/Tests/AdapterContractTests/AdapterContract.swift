@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import CryptoKit
 import SyncEngine
+import HippoTestSupport
 
 private struct StopAfterCheckpoint: Error {}
 private struct CallerSignal: Error, Equatable { let tag: Int }
@@ -127,6 +128,7 @@ func runAdapterContract(makeAdapter: () async throws -> any StorageAdapter, scra
     }
 
     try await runReplaceListDownloadContract(adapter: adapter, scratch: scratch)
+    try await runFolderOperationsContract(adapter: adapter, scratch: scratch)
 }
 
 private func runReplaceListDownloadContract(adapter: any StorageAdapter, scratch: URL) async throws {
@@ -242,4 +244,127 @@ private extension RemoteChange {
         case .deleted(let path): "deleted:\(path)"
         }
     }
+}
+
+private final class ProgressBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v: [Int64] = []
+    func add(_ n: Int64) { lock.lock(); v.append(n); lock.unlock() }
+    var all: [Int64] { lock.lock(); defer { lock.unlock() }; return v }
+}
+
+private func listAll(_ adapter: any StorageAdapter, _ path: String, recursive: Bool) async throws -> [RemoteEntry] {
+    var entries: [RemoteEntry] = []
+    var cursor: String?
+    while true {
+        let page = try await adapter.listFolder(relativePath: path, recursive: recursive, cursor: cursor)
+        entries += page.entries
+        guard page.hasMore else { break }
+        cursor = page.cursor
+    }
+    return entries
+}
+
+/// Folder deletion, the "changes from now" cursor, folder listing, thumbnails and download progress.
+private func runFolderOperationsContract(adapter: any StorageAdapter, scratch: URL) async throws {
+    let ignore: @Sendable (UploadCheckpoint) async throws -> Void = { _ in }
+    func upload(_ path: String, bytes: Int, seed: UInt8) async throws -> FileIntegrity {
+        let (url, integrity) = try makeFile(scratch, "f-\(UUID().uuidString).bin", bytes: bytes, seed: seed)
+        _ = try await adapter.uploadFile(localURL: url, relativePath: path, expected: integrity,
+                                         checkpoint: nil, saveCheckpoint: ignore)
+        return integrity
+    }
+
+    // deleteFolder: recursive, idempotent, scoped.
+    let doomed = "captures/2026/11/07/doomed"
+    _ = try await upload("\(doomed)/content/one.bin", bytes: 100, seed: 21)
+    _ = try await upload("\(doomed)/metadata.json", bytes: 50, seed: 22)
+    try await adapter.deleteFolder(relativePath: doomed)
+    #expect(try await adapter.inspectFile(relativePath: "\(doomed)/content/one.bin") == nil)
+    #expect(try await adapter.inspectFile(relativePath: "\(doomed)/metadata.json") == nil)
+    try await adapter.deleteFolder(relativePath: doomed)
+    try await adapter.deleteFolder(relativePath: "captures/2026/11/07/never")
+    for p in ["captures", "enrichments", "logs/abc", "other/x"] {
+        await #expect(throws: StorageError.permanent(code: "delete_not_allowed")) {
+            try await adapter.deleteFolder(relativePath: p)
+        }
+    }
+    await #expect(throws: StorageError.permanent(code: "invalid_path")) {
+        try await adapter.deleteFolder(relativePath: "captures/../x")
+    }
+
+    // latestCursor: only what happens after it is reported.
+    let cursor = try await adapter.latestCursor(under: "captures/")
+    #expect(!cursor.isEmpty)
+    let quiet = try await adapter.listChanges(under: "captures/", cursor: cursor)
+    #expect(quiet.changes.isEmpty)
+    let fresh = "captures/2026/12/01/fresh/content/new.bin"
+    _ = try await upload(fresh, bytes: 64, seed: 23)
+    var seen: [String] = []
+    var next = quiet.cursor
+    var more = true
+    while more {
+        let page = try await adapter.listChanges(under: "captures/", cursor: next)
+        seen += page.changes.compactMap { if case .upserted(let i) = $0 { i.relativePath } else { nil } }
+        next = page.cursor
+        more = page.hasMore
+    }
+    #expect(seen == [fresh])
+
+    // latestCursor on a prefix that doesn't exist yet creates it.
+    let freshPrefix = "enrichments/fresh-\(UUID().uuidString.lowercased())/"
+    let freshCursor = try await adapter.latestCursor(under: freshPrefix)
+    #expect(!freshCursor.isEmpty)
+    let freshQuiet = try await adapter.listChanges(under: freshPrefix, cursor: freshCursor)
+    #expect(freshQuiet.changes.isEmpty)
+    let freshFile = "\(freshPrefix)later.bin"
+    _ = try await upload(freshFile, bytes: 40, seed: 24)
+    let freshNext = try await adapter.listChanges(under: freshPrefix, cursor: freshQuiet.cursor)
+    #expect(freshNext.changes.map(\.upsertedPath) == [freshFile])
+
+    // listFolder.
+    let base = "captures/2026/12/02"
+    _ = try await upload("\(base)/aaa/content/x.bin", bytes: 120, seed: 31)
+    _ = try await upload("\(base)/aaa/metadata.json", bytes: 30, seed: 32)
+    _ = try await upload("\(base)/bbb/content/y.bin", bytes: 200, seed: 33)
+    let deep = try await listAll(adapter, base, recursive: true)
+    let files = Dictionary(uniqueKeysWithValues: deep.filter { !$0.isFolder }.map { ($0.relativePath, $0.byteCount) })
+    #expect(files == ["\(base)/aaa/content/x.bin": 120, "\(base)/aaa/metadata.json": 30, "\(base)/bbb/content/y.bin": 200])
+    let folders = Set(deep.filter(\.isFolder).map(\.relativePath))
+    #expect(folders.isSuperset(of: ["\(base)/aaa", "\(base)/aaa/content", "\(base)/bbb", "\(base)/bbb/content"]))
+    let shallow = try await listAll(adapter, base, recursive: false)
+    #expect(Set(shallow.map(\.relativePath)) == ["\(base)/aaa", "\(base)/bbb"])
+    #expect(shallow.allSatisfy { $0.isFolder })
+    let aaa = try await listAll(adapter, "\(base)/aaa", recursive: false)
+    #expect(Set(aaa.map(\.relativePath)) == ["\(base)/aaa/content", "\(base)/aaa/metadata.json"])
+    #expect(aaa.first { $0.relativePath.hasSuffix("metadata.json") }?.byteCount == 30)
+    let none = try await adapter.listFolder(relativePath: "captures/2099/01", recursive: true, cursor: nil)
+    #expect(none.entries.isEmpty && !none.hasMore)
+
+    // Hidden entries are never reported (a cursor snapshot folder may exist by now).
+    let rootList = try await listAll(adapter, "", recursive: false)
+    #expect(rootList.allSatisfy { e in !e.relativePath.split(separator: "/").contains { $0.hasPrefix(".") } })
+    let allList = try await listAll(adapter, "captures", recursive: true)
+    #expect(allList.allSatisfy { e in !e.relativePath.split(separator: "/").contains { $0.hasPrefix(".") } })
+
+    // thumbnails.
+    let pngPath = "\(base)/aaa/content/p.png"
+    let png = try MediaMaker.imageData(width: 200, height: 100, type: .png)
+    let pngURL = scratch.appendingPathComponent("p.png")
+    try png.write(to: pngURL)
+    let pngInt = FileIntegrity(byteCount: Int64(png.count), sha256: SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined())
+    _ = try await adapter.uploadFile(localURL: pngURL, relativePath: pngPath, expected: pngInt, checkpoint: nil, saveCheckpoint: ignore)
+    if adapter.capabilities.supportsThumbnails {
+        let jpeg = try #require(try await adapter.thumbnail(relativePath: pngPath, maxPixelSize: 64))
+        #expect(Array(jpeg.prefix(2)) == [0xFF, 0xD8])
+        #expect(try await adapter.thumbnail(relativePath: "\(base)/aaa/content/x.bin", maxPixelSize: 64) == nil)
+    }
+
+    // download progress ends at the file size.
+    let progress = ProgressBox()
+    let dest = scratch.appendingPathComponent("progress.bin")
+    let info = try await adapter.downloadFile(relativePath: "\(base)/bbb/content/y.bin", to: dest, maxBytes: 5000,
+                                              progress: { progress.add($0) })
+    #expect(info.byteCount == 200)
+    #expect(progress.all.last == 200)
 }

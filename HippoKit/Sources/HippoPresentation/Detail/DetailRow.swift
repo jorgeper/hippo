@@ -25,5 +25,62 @@ public enum PreviewKind: Equatable, Sendable {
     /// `previewable` is false for `public.html` and anything conforming to it: offered through Share only.
     /// `name` is the original filename from the metadata; the stored file is named by its attachment ID.
     case file(URL, previewable: Bool, name: String?)
+    /// A trimmed attachment: the original is only in the destination.
+    case remoteOnly(RemoteOnlyAttachment)
     case none
+}
+
+/// An attachment trimmed from this iPhone: what the details screen shows in place of its file.
+public struct RemoteOnlyAttachment: Equatable, Sendable {
+    public var attachmentID: String
+    public var relativePath: String
+    public var byteCount: Int64
+    /// The kept thumbnail, when one exists on disk.
+    public var thumbnailURL: URL?
+    /// "photo", "video" or "doc".
+    public var symbol: String
+    public var state: State
+
+    public enum State: Equatable, Sendable {
+        case available(destinationName: String)
+        case unavailable(message: String)
+        case mismatch(message: String)
+    }
+
+    public init(attachmentID: String, relativePath: String, byteCount: Int64, thumbnailURL: URL?, symbol: String,
+                state: State) {
+        self.attachmentID = attachmentID
+        self.relativePath = relativePath
+        self.byteCount = byteCount
+        self.thumbnailURL = thumbnailURL
+        self.symbol = symbol
+        self.state = state
+    }
+
+    /// "Connect <destination> (account <account name>) to download", or "Connect <destination> to download" when
+    /// the account name is unknown. `destinationName` is the destination's display name (the provider's, such as
+    /// "Dropbox"); `accountName` is the account holder's.
+    public static func unavailableText(destinationName: String?, accountName: String?) -> String {
+        guard let destinationName else { return "Connect your storage to download" }
+        guard let accountName else { return "Connect \(destinationName) to download" }
+        return "Connect \(destinationName) (account \(accountName)) to download"
+    }
+
+    public static func mismatchText(destinationName: String?) -> String {
+        "Changed in \(destinationName ?? "your storage"): this file no longer matches"
+    }
+
+    public static func goneText(destinationName: String?) -> String {
+        let name = destinationName ?? "your storage"
+        return "This file was only in \(name) and is gone there. Restore it from Dropbox's deleted files on dropbox.com."
+    }
+
+    /// The Storage row's value.
+    public var storageText: String {
+        switch state {
+        case .available(let name):
+            "In \(name) · Download (\(ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)))"
+        case .unavailable(let message), .mismatch(let message): message
+        }
+    }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 import CaptureCore
 @testable import LocalRepository
 import SyncEngine
@@ -48,8 +49,10 @@ private let dropbox = Destination(id: "d1", providerKind: "dropbox", accountIden
 private func plain(_ s: String?) -> String? { s?.replacingOccurrences(of: "\u{202F}", with: " ") }
 
 private func make(_ m: CaptureMetadata, body: String? = nil, jobs: [UploadJob] = [],
-                  enrichment: ResolvedEnrichment = .empty) -> CaptureDetail {
+                  enrichment: ResolvedEnrichment = .empty, changed: RemoteChangedRecord? = nil,
+                  trimmedPaths: Set<String> = [], destinationName: String? = nil) -> CaptureDetail {
     CaptureDetail.make(metadata: m, packageURL: pkg, noteBody: body, jobs: jobs, enrichment: enrichment,
+                       changed: changed, trimmedPaths: trimmedPaths, destinationName: destinationName,
                        destination: { $0 == "d1" ? dropbox : nil }, now: now, locale: locale, calendar: calendar)
 }
 
@@ -300,6 +303,234 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(rows == [SyncRow(destinationName: "Dropbox", label: c.label, message: c.message, canRetry: c.retry)])
     }
 
+    private func record(_ paths: [String]) -> RemoteChangedRecord {
+        RemoteChangedRecord(captureID: "c1", destinationID: "d1", paths: paths, detectedAt: now)
+    }
+
+    @Test func storageLinePrecedence() {
+        func storage(_ jobs: [UploadJob], changed: RemoteChangedRecord? = nil, trimmed: Set<String> = [],
+                     name: String? = "Dropbox") -> StatusLine? {
+            make(meta(), jobs: jobs, changed: changed, trimmedPaths: trimmed, destinationName: name).storage
+        }
+        let sync = Layer.sync
+        #expect(storage([job(.uploading)], changed: record(["a"]), trimmed: ["b"])
+                == StatusLine(layer: sync, text: "Changed in Dropbox", state: .failed))
+        #expect(storage([job(.uploading)], trimmed: ["b"]) == StatusLine(layer: sync, text: "Uploading…", state: .working))
+        #expect(storage([job(.synced), job(.retryableFailure, code: "offline", dest: "d2")], trimmed: ["b"])
+                == StatusLine(layer: sync, text: "Waiting for a connection", state: .waiting))
+        #expect(storage([job(.retryableFailure, code: "rate_limited")]) == nil)
+        #expect(storage([job(.synced)], trimmed: ["b"])
+                == StatusLine(layer: sync, text: "Large files in Dropbox only", state: .done))
+        #expect(storage([job(.synced)]) == StatusLine(layer: sync, text: "In Dropbox · verified", state: .done))
+        #expect(storage([job(.pending)]) == nil)
+        #expect(storage([]) == nil)
+        #expect(storage([job(.synced)], name: nil) == nil)
+        #expect(make(meta(), jobs: [job(.synced)]).storage == nil)
+    }
+
+    @Test func changedShowsUploadAgainAndUnrestorableNote() {
+        let plain = make(meta(), jobs: [job(.synced)], destinationName: "Dropbox")
+        #expect(plain.changedPaths.isEmpty && plain.unrestorableNote == nil)
+
+        let changed = make(meta(), jobs: [job(.synced)], changed: record(["content/a1.bin", "metadata.json"]),
+                           trimmedPaths: ["content/other.bin"], destinationName: "Dropbox")
+        #expect(changed.changedPaths == ["content/a1.bin", "metadata.json"])
+        #expect(changed.unrestorableNote == nil)
+
+        let gone = make(meta(), jobs: [job(.synced)], changed: record(["content/a1.bin"]),
+                        trimmedPaths: ["content/a1.bin"], destinationName: "Dropbox")
+        #expect(gone.unrestorableNote
+                == "This file was only in Dropbox and is gone there. Restore it from Dropbox's deleted files on dropbox.com.")
+    }
+
+    @Test func trimmedAttachmentRowsAndPreview() {
+        // Another Dropbox account: its destination is named after the provider; the account name is kept apart.
+        let other = Destination(id: "d2", providerKind: "dropbox", accountIdentifier: "x", remoteRoot: "/",
+                                displayName: "Dropbox", status: .active)
+        func detail(_ state: TrimState, dest: String = "d1", active: Destination? = dropbox,
+                    thumb: URL? = nil, account: @escaping (String) -> String? = { _ in nil }) -> CaptureDetail {
+            let t = TrimmedAttachment(captureID: "c1", attachmentID: "a1", relativePath: "content/a1.bin",
+                                      byteCount: 2_500_000, sha256: "x", destinationID: dest, state: state, trimmedAt: now)
+            return CaptureDetail.make(metadata: meta(attachments: [att()]), packageURL: pkg, noteBody: nil,
+                                      jobs: [job(.synced, dest: dest)], enrichment: .empty,
+                                      trimmed: [t], thumbnailURL: { _ in thumb }, activeDestination: active,
+                                      accountName: account,
+                                      destination: { ["d1": dropbox, "d2": other][$0] }, now: now,
+                                      locale: locale, calendar: calendar)
+        }
+        let thumb = URL(fileURLWithPath: "/t/a1.jpg")
+        let available = detail(.trimmed, thumb: thumb)
+        let expected = RemoteOnlyAttachment(attachmentID: "a1", relativePath: "content/a1.bin", byteCount: 2_500_000,
+                                            thumbnailURL: thumb, symbol: "photo", state: .available(destinationName: "Dropbox"))
+        #expect(available.preview == .remoteOnly(expected))
+        #expect(available.remoteOnly["a1"] == expected)
+        #expect(available.attachments[0].contains(DetailRow(label: "Storage", value: "In Dropbox · Download (2.5 MB)")))
+        #expect(available.exportURLs.isEmpty)
+
+        let elsewhere = detail(.trimmed, dest: "d2", active: dropbox)
+        let message = "Connect Dropbox to download"
+        #expect(elsewhere.remoteOnly["a1"]?.state == .unavailable(message: message))
+        #expect(elsewhere.attachments[0].contains(DetailRow(label: "Storage", value: message)))
+        #expect(detail(.trimmed, dest: "d2", active: nil).remoteOnly["a1"]?.state == .unavailable(message: message))
+
+        // The account name is looked up by the trimmed file's destination ID.
+        let named = detail(.trimmed, dest: "d2", active: dropbox, account: { $0 == "d2" ? "Sample Holder" : nil })
+        #expect(named.remoteOnly["a1"]?.state
+                == .unavailable(message: "Connect Dropbox (account Sample Holder) to download"))
+        #expect(RemoteOnlyAttachment.unavailableText(destinationName: nil, accountName: nil)
+                == "Connect your storage to download")
+
+        let mismatch = detail(.mismatch)
+        let changed = "Changed in Dropbox: this file no longer matches"
+        #expect(mismatch.remoteOnly["a1"]?.state == .mismatch(message: changed))
+        #expect(mismatch.attachments[0].contains(DetailRow(label: "Storage", value: changed)))
+
+        let plainDetail = make(meta(attachments: [att()]))
+        #expect(plainDetail.remoteOnly.isEmpty)
+        #expect(plainDetail.exportURLs.count == 1)
+    }
+
+    @Test func trimmedSymbolsFollowType() {
+        func symbol(_ uti: String) -> String? {
+            let t = TrimmedAttachment(captureID: "c1", attachmentID: "a1", relativePath: "content/a1.bin", byteCount: 1,
+                                      sha256: "x", destinationID: "d1", state: .trimmed, trimmedAt: now)
+            return CaptureDetail.make(metadata: meta(attachments: [att(uti: uti)]), packageURL: pkg, noteBody: nil,
+                                      jobs: [], enrichment: .empty, trimmed: [t], activeDestination: dropbox,
+                                      destination: { _ in dropbox }, now: now, locale: locale,
+                                      calendar: calendar).remoteOnly["a1"]?.symbol
+        }
+        #expect(symbol("public.jpeg") == "photo")
+        #expect(symbol("public.mpeg-4") == "video")
+        #expect(symbol("com.apple.quicktime-movie") == "video")
+        #expect(symbol("com.adobe.pdf") == "doc")
+    }
+
+    @Test func restoreErrorsSetMessageAndDownloadReloads() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(Destination(id: "dest-x", providerKind: "dropbox", accountIdentifier: "acct",
+                                                         remoteRoot: "/", displayName: "Dropbox", status: .active))
+        let p = try await t.note("will be trimmed", at: now)
+        let id = p.metadata.captureID
+        let a = try #require(p.metadata.attachments.first)
+        try t.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: a.attachmentID, relativePath: a.relativePath,
+                                                   byteCount: a.byteCount, sha256: a.sha256, destinationID: "dest-x",
+                                                   state: .trimmed, trimmedAt: now))
+        try FileManager.default.removeItem(at: t.store.layout.packageURL(relativeDirectory: p.relativeDirectory)
+            .appendingPathComponent(a.relativePath))
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale,
+                                             adapterFor: { _ in throw StorageError.offline })
+        await model.load()
+        #expect(await model.detail?.remoteOnly[a.attachmentID]?.state == .available(destinationName: "Dropbox"))
+        await model.restore(attachmentID: a.attachmentID)
+        #expect(await model.restoreMessages[a.attachmentID] == "Connect to the internet to download")
+        #expect(await model.restoreProgress[a.attachmentID] == nil)
+    }
+
+    @Test func modelNamesTheAccountOfAnUnavailableOrSignedOutFile() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        func dest(_ id: String) -> Destination {
+            Destination(id: id, providerKind: "dropbox", accountIdentifier: id, remoteRoot: "/", displayName: "Dropbox",
+                        status: .active)
+        }
+        _ = try t.store.destinations.connect(dest("dest-a"))
+        let p = try await t.note("will be trimmed", at: now)
+        let id = p.metadata.captureID
+        let a = try #require(p.metadata.attachments.first)
+        try t.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: a.attachmentID, relativePath: a.relativePath,
+                                                   byteCount: a.byteCount, sha256: a.sha256, destinationID: "dest-a",
+                                                   state: .trimmed, trimmedAt: now))
+        try FileManager.default.removeItem(at: t.store.layout.packageURL(relativeDirectory: p.relativeDirectory)
+            .appendingPathComponent(a.relativePath))
+        let names: [String: String] = ["dest-a": "Alpha Person", "dest-b": "Beta Person"]
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale,
+                                             adapterFor: { _ in throw StorageError.needsAuthentication },
+                                             accountName: { names[$0.id] })
+        // Signed out of the file's account while it is still the active one.
+        await model.load()
+        #expect(await model.detail?.remoteOnly[a.attachmentID]?.state == .available(destinationName: "Dropbox"))
+        await model.restore(attachmentID: a.attachmentID)
+        #expect(await model.restoreMessages[a.attachmentID] == "Connect Dropbox (account Alpha Person) to download")
+
+        // Another account is active: the file's own account is named.
+        _ = try t.store.destinations.connect(dest("dest-b"))
+        await model.load()
+        #expect(await model.detail?.remoteOnly[a.attachmentID]?.state
+                == .unavailable(message: "Connect Dropbox (account Alpha Person) to download"))
+    }
+
+    @Test func storageLineNamesTheBoundDestinationNotTheActiveOne() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        func dest(_ id: String, _ name: String, _ status: DestinationStatus) -> Destination {
+            Destination(id: id, providerKind: "dropbox", accountIdentifier: id, remoteRoot: "/", displayName: name, status: status)
+        }
+        _ = try t.store.destinations.connect(dest("dest-a", "Alpha", .active))
+        let p = try await t.note("bound to A", at: now)
+        let id = p.metadata.captureID
+        while let j = try t.store.jobs.claimNext(owner: "o", now: Date(), lease: 60) {
+            try t.store.jobs.markSynced(jobID: j.jobID, owner: "o")
+        }
+        _ = try t.store.destinations.connect(dest("dest-b", "Beta", .active))
+        #expect(try t.store.destinations.active()?.displayName == "Beta")
+
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale)
+        await model.load()
+        #expect(await model.detail?.storage?.text == "In Alpha · verified")
+    }
+
+    @Test func promptsAndStorageLineNameTheActiveDestinationWhenItHasAJob() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        func dest(_ id: String, _ name: String) -> Destination {
+            Destination(id: id, providerKind: "dropbox", accountIdentifier: id, remoteRoot: "/", displayName: name,
+                        status: .active)
+        }
+        _ = try t.store.destinations.connect(dest("dest-a", "Alpha"))
+        let p = try await t.note("bound to both", at: now)
+        let id = p.metadata.captureID
+        func syncAll() throws {
+            while let j = try t.store.jobs.claimNext(owner: "o", now: Date(), lease: 60) {
+                try t.store.jobs.markSynced(jobID: j.jobID, owner: "o")
+            }
+        }
+        try syncAll()
+        _ = try t.store.destinations.connect(dest("dest-b", "Beta"))
+        _ = try t.store.destinations.backfill(destinationID: "dest-b")
+        try syncAll()
+        #expect(try t.store.jobs.jobs(captureID: id).count == 2)
+
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale)
+        await model.load()
+        #expect(await model.everywherePrompt == DeletionPrompt.everywhere(destinationName: "Beta"))
+        #expect(await model.detail?.storage?.text == "In Beta · verified")
+        #expect(await model.deletionPrompt?.message == "This removes the capture from this iPhone. The copy in Beta stays.")
+    }
+
+    @Test func uploadAgainRequeuesAndSyncs() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(Destination(id: "dest-x", providerKind: "dropbox", accountIdentifier: "acct",
+                                                         remoteRoot: "/", displayName: "Dropbox", status: .active))
+        let p = try await t.note("changed remotely", at: now)
+        let id = p.metadata.captureID
+        try t.store.remoteState.markChanged(captureID: id, destinationID: "dest-x", paths: ["metadata.json"], now: now)
+        let calls = Mutex(0)
+        let model = await CaptureDetailModel(store: t.store, captureID: id, calendar: calendar, locale: locale,
+                                             sync: { calls.withLock { $0 += 1 } })
+        await model.load()
+        #expect(await model.detail?.changedPaths == ["metadata.json"])
+        #expect(await model.detail?.storage?.text == "Changed in Dropbox")
+
+        await model.uploadAgain()
+
+        #expect(calls.withLock { $0 } == 1)
+        #expect(try t.store.remoteState.changed(captureID: id) == nil)
+        #expect(await model.detail?.changedPaths.isEmpty == true)
+        #expect(await model.detail?.storage == nil)
+    }
+
     @Test func unassignedCaptureShowsConnectHint() {
         #expect(make(meta()).sync == [SyncRow(destinationName: nil, label: .onIPhone,
                                               message: "Not uploaded yet. Connect storage in Settings.", canRetry: false)])
@@ -320,6 +551,29 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
     @Test func deletePromptForActiveUpload() {
         let p = DeletionPrompt.make(jobs: [job(.uploading)], destinationName: "Dropbox")
         #expect(p.message == "This capture hasn't finished uploading. Deleting it removes the only copy. The upload in progress will be stopped.")
+    }
+
+    @Test func everywherePromptCopy() async throws {
+        let p = DeletionPrompt.everywhere(destinationName: "Dropbox")
+        #expect(p.title == "Delete everywhere?" && p.confirm == "Delete everywhere")
+        #expect(p.message == "Delete from this iPhone and from Dropbox? Dropbox keeps deleted files for a while, so you can restore them on dropbox.com.")
+
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let unbound = try await t.note("no job", at: now)
+        let model = await CaptureDetailModel(store: t.store, captureID: unbound.metadata.captureID)
+        await model.load()
+        #expect(await model.everywherePrompt == nil)
+
+        _ = try t.store.destinations.connect(Destination(id: "dest-x", providerKind: "dropbox", accountIdentifier: "acct",
+                                                         remoteRoot: "/", displayName: "Dropbox", status: .active))
+        let bound = try await t.note("with job", at: now)
+        let boundModel = await CaptureDetailModel(store: t.store, captureID: bound.metadata.captureID)
+        await boundModel.load()
+        #expect(await boundModel.everywherePrompt == DeletionPrompt.everywhere(destinationName: "Dropbox"))
+        _ = try await boundModel.deleteEverywhere()
+        #expect(await boundModel.everywherePrompt == nil)
+        #expect(try t.store.remoteState.hasTombstone(captureID: bound.metadata.captureID))
     }
 
     @Test func htmlIsNotPreviewable() {

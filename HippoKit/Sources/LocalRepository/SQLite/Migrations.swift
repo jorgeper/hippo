@@ -1,7 +1,7 @@
 import SQLite3
 
 enum Migrations {
-    static let currentVersion: Int64 = 3
+    static let currentVersion: Int64 = 4
 
     /// Applies pending migrations up to `target` inside `BEGIN IMMEDIATE`. `user_version` is re-read
     /// after the write lock is held, so two connections opening a fresh file cannot
@@ -21,8 +21,35 @@ enum Migrations {
                 try tx.executeScript(v3)
                 try tx.executeScript("PRAGMA user_version = 3")
             }
+            if version < 4, target >= 4 {
+                try tx.executeScript(v4)
+                try tx.executeScript("PRAGMA user_version = 4")
+            }
         }
     }
+
+    /// Remote-delete tombstones, local-delete records, per-destination change cursors, review items,
+    /// "changed in the destination" records and trimmed attachments.
+    static let v4 = """
+    CREATE TABLE remote_tombstones(capture_id TEXT PRIMARY KEY, relative_directory TEXT NOT NULL,
+      destination_id TEXT NOT NULL REFERENCES destinations, account_identifier TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER, last_error_code TEXT,
+      created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL);
+    CREATE TABLE local_deletes(capture_id TEXT PRIMARY KEY, relative_directory TEXT NOT NULL,
+      account_identifier TEXT, deleted_at_ms INTEGER NOT NULL);
+    CREATE TABLE remote_cursors(destination_id TEXT PRIMARY KEY REFERENCES destinations, cursor TEXT,
+      updated_at_ms INTEGER NOT NULL);
+    CREATE TABLE remote_review_items(capture_id TEXT NOT NULL REFERENCES captures ON DELETE CASCADE,
+      destination_id TEXT NOT NULL REFERENCES destinations, reason TEXT NOT NULL, created_at_ms INTEGER NOT NULL,
+      PRIMARY KEY(capture_id, destination_id));
+    CREATE TABLE remote_changed(capture_id TEXT PRIMARY KEY REFERENCES captures ON DELETE CASCADE,
+      destination_id TEXT NOT NULL REFERENCES destinations, paths TEXT NOT NULL /* JSON array */,
+      detected_at_ms INTEGER NOT NULL);
+    CREATE TABLE trimmed_attachments(capture_id TEXT NOT NULL REFERENCES captures ON DELETE CASCADE,
+      attachment_id TEXT NOT NULL, relative_path TEXT NOT NULL, byte_count INTEGER NOT NULL, sha256 TEXT NOT NULL,
+      destination_id TEXT NOT NULL REFERENCES destinations, state TEXT NOT NULL /* trimmed|mismatch */,
+      trimmed_at_ms INTEGER NOT NULL, PRIMARY KEY(capture_id, attachment_id));
+    """
 
     /// Enrichment work, silver uploads and gold cursors. FTS5 tables can't gain columns, so `captures_fts`
     /// is rebuilt with an `enrichment` column and its rows copied over.

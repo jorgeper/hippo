@@ -26,6 +26,8 @@ struct SyncHarness {
     let writer: PackageWriter
     let destinations: DestinationStore
     let jobs: JobStore
+    let trims: TrimStore
+    let remoteState: RemoteStateStore
     let log: ActivityLog
     let faults = FaultPlan()
     let clock = TestClock(t0)
@@ -42,6 +44,8 @@ struct SyncHarness {
         writer = PackageWriter(layout: layout, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"))
         destinations = DestinationStore(db: db)
         jobs = JobStore(db: db)
+        trims = TrimStore(db: db)
+        remoteState = RemoteStateStore(db: db)
         log = ActivityLog(layout: layout, process: .app)
         _ = try destinations.connect(Destination(id: "dest-fs", providerKind: "filesystem", accountIdentifier: "local",
                                                  remoteRoot: "/", displayName: "Local folder", status: .active))
@@ -55,25 +59,31 @@ struct SyncHarness {
                 random: @escaping @Sendable () -> Double = { 1 }) -> SyncWorker {
         let a: any StorageAdapter = adapter ?? self.adapter
         let clock = self.clock, log = self.log
-        return SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index,
-                          adapterFor: { _ in a }, owner: owner, now: { clock.now }, random: random, log: log)
+        return SyncWorker(layout: layout, jobs: jobs, destinations: destinations, index: index, trims: trims,
+                          remoteState: remoteState, adapterFor: { _ in a }, owner: owner, now: { clock.now },
+                          random: random, log: log)
     }
 
     /// Commits, registers and enqueues a capture with one attachment of `attachmentBytes` bytes, or a
-    /// URL-only capture when `attachmentBytes` is nil.
-    func capture(attachmentBytes: Int? = 1_000) async throws -> CommittedPackage {
+    /// URL-only capture when `attachmentBytes` is nil. `timeZone` sets the local date (the package's partition).
+    func capture(attachmentBytes: Int? = 1_000, startedAt: Date = Date(timeIntervalSince1970: 1_794_070_800),
+                 timeZone: TimeZone = TimeZone(identifier: "America/Los_Angeles")!,
+                 image: Data? = nil) async throws -> CommittedPackage {
         var attachments: [AttachmentSource] = []
-        if let n = attachmentBytes {
+        if let image {
+            attachments.append(AttachmentSource(body: .data(image), originalFilename: "photo.png", uti: "public.png",
+                                                mimeType: "image/png", representationSource: "item_provider_data"))
+        } else if let n = attachmentBytes {
             var data = Data(count: n)
             for i in 0..<n { data[i] = UInt8(truncatingIfNeeded: i &* 31 &+ 7) }
             attachments.append(AttachmentSource(body: .data(data), originalFilename: "blob.bin", uti: "public.data",
                                                 mimeType: "application/octet-stream",
                                                 representationSource: "item_provider_data"))
         }
-        let draft = CaptureDraft(captureID: UUID(), startedAt: Date(timeIntervalSince1970: 1_794_070_800),
-                                 timeZone: TimeZone(identifier: "America/Los_Angeles")!, method: .shareExtension,
+        let draft = CaptureDraft(captureID: UUID(), startedAt: startedAt,
+                                 timeZone: timeZone, method: .shareExtension,
                                  userNote: "note",
-                                 urls: attachmentBytes == nil ? [CapturedURL(url: "https://example.com/a", source: "shared")] : [],
+                                 urls: attachmentBytes == nil && image == nil ? [CapturedURL(url: "https://example.com/a", source: "shared")] : [],
                                  attachments: attachments)
         let pkg = try await writer.commit(draft)
         _ = try index.register(pkg, noteBody: pkg.noteBody())
@@ -108,29 +118,53 @@ final class Counter: @unchecked Sendable {
 }
 
 /// Wraps the filesystem adapter with test hooks: hide paths from `inspectFile`, act before an upload,
-/// or act before each checkpoint is handed to the worker.
+/// or act before each checkpoint is handed to the worker, or script what `listChanges` returns.
 struct HookedAdapter: StorageAdapter {
     let inner: FilesystemAdapter
+    /// When set, `listChanges` returns this instead of asking the inner adapter.
+    var changes: (@Sendable (String, String?) throws -> ChangePage)? = nil
     var hideFromInspect: @Sendable (String) -> Bool = { _ in false }
     var beforeUpload: @Sendable (String) throws -> Void = { _ in }
     var onCheckpoint: @Sendable (String) throws -> Void = { _ in }
     var afterUpload: @Sendable (String) -> Void = { _ in }
     var beforeDownload: @Sendable (String) throws -> Void = { _ in }
+    var beforeInspect: @Sendable (String) async throws -> Void = { _ in }
+    var afterDownload: @Sendable (String) async throws -> Void = { _ in }
+    var beforeDelete: @Sendable (String) throws -> Void = { _ in }
+    var beforeListFolder: @Sendable (String) throws -> Void = { _ in }
 
     var capabilities: StorageCapabilities { inner.capabilities }
     func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
         try await inner.replaceFile(localURL: localURL, relativePath: relativePath, expected: expected)
     }
     func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
-        try await inner.listChanges(under: prefix, cursor: cursor)
+        if let changes { return try changes(prefix, cursor) }
+        return try await inner.listChanges(under: prefix, cursor: cursor)
     }
-    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
+                      progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {
         try beforeDownload(relativePath)
-        return try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes)
+        let info = try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes,
+                                                progress: progress)
+        try await afterDownload(relativePath)
+        return info
+    }
+    func deleteFolder(relativePath: String) async throws {
+        try beforeDelete(relativePath)
+        try await inner.deleteFolder(relativePath: relativePath)
+    }
+    func latestCursor(under prefix: String) async throws -> String { try await inner.latestCursor(under: prefix) }
+    func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
+        try beforeListFolder(relativePath)
+        return try await inner.listFolder(relativePath: relativePath, recursive: recursive, cursor: cursor)
+    }
+    func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data? {
+        try await inner.thumbnail(relativePath: relativePath, maxPixelSize: maxPixelSize)
     }
     func validateDestination() async throws { try await inner.validateDestination() }
     func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }
     func inspectFile(relativePath: String) async throws -> RemoteFileInfo? {
+        try await beforeInspect(relativePath)
         let info = try await inner.inspectFile(relativePath: relativePath)
         return hideFromInspect(relativePath) ? nil : info
     }
@@ -178,8 +212,17 @@ struct PausingAdapter: StorageAdapter {
     func listChanges(under prefix: String, cursor: String?) async throws -> ChangePage {
         try await inner.listChanges(under: prefix, cursor: cursor)
     }
-    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64) async throws -> RemoteFileInfo {
-        try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes)
+    func downloadFile(relativePath: String, to localURL: URL, maxBytes: Int64,
+                      progress: (@Sendable (Int64) -> Void)?) async throws -> RemoteFileInfo {
+        try await inner.downloadFile(relativePath: relativePath, to: localURL, maxBytes: maxBytes, progress: progress)
+    }
+    func deleteFolder(relativePath: String) async throws { try await inner.deleteFolder(relativePath: relativePath) }
+    func latestCursor(under prefix: String) async throws -> String { try await inner.latestCursor(under: prefix) }
+    func listFolder(relativePath: String, recursive: Bool, cursor: String?) async throws -> ListPage {
+        try await inner.listFolder(relativePath: relativePath, recursive: recursive, cursor: cursor)
+    }
+    func thumbnail(relativePath: String, maxPixelSize: Int) async throws -> Data? {
+        try await inner.thumbnail(relativePath: relativePath, maxPixelSize: maxPixelSize)
     }
     func validateDestination() async throws { try await inner.validateDestination() }
     func ensureContainer(relativePath: String) async throws { try await inner.ensureContainer(relativePath: relativePath) }

@@ -34,7 +34,7 @@ final class CaptureFlowUITests: XCTestCase {
         let connect = app.buttons["Connect Developer folder"]
         XCTAssertTrue(connect.waitForExistence(timeout: 5))
         connect.tap()
-        XCTAssertTrue(app.buttons["Sign out"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Disconnect"].waitForExistence(timeout: 10))
         app.navigationBars.buttons.element(boundBy: 0).tap()
 
         createNote("UI test note")

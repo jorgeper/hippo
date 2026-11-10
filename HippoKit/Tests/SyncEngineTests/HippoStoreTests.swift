@@ -152,7 +152,8 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         let adapter = PausingAdapter(inner: t.adapter, path: pkg.attachmentPath)
         let s = t.store
         let worker = SyncWorker(layout: s.layout, jobs: s.jobs, destinations: s.destinations, index: s.index,
-                                adapterFor: { _ in adapter }, owner: "stalled-worker", now: { t0 })
+                                trims: s.trims, remoteState: s.remoteState, adapterFor: { _ in adapter },
+                                owner: "stalled-worker", now: { t0 })
         // Opening `paused` on exit too means a worker that never reaches the file fails the test, not hangs it.
         let run = Task { let r = await worker.runOnce(); adapter.paused.open(); return r }
         await adapter.paused.wait()
@@ -240,6 +241,36 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(try t.stagingContents().isEmpty)
     }
 
+    @Test func recoveryRemovesOnlyOldTransferFiles() throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let fm = FileManager.default
+        let layout = t.store.layout
+        #expect(fm.fileExists(atPath: layout.thumbnailsDir.path))
+        #expect(fm.fileExists(atPath: layout.transfersDir.path))
+        let old = layout.transfersDir.appendingPathComponent("old.part")
+        let fresh = layout.transfersDir.appendingPathComponent("fresh.part")
+        let nested = layout.transfersDir.appendingPathComponent("dir", isDirectory: true)
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        let nestedOld = nested.appendingPathComponent("inner.part")
+        let thumb = layout.thumbnailURL(attachmentID: "att")
+        for url in [old, fresh, nestedOld, thumb] { try Data("x".utf8).write(to: url) }
+        let eightDaysAgo = Date().addingTimeInterval(-8 * 86_400)
+        for url in [old, nestedOld, thumb, nested] {
+            try fm.setAttributes([.modificationDate: eightDaysAgo], ofItemAtPath: url.path)
+        }
+
+        let report = try t.store.recover()
+
+        #expect(report.removedStaging == 1)
+        #expect(!fm.fileExists(atPath: old.path))
+        #expect(fm.fileExists(atPath: fresh.path))
+        #expect(fm.fileExists(atPath: nestedOld.path))
+        #expect(fm.fileExists(atPath: thumb.path))
+        // A missing transfers directory is not an error.
+        try fm.removeItem(at: layout.transfersDir)
+        #expect(try t.store.recover().removedStaging == 0)
+    }
+
     // Crash after the package was parked in staging but before the index row was removed.
     @Test func recoveryFinishesDeletionInterruptedAfterRename() async throws {
         let t = try StoreHarness(); defer { t.cleanup() }
@@ -291,6 +322,165 @@ private func isComplete(_ r: ValidationResult) -> Bool {
         #expect(try t.store.index.count() == 0)
         #expect(!fm.fileExists(atPath: leftover.directoryURL.path))
         #expect(try t.stagingContents().isEmpty)
+    }
+
+    @Test func deleteEverywhereQueuesTombstoneAndRemovesLocally() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        _ = try await t.store.deleteEverywhere(captureID: id)
+        #expect(try t.store.remoteState.hasTombstone(captureID: id))
+        let due = try t.store.remoteState.dueTombstones(destinationID: "dest-fs", accountIdentifier: "local",
+                                                        now: Date(), limit: 10)
+        #expect(due.map(\.relativeDirectory) == [pkg.relativeDirectory])
+        #expect(try t.store.index.count() == 0)
+        #expect(try t.store.remoteState.localDeletedCaptureIDs().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: pkg.directoryURL.path))
+    }
+
+    @Test func deleteEverywhereBindsTheActiveDestinationWhenItHasAJob() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        func dest(_ id: String) -> Destination {
+            Destination(id: id, providerKind: "filesystem", accountIdentifier: "acct-\(id)", remoteRoot: "/",
+                        displayName: id, status: .active)
+        }
+        _ = try t.store.destinations.connect(dest("a"))
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        // B becomes active (A is disabled) and gets a job for the same capture.
+        _ = try t.store.destinations.connect(dest("b"))
+        #expect(try t.store.destinations.backfill(destinationID: "b") == 1)
+        #expect(try Set(t.store.jobs.jobs(captureID: id).map(\.destinationID)) == ["a", "b"])
+        #expect(HippoStore.boundDestinationID(jobs: try t.store.jobs.jobs(captureID: id), activeID: "b") == "b")
+
+        _ = try await t.store.deleteEverywhere(captureID: id)
+
+        let due = { (d: String) in
+            try t.store.remoteState.dueTombstones(destinationID: d, accountIdentifier: "acct-\(d)", now: Date(), limit: 10)
+        }
+        #expect(try due("b").map(\.captureID) == [id])
+        #expect(try due("a").isEmpty)
+
+        // Without a job for the active destination, the lowest destination ID is bound.
+        #expect(HippoStore.boundDestinationID(jobs: [], activeID: "b") == nil)
+        let other = try await t.store.capture(t.blobDraft(bytes: 10))
+        _ = try t.store.destinations.connect(dest("c"))
+        #expect(HippoStore.boundDestinationID(jobs: try t.store.jobs.jobs(captureID: other.metadata.captureID),
+                                              activeID: "c") == "b")
+    }
+
+    @Test func deleteFromIPhoneRecordsLocalDeleteOnly() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        _ = try await t.store.delete(captureID: id)
+        #expect(try t.store.remoteState.localDeletedCaptureIDs() == [id])
+        #expect(try !t.store.remoteState.hasTombstone(captureID: id))
+    }
+
+    @Test func deleteEverywhereWithoutJobBehavesLikeDelete() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        #expect(try t.store.jobs.jobs(captureID: id).isEmpty)
+        _ = try await t.store.deleteEverywhere(captureID: id)
+        #expect(try !t.store.remoteState.hasTombstone(captureID: id))
+        #expect(try t.store.remoteState.localDeletedCaptureIDs() == [id])
+        #expect(try t.store.index.count() == 0)
+    }
+
+    @Test func uploadAgainClearsChangedReceiptsAndRequeues() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        let adapter = t.adapter
+        let worker = t.store.makeWorker(adapterFor: { _ in adapter }, owner: "app")
+        _ = await worker.runOnce()
+        let attachment = pkg.metadata.attachments[0].relativePath
+        try FileManager.default.removeItem(at: t.remoteURL(pkg).appendingPathComponent(attachment))
+        try t.store.remoteState.markChanged(captureID: id, destinationID: "dest-fs", paths: [attachment], now: Date())
+
+        let result = try t.store.uploadAgain(captureID: id)
+
+        #expect(result == UploadAgainResult(requeued: true, unrestorablePaths: []))
+        let job = try #require(try t.store.jobs.jobs(captureID: id).first)
+        #expect(job.state == .pending)
+        #expect(try t.store.jobs.receipts(jobID: job.jobID).map(\.relativePath) == ["metadata.json"])
+        #expect(try t.store.remoteState.changed(captureID: id) == nil)
+
+        // The next pass puts the missing file back.
+        #expect(await worker.runOnce() == SyncPassResult(synced: 1, failed: 0, idle: false))
+        #expect(isComplete(PackageValidator.validate(directory: t.remoteURL(pkg))))
+    }
+
+    @Test func uploadAgainReportsTrimmedPaths() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        let adapter = t.adapter
+        _ = await t.store.makeWorker(adapterFor: { _ in adapter }, owner: "app").runOnce()
+        let attachment = pkg.metadata.attachments[0]
+        try t.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: attachment.attachmentID,
+                                                   relativePath: attachment.relativePath,
+                                                   byteCount: attachment.byteCount, sha256: attachment.sha256,
+                                                   destinationID: "dest-fs", state: .trimmed, trimmedAt: Date()))
+        try t.store.remoteState.markChanged(captureID: id, destinationID: "dest-fs",
+                                            paths: [attachment.relativePath, "metadata.json"], now: Date())
+
+        let result = try t.store.uploadAgain(captureID: id)
+
+        #expect(result == UploadAgainResult(requeued: true, unrestorablePaths: [attachment.relativePath]))
+        let job = try #require(try t.store.jobs.jobs(captureID: id).first)
+        #expect(job.state == .pending)
+        // The trimmed file keeps its receipt: there is nothing on this iPhone to upload.
+        #expect(try t.store.jobs.receipts(jobID: job.jobID).map(\.relativePath) == [attachment.relativePath])
+        // Only what was requeued leaves the record: the trimmed file is still missing in the destination.
+        #expect(try t.store.remoteState.changed(captureID: id)?.paths == [attachment.relativePath])
+
+        #expect(await t.store.makeWorker(adapterFor: { _ in adapter }, owner: "app").runOnce().synced == 1)
+        #expect(try t.store.remoteState.changed(captureID: id)?.paths == [attachment.relativePath])
+    }
+
+    @Test func uploadAgainWithoutJobRequeuesNothing() async throws {
+        let t = try StoreHarness(); defer { t.cleanup() }
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        #expect(try t.store.uploadAgain(captureID: pkg.metadata.captureID)
+                == UploadAgainResult(requeued: false, unrestorablePaths: []))
+    }
+
+    @Test func removeAfterRemoteDeleteWritesNoLocalDeleteRecord() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        try await t.store.removeAfterRemoteDelete(captureID: id)
+        #expect(try t.store.remoteState.localDeletedCaptureIDs().isEmpty)
+        #expect(try t.store.index.count() == 0)
+    }
+
+    @Test func deleteRemovesThumbnailsOfTrimmedAttachments() async throws {
+        let t = try StoreHarness()
+        defer { t.cleanup() }
+        _ = try t.store.destinations.connect(t.destination)
+        let pkg = try await t.store.capture(t.blobDraft(bytes: 100))
+        let id = pkg.metadata.captureID
+        let thumb = t.store.layout.thumbnailURL(attachmentID: "att-1")
+        try FileManager.default.createDirectory(at: thumb.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("jpeg".utf8).write(to: thumb)
+        try t.store.trims.record(TrimmedAttachment(captureID: id, attachmentID: "att-1", relativePath: "content/a",
+                                                   byteCount: 1, sha256: "x", destinationID: "dest-fs",
+                                                   state: .trimmed, trimmedAt: Date()))
+        _ = try await t.store.delete(captureID: id)
+        #expect(!FileManager.default.fileExists(atPath: thumb.path))
     }
 
     @Test func deleteReportsSyncedAndIsIdempotent() async throws {
@@ -350,7 +540,7 @@ private func isComplete(_ r: ValidationResult) -> Bool {
                                    "recent_error_codes", "destinations",
                                    "enrichment_tasks", "enrichment_uploads_pending", "gold"])
         #expect(json["app_version"] as? String == "1.4.2")
-        #expect(json["schema_version"] as? Int == 3)
+        #expect(json["schema_version"] as? Int == 4)
         #expect(json["capture_count"] as? Int == 1)
         #expect(json["jobs_by_state"] as? [String: Int] == [
             "pending": 0, "uploading": 0, "synced": 0, "retryable_failure": 1, "needs_authentication": 0,

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import CaptureCore
 import LocalRepository
 
@@ -22,11 +23,15 @@ public struct SyncPassResult: Sendable, Equatable {
 public final class SyncWorker: Sendable {
     public static let lease: TimeInterval = 120
     private static let markerName = "complete.json"
+    /// Messages are fixed category strings only.
+    private static let osLog = Logger(subsystem: "com.jorgeper.hippo", category: "sync")
 
     private let layout: StoreLayout
     private let jobs: JobStore
     private let destinations: DestinationStore
     private let index: CaptureIndex
+    private let trims: TrimStore
+    private let remoteState: RemoteStateStore
     private let adapterFor: @Sendable (Destination) throws -> any StorageAdapter
     /// The lease owner for every job this worker claims: the `owner` prefix plus a per-instance UUID,
     /// so two workers with the same prefix (e.g. two app passes) never share a lease.
@@ -37,6 +42,7 @@ public final class SyncWorker: Sendable {
     private let log: ActivityLog?
 
     public init(layout: StoreLayout, jobs: JobStore, destinations: DestinationStore, index: CaptureIndex,
+                trims: TrimStore, remoteState: RemoteStateStore,
                 adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter, owner: String,
                 policy: RetryPolicy = .init(), now: @escaping @Sendable () -> Date = Date.init,
                 random: @escaping @Sendable () -> Double = { .random(in: 0...1) }, log: ActivityLog? = nil) {
@@ -45,6 +51,8 @@ public final class SyncWorker: Sendable {
         self.jobs = jobs
         self.destinations = destinations
         self.index = index
+        self.trims = trims
+        self.remoteState = remoteState
         self.adapterFor = adapterFor
         self.leaseOwner = "\(owner)#\(UUID().uuidString.lowercased())"
         self.policy = policy
@@ -59,6 +67,7 @@ public final class SyncWorker: Sendable {
     public func runOnce(maxJobs: Int = 20) async -> SyncPassResult {
         var result = SyncPassResult(synced: 0, failed: 0, idle: true)
         var claimed = 0
+        var loggedAuthExpiry = false
         while claimed < maxJobs, !Task.isCancelled {
             let next: UploadJob?
             do {
@@ -76,7 +85,13 @@ public final class SyncWorker: Sendable {
             result.idle = false
             switch await process(job) {
             case .synced: result.synced += 1
-            case .failed: result.failed += 1
+            case .failed(let authExpired):
+                result.failed += 1
+                // One `auth.refresh_failed` per pass, however many jobs found the sign-in expired.
+                if authExpired, !loggedAuthExpiry {
+                    loggedAuthExpiry = true
+                    log?.append(LogEvent(event: .authRefreshFailed, dest: destinationKind(job)))
+                }
             case .abandoned: break
             case .stopped: return result
             }
@@ -86,7 +101,11 @@ public final class SyncWorker: Sendable {
 
     // MARK: - One job
 
-    private enum Outcome { case synced, failed, abandoned, stopped }
+    private enum Outcome {
+        case synced, abandoned, stopped
+        /// `authExpired`: it failed for lack of a valid sign-in.
+        case failed(authExpired: Bool)
+    }
 
     /// The failure state and safe error code to record for a job.
     private struct Failure: Error {
@@ -99,6 +118,7 @@ public final class SyncWorker: Sendable {
         do {
             try await upload(job)
             try jobs.markSynced(jobID: job.jobID, owner: leaseOwner)
+            clearVerifiedChanges(job.captureID)
             log?.append(LogEvent(event: .packageUploaded, captureID: job.captureID, dest: destinationKind(job)))
             return .synced
         } catch is CancellationError {
@@ -114,19 +134,51 @@ public final class SyncWorker: Sendable {
         }
     }
 
+    /// Every file this phone still has is verified in the destination again, so those paths no longer differ
+    /// there. Trimmed paths stay in the changed record: their only copy was the one that is gone.
+    private func clearVerifiedChanges(_ captureID: String) {
+        do {
+            guard let record = try remoteState.changed(captureID: captureID) else { return }
+            let trimmed = try trims.trimmedPaths(captureID: captureID)
+            try remoteState.removeChangedPaths(captureID: captureID, paths: record.paths.filter { !trimmed.contains($0) })
+        } catch {
+            Self.osLog.error("\("changed_clear_failed", privacy: .public)")
+        }
+    }
+
     private func upload(_ job: UploadJob) async throws {
         guard let destination = try destinations.active(), destination.id == job.destinationID else {
             throw Failure(state: .paused, code: "destination_inactive")
         }
         // Any package that fails to load is surfaced as blocked (visible "Needs attention");
-        // the user's Retry (JobStore.retryNow) re-queues it once the cause is gone.
+        // the user's Retry (JobStore.retryNow) re-queues it once the cause is gone. Trimmed files may be
+        // absent: their originals live only in the destination.
+        let trimmed = try trims.trimmedPaths(captureID: job.captureID)
         guard let directory = try index.relativeDirectory(captureID: job.captureID),
               let package = CommittedPackage.load(directory: layout.packageURL(relativeDirectory: directory),
-                                                  layout: layout) else {
+                                                  layout: layout, trimmed: trimmed) else {
             throw Failure(state: .blocked, code: "local_package_invalid")
         }
-        let adapter = try adapterFor(destination)
         let files = package.marker.files.filter { $0.relativePath != Self.markerName }
+        var receipted = Set(try jobs.receipts(jobID: job.jobID).map(\.relativePath))
+        let adapter = try adapterFor(destination)
+        // A trimmed file without a receipt (a downloaded capture, or "Upload again") is only in the destination.
+        // It is receipted from there before anything is uploaded; one gone there too blocks the job.
+        let fm = FileManager.default
+        let remoteOnly = files.filter { !receipted.contains($0.relativePath) && trimmed.contains($0.relativePath)
+            && !fm.fileExists(atPath: package.directoryURL.appendingPathComponent($0.relativePath).path) }
+        if !remoteOnly.isEmpty {
+            let rows = try trims.trimmed(captureID: job.captureID)
+            for entry in remoteOnly {
+                let row = rows.first { $0.relativePath == entry.relativePath }
+                try await receiptRemoteOnly(entry.relativePath,
+                                            expected: FileIntegrity(byteCount: row?.byteCount ?? entry.byteCount,
+                                                                    sha256: row?.sha256 ?? entry.sha256),
+                                            mismatched: row?.state == .mismatch,
+                                            directory: directory, job: job, adapter: adapter)
+                receipted.insert(entry.relativePath)
+            }
+        }
 
         try await adapter.ensureContainer(relativePath: directory)
         // Mirror the local layout: a package without attachments has no content/ folder.
@@ -134,7 +186,6 @@ public final class SyncWorker: Sendable {
             try await adapter.ensureContainer(relativePath: directory + "/content")
         }
 
-        let receipted = Set(try jobs.receipts(jobID: job.jobID).map(\.relativePath))
         for entry in files where !receipted.contains(entry.relativePath) {
             try await syncFile(entry.relativePath, local: package.directoryURL.appendingPathComponent(entry.relativePath),
                                expected: FileIntegrity(byteCount: entry.byteCount, sha256: entry.sha256),
@@ -208,6 +259,32 @@ public final class SyncWorker: Sendable {
         try saveReceipt(path, remote: uploaded, evidence: evidence, job: job)
     }
 
+    /// Receipts a trimmed file from the destination's copy alone: it must be there with the trimmed size and,
+    /// when the provider reports a SHA-256, that hash; any other provider hash is recorded as the evidence.
+    /// Absent there: `trimmed_file_missing`; different, or already proven different (a mismatched trim row):
+    /// `remote_conflict` (both blocked).
+    private func receiptRemoteOnly(_ path: String, expected: FileIntegrity, mismatched: Bool, directory: String,
+                                   job: UploadJob,
+                                   adapter: any StorageAdapter) async throws {
+        try Task.checkCancellation()
+        guard let current = try jobs.job(jobID: job.jobID) else { throw JobError.notFound }
+        if current.cancelRequested { throw Failure(state: .paused, code: "cancelled") }
+        guard try jobs.renewLease(jobID: job.jobID, owner: leaseOwner, now: now(), lease: Self.lease) else {
+            throw JobError.leaseLost
+        }
+        guard let remote = try await adapter.inspectFile(relativePath: directory + "/" + path) else {
+            throw Failure(state: .blocked, code: "trimmed_file_missing")
+        }
+        let hash = remote.providerHash
+        guard !mismatched, remote.byteCount == expected.byteCount, hash?.algorithm != "sha256" || hash?.value == expected.sha256 else {
+            throw Failure(state: .blocked, code: "remote_conflict")
+        }
+        try saveReceipt(path, remote: remote,
+                        evidence: VerificationEvidence(kind: hash?.algorithm ?? "size_only",
+                                                       value: hash?.value ?? String(expected.byteCount)),
+                        job: job)
+    }
+
     private func saveReceipt(_ path: String, remote: RemoteFileInfo, evidence: VerificationEvidence,
                              job: UploadJob) throws {
         try jobs.saveReceipt(jobID: job.jobID, StoredReceipt(relativePath: path, byteCount: remote.byteCount,
@@ -229,7 +306,7 @@ public final class SyncWorker: Sendable {
                                 nextAttemptAt: next)
             log?.append(LogEvent(event: .packageUploadFailed, captureID: job.captureID, code: failure.code,
                                  dest: destinationKind(job)))
-            return .failed
+            return .failed(authExpired: failure.code == "needs_authentication")
         } catch {
             return .abandoned
         }
