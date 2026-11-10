@@ -45,6 +45,12 @@ public final class EnrichmentTaskStore: Sendable {
         }
     }
 
+    /// Deletes the capture's row for `kind`, so the next scheduling pass treats it as never run.
+    public func forget(captureID: String, kind: FacetKind) throws {
+        try db.execute("DELETE FROM enrichment_tasks WHERE capture_id = ? AND kind = ?",
+                       [.text(captureID), .text(kind.rawValue)])
+    }
+
     /// Creates or replaces the row, resetting attempts, the retry time and the error.
     public func set(captureID: String, kind: FacetKind, version: Int, status: String, now: Date) throws {
         try db.execute("""

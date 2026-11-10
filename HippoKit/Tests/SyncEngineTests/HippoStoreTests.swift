@@ -540,7 +540,7 @@ private func isComplete(_ r: ValidationResult) -> Bool {
                                    "recent_error_codes", "destinations",
                                    "enrichment_tasks", "enrichment_uploads_pending", "gold"])
         #expect(json["app_version"] as? String == "1.4.2")
-        #expect(json["schema_version"] as? Int == 4)
+        #expect(json["schema_version"] as? Int == 5)
         #expect(json["capture_count"] as? Int == 1)
         #expect(json["jobs_by_state"] as? [String: Int] == [
             "pending": 0, "uploading": 0, "synced": 0, "retryable_failure": 1, "needs_authentication": 0,

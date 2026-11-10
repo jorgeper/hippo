@@ -13,9 +13,9 @@ private func prepared() throws -> URL {
     @Test func migratesOnceAndIsIdempotent() throws {
         let url = try prepared()
         let first = try Database(url: url)
-        #expect(try first.query("PRAGMA user_version")[0].int("user_version") == 4)
+        #expect(try first.query("PRAGMA user_version")[0].int("user_version") == 5)
         let second = try Database(url: url)
-        #expect(try second.query("PRAGMA user_version")[0].int("user_version") == 4)
+        #expect(try second.query("PRAGMA user_version")[0].int("user_version") == 5)
         #expect(try second.query("SELECT count(*) AS n FROM sqlite_master WHERE name = 'captures'")[0].int("n") == 1)
     }
 
@@ -110,7 +110,7 @@ private func prepared() throws -> URL {
             for try await v in group { out.append(v) }
             return out
         }
-        #expect(versions == [4, 4])
+        #expect(versions == [5, 5])
     }
 
     @Test func fileDatabaseUsesWAL() throws {
@@ -152,7 +152,7 @@ private func prepared() throws -> URL {
         #expect(try v2.query("PRAGMA user_version")[0].int("user_version") == 2)
 
         let upgraded = try Database(url: url)
-        #expect(try upgraded.query("PRAGMA user_version")[0].int("user_version") == 4)
+        #expect(try upgraded.query("PRAGMA user_version")[0].int("user_version") == 5)
         let index = CaptureIndex(db: upgraded)
         for q in ["wombat", "burrow", "example", "scan", "wombat burrow"] {
             #expect(try index.page(CaptureFilter(searchText: q), after: nil, limit: 10).map(\.id) == ["old"])
@@ -179,7 +179,7 @@ private func prepared() throws -> URL {
         #expect(try v3.query("PRAGMA user_version")[0].int("user_version") == 3)
 
         let upgraded = try Database(url: url)
-        #expect(try upgraded.query("PRAGMA user_version")[0].int("user_version") == 4)
+        #expect(try upgraded.query("PRAGMA user_version")[0].int("user_version") == 5)
         for table in ["remote_tombstones", "local_deletes", "remote_cursors", "remote_review_items", "remote_changed",
                       "trimmed_attachments"] {
             #expect(try upgraded.query("SELECT count(*) AS n FROM sqlite_master WHERE name = ?", [.text(table)])[0]
