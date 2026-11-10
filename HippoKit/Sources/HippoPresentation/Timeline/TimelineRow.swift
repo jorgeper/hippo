@@ -31,19 +31,22 @@ public struct TimelineRow: Identifiable, Equatable, Sendable {
                               relativeDirectory: s.relativeDirectory,
                               thumbnailAttachmentPaths: [], extraCount: 0, thumbnailURL: nil)
         let hasVisual = s.contentTypes.contains(.image) || s.contentTypes.contains(.video)
-        // Audio outside a recording is a voice comment: the row shows what it comments on (design §4.6).
+        // A recording, or a capture that is only audio with no link (a shared voice memo), is a voice note.
+        // Otherwise audio is a voice comment: the row shows what it comments on (design §4.6).
         // Without metadata, a capture with audio is taken to have one audio attachment.
         let audioCount = metadata.map { $0.attachments.filter(isAudio).count }
             ?? (s.contentTypes.contains(.audio) ? 1 : 0)
-        let count = s.method == .voiceRecording ? s.attachmentCount : max(0, s.attachmentCount - audioCount)
-        if s.method != .voiceRecording && count >= 2 {
+        let allAudio = s.attachmentCount > 0 && audioCount >= s.attachmentCount
+        let isVoice = s.method == .voiceRecording || (allAudio && !s.contentTypes.contains(.url))
+        let count = isVoice ? s.attachmentCount : max(0, s.attachmentCount - audioCount)
+        if !isVoice && count >= 2 {
             let visual = metadata?.attachments.filter(isVisual).map(\.relativePath)
                 ?? s.primaryAttachmentPath.map { [$0] } ?? []
             let shown = Array(visual.prefix(3))
             row.kind = .multi
             row.thumbnailAttachmentPaths = shown
             row.extraCount = max(0, count - shown.count)
-        } else if s.method == .voiceRecording {
+        } else if isVoice {
             row.kind = .voice
             let seconds = metadata?.attachments.first?.media?.durationSeconds
             if let seconds, seconds.isFinite, seconds >= 0 {

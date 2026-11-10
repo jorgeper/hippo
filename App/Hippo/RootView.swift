@@ -11,8 +11,8 @@ struct RootView: View {
     let startup: Result<AppEnvironment, StartupError>
     @State private var path = NavigationPath()
     @State private var pendingShare: PendingShareItem?
-    /// The pending share whose cover is on screen. A share set while another presentation was up never
-    /// appears, and `checkPending` presents it again.
+    /// The capture ID of the pending share whose cover is on screen. A share set while another
+    /// presentation was up never appears, and `checkPending` presents it again.
     @State private var appearedPendingID: UUID?
     @State private var pendingSetAt = Date.distantPast
     /// Shares put off with "Later": not presented again until the next activation.
@@ -27,11 +27,12 @@ struct RootView: View {
             }
             .syncScheduling(environment)
             .fullScreenCover(item: $pendingShare) { item in
+                let captureID = item.pending.draft.captureID
                 PendingShareView(environment: environment, pending: item.pending,
-                                 done: { finishPending(item.id, environment) },
-                                 later: { putOffPending(item.id, environment) })
-                    .onAppear { appearedPendingID = item.id }
-                    .onDisappear { if appearedPendingID == item.id { appearedPendingID = nil } }
+                                 done: { finishPending(captureID, environment) },
+                                 later: { putOffPending(captureID, environment) })
+                    .onAppear { appearedPendingID = captureID }
+                    .onDisappear { if appearedPendingID == captureID { appearedPendingID = nil } }
             }
             .onAppear { checkPending(environment) }
             .onChange(of: scenePhase) { _, phase in
@@ -57,12 +58,11 @@ struct RootView: View {
     /// removed by the intake, as were those already saved (the app was killed before the intake was
     /// cleared); both are logged here.
     private func checkPending(_ environment: AppEnvironment) {
-        if let current = pendingShare {
-            // On screen, or set a moment ago and still being presented: leave it.
-            if appearedPendingID == current.id || Date().timeIntervalSince(pendingSetAt) < 1 { return }
-            // Set while another sheet was up, so it never appeared: present it again on the next update.
-            pendingShare = nil
-            Task { @MainActor in checkPending(environment) }
+        // On screen, or set a moment ago and still being presented: leave it. Otherwise it was set while
+        // another sheet was up and never appeared; the fresh item below has a new identity, so SwiftUI
+        // presents it again.
+        if let current = pendingShare,
+           appearedPendingID == current.pending.draft.captureID || Date().timeIntervalSince(pendingSetAt) < 1 {
             return
         }
         let index = environment.store.index
@@ -76,27 +76,30 @@ struct RootView: View {
             environment.store.log.append(LogEvent(event: .captureSaveFailed, code: "pending_already_committed",
                                                   count: committed))
         }
-        guard let next = captures.first(where: { !putOff.contains($0.draft.captureID) }) else { return }
-        pendingShare = PendingShareItem(pending: next)
-        pendingSetAt = Date()
+        let next = captures.first(where: { !putOff.contains($0.draft.captureID) })
+        pendingShare = next.map(PendingShareItem.init)
+        if next != nil { pendingSetAt = Date() }
     }
 
-    /// Closes the sheet for `id` and presents the next one. A second call for the same share does nothing.
+    /// Closes the sheet for capture `id` and presents the next one. A second call for the same share does
+    /// nothing.
     private func finishPending(_ id: UUID, _ environment: AppEnvironment) {
-        guard pendingShare?.id == id else { return }
+        guard pendingShare?.pending.draft.captureID == id else { return }
         pendingShare = nil
         checkPending(environment)
     }
 
-    /// Closes the sheet for `id` and keeps its pending draft for the next activation.
+    /// Closes the sheet for capture `id` and keeps its pending draft for the next activation.
     private func putOffPending(_ id: UUID, _ environment: AppEnvironment) {
         putOff.insert(id)
         finishPending(id, environment)
     }
 }
 
-/// A pending share, identified by its capture ID for `.fullScreenCover(item:)`.
+/// One attempt to present a pending share. Each attempt has its own identity, so setting a new item for
+/// the same share makes `.fullScreenCover(item:)` present again; match shares on the capture ID.
 private struct PendingShareItem: Identifiable {
     let pending: PendingCapture
-    var id: UUID { pending.draft.captureID }
+    let attempt = UUID()
+    var id: UUID { attempt }
 }

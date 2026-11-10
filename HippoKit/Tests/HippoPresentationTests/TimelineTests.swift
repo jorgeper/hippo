@@ -174,6 +174,22 @@ private func attachment(_ n: Int, uti: String = "public.jpeg", duration: Double?
         #expect(TimelineRow.make(s, metadata: m, enrichment: nil, locale: locale).subtitle == "example.com")
     }
 
+    // A Voice Memo or voice message shared from another app is still a voice note.
+    @Test func sharedAudioOnlyCaptureIsAVoiceRow() {
+        let s = summary(types: [.audio], method: .shareExtension, attachments: 1, primary: "attachments/1.bin")
+        let m = metadata(attachments: [attachment(1, uti: "com.apple.m4a-audio", duration: 75.4)])
+        let e = ResolvedEnrichment(links: [:], places: [:], recognizedText: [:], transcripts: [
+            "a1": TranscriptItem(attachmentID: "a1", text: "Pick up milk", locale: "en_US", segments: [])],
+            detections: [], sourceAppGuess: nil, summary: nil, tags: [], usesServer: false)
+        let row = TimelineRow.make(s, metadata: m, enrichment: e, locale: locale)
+        #expect(row.kind == .voice && row.title == "Voice note · 1:15" && row.subtitle == "Pick up milk")
+        let bare = TimelineRow.make(s, metadata: nil, enrichment: nil, locale: locale)
+        #expect(bare.kind == .voice && bare.title == "Voice note")
+        let two = summary(types: [.audio], attachments: 2)
+        let tm = metadata(attachments: [attachment(1, uti: "com.apple.m4a-audio"), attachment(2, uti: "com.apple.m4a-audio")])
+        #expect(TimelineRow.make(two, metadata: tm, enrichment: nil, locale: locale).kind == .voice)
+    }
+
     // The voice comment is left out of a picture row and of the "+N" count.
     @Test func voiceCommentIsNotCountedOnPictureRows() {
         let photo = summary(types: [.image, .audio], method: .camera, attachments: 2, primary: "attachments/1.bin")

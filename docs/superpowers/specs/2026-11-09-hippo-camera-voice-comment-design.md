@@ -81,7 +81,7 @@ New section **Camera** under the Location section: Toggle "Also save to Photos",
 ### 4.6 Detail
 "How" row: `camera` → "Camera". Everything else is unchanged.
 
-Timeline row (ruled in the final review): the voice-note row is only for method `voice_recording`; a voice comment never changes a row's kind and is left out of the "+N" count, so a photo with a comment shows the photo and a link with a comment shows the link.
+Timeline row (ruled in the final review): the voice-note row is for method `voice_recording` and for a capture whose attachments are all audio and that has no URL (a shared Voice Memo or voice message). Otherwise a voice comment never changes a row's kind and is left out of the "+N" count, so a photo with a comment shows the photo and a link with a comment shows the link.
 
 ## 5. Architecture
 

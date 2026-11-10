@@ -56,7 +56,6 @@ struct PendingShareView: View {
                     .background(Color(.systemBackground))
                 }
             }
-            .interactiveDismissDisabled()
             // The design starts the voice comment at once for a handed-off share.
             .task { await session.start() }
             .onDisappear {
