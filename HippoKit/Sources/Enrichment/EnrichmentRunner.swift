@@ -119,12 +119,12 @@ public actor EnrichmentRunner {
     private func scheduleOne(captureID id: String, _ e: any Enricher) throws -> Bool {
         let t = now()
         let metadata: CaptureMetadata
-        let comments: [CaptureComment]
+        let directory: String
         do {
             guard let m = try index.metadata(captureID: id, layout: layout),
                   let dir = try index.relativeDirectory(captureID: id) else { return false }  // deleted
             metadata = m
-            comments = PackageComments.load(directory: layout.packageURL(relativeDirectory: dir)).comments
+            directory = dir
         } catch let error as DatabaseError {
             throw error
         } catch {
@@ -147,6 +147,8 @@ public actor EnrichmentRunner {
             }
             return false
         }
+        // Listed only once the trimmed guard has passed: it reads the package directory.
+        let comments = PackageComments.load(directory: layout.packageURL(relativeDirectory: directory)).comments
         let applies = e.applies(to: metadata, comments: comments)
         try tasks.set(captureID: id, kind: e.kind, version: e.version, status: applies ? "pending" : "not_applicable",
                       now: t)
