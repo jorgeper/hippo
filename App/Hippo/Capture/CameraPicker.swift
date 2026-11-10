@@ -8,6 +8,8 @@ import HippoPresentation
 /// still as a `CGImage` with its orientation and metadata, or the recorded movie's temporary URL.
 struct CameraPicker: UIViewControllerRepresentable {
     let onResult: (CameraResult) -> Void
+    /// A still came back without a bitmap: nothing can be saved.
+    let onPhotoFailed: () -> Void
     let onCancel: () -> Void
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
@@ -40,7 +42,7 @@ struct CameraPicker: UIViewControllerRepresentable {
                 parent.onResult(.photo(cgImage, orientation: Int32(CGImagePropertyOrientation(image.imageOrientation).rawValue),
                                        metadata: PhotoMetadata(metadata)))
             } else {
-                parent.onCancel()
+                parent.onPhotoFailed()
             }
         }
 

@@ -57,6 +57,7 @@ final class CaptureFlowUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         confirm.tap()
         XCTAssertTrue(app.buttons["note-button"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["camera-button"].exists)
         let gone = NSPredicate(format: "exists == false")
         let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone, object: row("Delete me"))], timeout: 10)
         XCTAssertEqual(result, .completed, "row still present")

@@ -3,21 +3,26 @@ import ShareIntake
 import HippoPresentation
 
 /// A share handed off by the extension to record a voice comment: the capture sheet with the recording
-/// started at once. There is no discard; "Save without comment" saves it without the recording.
+/// started at once. There is no discard; "Save without comment" saves it without the recording, and
+/// "Later" (only after a save that can't be retried here) closes the sheet and keeps the share.
 struct PendingShareView: View {
     let environment: AppEnvironment
     let pending: PendingCapture
     /// Closes this sheet and presents the next pending share, if any. Safe to call more than once.
     let done: () -> Void
+    /// Closes this sheet and keeps the pending draft, to be presented again on the next activation.
+    let later: () -> Void
 
     @State private var model: ShareSessionModel
     @State private var session: RecordingSession
     @State private var recorder: SystemAudioRecorder
 
-    init(environment: AppEnvironment, pending: PendingCapture, done: @escaping () -> Void) {
+    init(environment: AppEnvironment, pending: PendingCapture, done: @escaping () -> Void,
+         later: @escaping () -> Void) {
         self.environment = environment
         self.pending = pending
         self.done = done
+        self.later = later
         let recorder = SystemAudioRecorder()
         let session = RecordingSession(intake: environment.intake, recorder: recorder,
                                        permission: { await SystemAudioRecorder.requestMicPermission() })
@@ -38,13 +43,14 @@ struct PendingShareView: View {
                          cancel: {},
                          finish: done)
             .overlay(alignment: .topLeading) {
-                // A commit that can't be retried leaves the sheet with no enabled button: offer Discard.
+                // A commit that can't be retried now (no space, a disk error) leaves no enabled button.
+                // "Later" keeps the share: it comes back on the next activation, when Save may work.
                 if case .failed(_, canSave: false) = model.state {
-                    Button("Discard", role: .destructive) {
+                    Button("Later") {
                         session.discard()
-                        environment.intake.discard(captureID: pending.draft.captureID)
-                        done()
+                        later()
                     }
+                    .accessibilityIdentifier("pending-share-later")
                     .padding(.horizontal)
                     .padding(.vertical, 12)
                     .background(Color(.systemBackground))

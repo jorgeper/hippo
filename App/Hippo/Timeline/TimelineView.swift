@@ -61,14 +61,14 @@ struct TimelineView: View {
                     }
                 }
             }
-            .sheet(isPresented: $reviewing) {
+            .sheet(isPresented: $reviewing, onDismiss: presentationClosed) {
                 RemoteReviewSheet(store: environment.store, coordinator: environment.coordinator)
             }
-            .sheet(isPresented: $showingFilters) {
+            .sheet(isPresented: $showingFilters, onDismiss: presentationClosed) {
                 FiltersSheet(filters: $model.filter.sheet)
                     .presentationDetents([.medium, .large])
             }
-            .sheet(item: sheetCompose, onDismiss: { Task { await model.reload() } }) { compose in
+            .sheet(item: sheetCompose, onDismiss: { presentationClosed(); Task { await model.reload() } }) { compose in
                 switch compose {
                 case .note:
                     NoteEditorView(environment: environment, location: LocationService.shared)
@@ -76,11 +76,12 @@ struct TimelineView: View {
                     RecorderView(environment: environment, location: LocationService.shared)
                         .presentationDetents([.medium])
                 case .camera:
+                    // Never shown: `sheetCompose` maps the camera to nil; it has the cover below.
                     EmptyView()
                 }
             }
             // The camera needs the whole screen; its capture sheet follows inside the same cover.
-            .fullScreenCover(isPresented: cameraPresented, onDismiss: { Task { await model.reload() } }) {
+            .fullScreenCover(isPresented: cameraPresented, onDismiss: { presentationClosed(); Task { await model.reload() } }) {
                 CameraCaptureView(environment: environment, location: LocationService.shared)
             }
             .task {
@@ -141,6 +142,11 @@ struct TimelineView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    /// A pending share that arrived while a sheet was up is presented once it closes.
+    private func presentationClosed() {
+        NotificationCenter.default.post(name: RootView.presentationClosed, object: nil)
     }
 
     /// Note and Record show as sheets; the camera as a full-screen cover.
@@ -209,7 +215,7 @@ struct TimelineView: View {
                 }
             } else {
                 ContentUnavailableView("No captures yet", systemImage: "tray",
-                                       description: Text("Share something to Hippo from any app, or tap Note or Record."))
+                                       description: Text("Share something to Hippo from any app, or tap Note, Camera or Record."))
             }
         }
     }

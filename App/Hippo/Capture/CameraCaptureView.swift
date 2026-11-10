@@ -51,7 +51,6 @@ struct CameraCaptureView: View {
                 if staged.model.state != .saved && staged.model.state != .saving { staged.model.cancel() }
                 staged.recorder.deactivate()
             }
-            .interactiveDismissDisabled(isBusy)
     }
 
     @ViewBuilder private var content: some View {
@@ -59,7 +58,9 @@ struct CameraCaptureView: View {
         case .checking:
             Color.black.ignoresSafeArea()
         case .picking:
-            CameraPicker(onResult: { result in Task { await stage(result) } }, onCancel: { dismiss() })
+            CameraPicker(onResult: { result in Task { await stage(result) } },
+                         onPhotoFailed: { if case .picking = phase { phase = .stageFailed(isVideo: false) } },
+                         onCancel: { dismiss() })
                 .ignoresSafeArea()
         case .staging:
             ZStack {
@@ -100,14 +101,6 @@ struct CameraCaptureView: View {
 
     private var sheetState: ShareSessionModel.State? {
         if case .sheet(let staged) = phase { staged.model.state } else { nil }
-    }
-
-    /// A recording in progress or kept, or a save under way.
-    private var isBusy: Bool {
-        guard case .sheet(let staged) = phase else { return false }
-        if staged.model.state == .saving { return true }
-        if case .recording = staged.session.state { return true }
-        return staged.session.pending != nil
     }
 
     private func checkPermission() async {
