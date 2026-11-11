@@ -27,6 +27,8 @@ public protocol MotionHistoryProviding: Sendable {
 /// window after the capture has closed, and writes nothing once Core Motion's history has expired.
 public struct MotionActivityEnricher: Enricher {
     public static let halfWindow: TimeInterval = 600
+    /// How far before the window the history is searched for the activity already in progress.
+    public static let lookback: TimeInterval = 6 * 3600
     public static let historyLimit: TimeInterval = 7 * 86_400
     public static let maxSegments = 60
     static let unauthorizedRetry: TimeInterval = 86_400
@@ -61,7 +63,7 @@ public struct MotionActivityEnricher: Enricher {
 
         let raw: [MotionSample]
         do {
-            raw = try await history.samples(from: start, to: windowClose)
+            raw = try await history.samples(from: start.addingTimeInterval(-Self.lookback), to: windowClose)
         } catch is CancellationError {
             throw CancellationError()
         } catch MotionHistoryError.unauthorized {
@@ -73,13 +75,17 @@ public struct MotionActivityEnricher: Enricher {
         }
 
         // Stable sort, so equal timestamps keep the source's order.
-        let samples = raw.enumerated().sorted {
+        let sorted = raw.enumerated().sorted {
             $0.element.startedAt != $1.element.startedAt ? $0.element.startedAt < $1.element.startedAt : $0.offset < $1.offset
         }.map { sample -> MotionActivityData.Sample in
             MotionActivityData.Sample(startedAt: sample.element.startedAt,
                                       activities: Self.ordered(sample.element.activities),
                                       confidence: sample.element.confidence)
         }
+        // Core Motion reports changes, so the activity already in progress when the window opens is the
+        // last sample before it. Keep that one, with its real start, and drop the older ones.
+        let inProgress = sorted.last { $0.startedAt < start }
+        let samples = (inProgress.map { [$0] } ?? []) + sorted.filter { $0.startedAt >= start }
         guard !samples.isEmpty else { return EnricherOutput(status: .empty, data: nil, provenance: "core_motion") }
 
         var merged: [MotionActivityData.Sample] = []

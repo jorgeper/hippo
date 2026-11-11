@@ -26,17 +26,28 @@ enum DraftSanitizer {
             && l.horizontalAccuracyMeters.isFinite && l.horizontalAccuracyMeters >= 0
     }
 
-    /// Each bad extra is dropped on its own; the fix itself stays.
+    /// A value and its accuracy are dropped together when either is invalid (the same rule as
+    /// `LocationPolicy.pick`); a valid value with no accuracy is kept. The fix itself stays.
     private static func withValidExtras(_ l: CaptureLocation) -> CaptureLocation {
         var l = l
-        func nonNegative(_ v: Double?) -> Double? { v.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } }
-        l.altitudeMeters = l.altitudeMeters.flatMap { $0.isFinite ? $0 : nil }
-        l.verticalAccuracyMeters = nonNegative(l.verticalAccuracyMeters)
-        l.speedMetersPerSecond = nonNegative(l.speedMetersPerSecond)
-        l.speedAccuracyMetersPerSecond = nonNegative(l.speedAccuracyMetersPerSecond)
-        l.courseAccuracyDegrees = nonNegative(l.courseAccuracyDegrees)
-        l.courseDegrees = l.courseDegrees.flatMap { $0.isFinite && (0.0...360.0).contains($0) ? $0 : nil }
+        (l.altitudeMeters, l.verticalAccuracyMeters) = pair(l.altitudeMeters, l.verticalAccuracyMeters) { $0.isFinite }
+        (l.speedMetersPerSecond, l.speedAccuracyMetersPerSecond) = pair(l.speedMetersPerSecond, l.speedAccuracyMetersPerSecond) {
+            $0.isFinite && $0 >= 0
+        }
+        (l.courseDegrees, l.courseAccuracyDegrees) = pair(l.courseDegrees, l.courseAccuracyDegrees) {
+            $0.isFinite && (0.0...360.0).contains($0)
+        }
         return l
+    }
+
+    private static func pair(_ value: Double?, _ accuracy: Double?,
+                             valid: (Double) -> Bool) -> (Double?, Double?) {
+        guard let value, valid(value) else { return (nil, nil) }
+        if let accuracy {
+            guard accuracy.isFinite, accuracy >= 0 else { return (nil, nil) }
+            return (value, accuracy)
+        }
+        return (value, nil)
     }
 
     private static func isFinite(_ v: JSONValue) -> Bool {

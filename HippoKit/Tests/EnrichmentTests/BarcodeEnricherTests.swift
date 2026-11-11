@@ -87,6 +87,15 @@ private struct Boom: Error {}
         #expect(items[1].url == exact)
     }
 
+    @Test func payloadCapCountsUnicodeScalars() async throws {
+        let combining = "https://example.com/" + String(repeating: "x\u{301}", count: 1100)   // 1,120 Characters, 2,220 scalars
+        #expect(combining.count < 2048 && combining.unicodeScalars.count > 2048)
+        let out = try await run([image("A")]) { _ in [.init(symbology: "qr", payload: combining)] }
+        let item = try decode(out).items[0]
+        #expect(item.payload.unicodeScalars.count == 2048)
+        #expect(item.url == nil)
+    }
+
     @Test func capsApplied() async throws {
         let long = String(repeating: "x", count: 5000)
         var out = try await run([image("A")]) { _ in [.init(symbology: "qr", payload: long)] }

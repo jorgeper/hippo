@@ -50,10 +50,22 @@ public final class FormatUploader: Sendable {
     private func record(digest: String, destinationID: String) {
         var state = readState()
         state[destinationID] = DestinationState(digest: digest)
+        writeState(state)
+    }
+
+    private func writeState(_ state: [String: DestinationState]) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         // A failed write only means the next pass uploads again.
         try? encoder.encode(state).write(to: stateURL, options: .atomic)
+    }
+
+    /// Forgets what was recorded for `destinationID`, so the next `upload()` writes the files again. Called when
+    /// a destination is connected: the person may have deleted `format/` or `README.md` while it was away.
+    public func forgetUpload(destinationID: String) {
+        var state = readState()
+        guard state.removeValue(forKey: destinationID) != nil else { return }
+        writeState(state)
     }
 
     // MARK: Upload
@@ -102,9 +114,15 @@ public final class FormatUploader: Sendable {
     }
 
     /// True when the destination has no `README.md` or its `README.md` is Hippo's own. False when it is anyone
-    /// else's, including one over the read cap. Any other error (an outage, say) propagates: it is not "foreign".
+    /// else's, including one over the read cap or a folder. Any other error (an outage, say) propagates: it is not "foreign".
     private func mayReplaceRootReadme(_ adapter: any StorageAdapter) async throws -> Bool {
-        guard let info = try await adapter.inspectFile(relativePath: Self.readmePath) else { return true }
+        let found: RemoteFileInfo?
+        do {
+            found = try await adapter.inspectFile(relativePath: Self.readmePath)
+        } catch StorageError.permanent(code: "path_is_directory") {
+            return false  // A folder named README.md is not ours to replace.
+        }
+        guard let info = found else { return true }
         guard info.byteCount <= FormatBundle.readmeReadCap else { return false }
         let fm = FileManager.default
         try? fm.createDirectory(at: layout.stagingDir, withIntermediateDirectories: true)

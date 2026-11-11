@@ -231,9 +231,9 @@ private let archiveHost = "archive-api.open-meteo.com"
         let timeout = FakeHTTP { _ in throw EnrichmentError.transient(code: "http_4xx") }
         await #expect(throws: EnrichmentError.transient(code: "http_4xx")) { _ = try await enricher(timeout).run(fixtureInput(m)) }
         #expect(timeout.urls.count == 1)
-        // 429 reaches the enricher as the fetcher's transient http_4xx.
-        let limited = FakeHTTP { _ in throw EnrichmentError.transient(code: "http_4xx") }
-        await #expect(throws: EnrichmentError.transient(code: "http_4xx")) { _ = try await enricher(limited).run(fixtureInput(m)) }
+        // 429 reaches the enricher as the fetcher's transient http_429 and defers an hour without an attempt.
+        let limited = FakeHTTP { _ in throw EnrichmentError.transient(code: "http_429") }
+        await #expect(throws: EnrichmentError.deferred(code: "rate_limited", retryAfter: 3600)) { _ = try await enricher(limited).run(fixtureInput(m)) }
         #expect(limited.urls.count == 1)
 
         let bad = FakeHTTP { _ in Data("not json".utf8) }

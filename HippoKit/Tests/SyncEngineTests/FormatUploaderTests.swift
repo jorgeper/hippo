@@ -187,6 +187,31 @@ private struct Setup {
         #expect(s.h.faults.operations == before)
     }
 
+    @Test func folderNamedReadmeIsForeign() async throws {
+        let s = try Setup(); defer { s.h.cleanup() }
+        try FileManager.default.createDirectory(at: s.remote("README.md"), withIntermediateDirectories: true)
+        let u = s.uploader(s.bundle)
+        #expect(await u.upload() == .uploaded(files: 8, readmeSkipped: true))
+        #expect(s.events(.formatReadmeSkipped).count == 1)
+        #expect(s.events(.formatReadmeSkipped).first?.code == "readme_foreign")
+        #expect(s.storedDigest() == s.bundle.digest)
+        let before = s.h.faults.operations
+        #expect(await u.upload() == .unchanged)
+        #expect(s.h.faults.operations == before)
+    }
+
+    @Test func forgettingTheDestinationUploadsAgain() async throws {
+        let s = try Setup(); defer { s.h.cleanup() }
+        let u = s.uploader(s.bundle)
+        #expect(await u.upload() == .uploaded(files: 9, readmeSkipped: false))
+        #expect(await u.upload() == .unchanged)
+        try FileManager.default.removeItem(at: s.remote("format"))
+        let active = try s.h.destinations.active()
+        u.forgetUpload(destinationID: try #require(active).id)
+        #expect(await u.upload() == .uploaded(files: 9, readmeSkipped: false))
+        #expect(s.exists("format/README.md"))
+    }
+
     @Test func oversizedReadmeIsForeign() async throws {
         let s = try Setup(); defer { s.h.cleanup() }
         var big = Data((FormatBundle.readmeMarker + "\n").utf8)

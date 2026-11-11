@@ -93,7 +93,8 @@ public struct URLSessionHTTPFetcher: HTTPFetching {
             if let http = response as? HTTPURLResponse {
                 switch http.statusCode {
                 case 200..<300: break
-                case 408, 429, 500..<600: throw EnrichmentError.transient(code: "http_\(http.statusCode / 100)xx")
+                case 429: throw EnrichmentError.transient(code: "http_429")  // Distinct so a caller can defer it.
+                case 408, 500..<600: throw EnrichmentError.transient(code: "http_\(http.statusCode / 100)xx")
                 default: throw EnrichmentError.permanent(code: "http_\(http.statusCode / 100)xx")
                 }
             }

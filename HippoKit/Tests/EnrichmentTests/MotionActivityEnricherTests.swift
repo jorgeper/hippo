@@ -85,7 +85,7 @@ private func errorOf(_ e: MotionActivityEnricher) async -> EnrichmentError? {
                              sample(200, ["automotive"], "high")])
         let out = try await enricher(h).run(fixtureInput(metadata()))
         #expect(h.calls.count == 1)
-        #expect(h.calls[0].0 == T.addingTimeInterval(-600) && h.calls[0].1 == T.addingTimeInterval(600))
+        #expect(h.calls[0].0 == T.addingTimeInterval(-600 - 6 * 3600) && h.calls[0].1 == T.addingTimeInterval(600))
         let d = try decode(out)
         #expect(out.status == .ok)
         #expect(out.provenance == "core_motion")
@@ -170,5 +170,37 @@ private func errorOf(_ e: MotionActivityEnricher) async -> EnrichmentError? {
     @Test func cancellationIsRethrown() async {
         let e = enricher(FakeHistory(throwing: CancellationError()))
         await #expect(throws: CancellationError.self) { _ = try await e.run(fixtureInput(metadata())) }
+    }
+
+    @Test func activityInProgressIsKept() async throws {
+        let h = FakeHistory([sample(-1800, ["automotive"], "high")])
+        let out = try await enricher(h).run(fixtureInput(metadata()))
+        let d = try decode(out)
+        #expect(out.status == .ok)
+        #expect(d.atCapture?.startedAt == T.addingTimeInterval(-1800))
+        #expect(d.segments.map(\.startedAt) == [T.addingTimeInterval(-1800)])
+        #expect(d.windowStart == T.addingTimeInterval(-600))
+    }
+
+    @Test func onlyTheLastEarlierSampleIsKept() async throws {
+        let h = FakeHistory([sample(-5000, ["walking"], "high"), sample(-3000, ["cycling"], "high"),
+                             sample(-1800, ["automotive"], "high")])
+        let d = try decode(try await enricher(h).run(fixtureInput(metadata())))
+        #expect(d.segments.map(\.activities) == [["automotive"]])
+    }
+
+    @Test func inProgressMergesWithIdenticalInsideSample() async throws {
+        let h = FakeHistory([sample(-1800, ["automotive"], "high"), sample(-100, ["automotive"], "high"),
+                             sample(200, ["walking"], "high")])
+        let d = try decode(try await enricher(h).run(fixtureInput(metadata())))
+        #expect(d.segments.map(\.startedAt) == [-1800, 200].map { T.addingTimeInterval($0) })
+        #expect(d.atCapture?.startedAt == T.addingTimeInterval(-100))
+    }
+
+    @Test func queryStartsLookbackBeforeTheWindow() async throws {
+        let h = FakeHistory([])
+        _ = try await enricher(h).run(fixtureInput(metadata()))
+        #expect(MotionActivityEnricher.lookback == 6 * 3600)
+        #expect(h.calls[0].0 == T.addingTimeInterval(-600 - 6 * 3600) && h.calls[0].1 == T.addingTimeInterval(600))
     }
 }

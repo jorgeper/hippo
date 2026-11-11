@@ -52,9 +52,10 @@ public struct BarcodeEnricher: Enricher {
             catch is CancellationError { throw CancellationError() }
             catch { failed += 1; continue }
             for d in found.prefix(Self.maxItemsPerAttachment) {
-                let payload = String(d.payload.prefix(Self.maxPayloadLength))
+                // The schema counts Unicode scalars, not Characters.
+                let payload = String(String.UnicodeScalarView(d.payload.unicodeScalars.prefix(Self.maxPayloadLength)))
                 // A cut-off URL would point somewhere else, so a truncated payload never gets one.
-                let url = payload.count == d.payload.count ? Self.webURL(payload) : nil
+                let url = payload.unicodeScalars.count == d.payload.unicodeScalars.count ? Self.webURL(payload) : nil
                 items.append(BarcodesData.Item(attachmentID: a.attachmentID, symbology: d.symbology, payload: payload, url: url))
             }
         }

@@ -90,6 +90,11 @@ private func fetch(_ f: URLSessionHTTPFetcher, _ host: String, maxBytes: Int = 1
         await #expect(throws: EnrichmentError.permanent(code: "too_large")) { _ = try await fetch(f, "big2.test") }
     }
 
+    @Test func status429IsTransientWithItsOwnCode() async throws {
+        let f = fetcher("rl.test", .response(status: 429, headers: [:], chunks: []))
+        await #expect(throws: EnrichmentError.transient(code: "http_429")) { _ = try await fetch(f, "rl.test") }
+    }
+
     @Test func status404IsPermanent() async throws {
         let f = fetcher("nf.test", .response(status: 404, headers: [:], chunks: []))
         await #expect(throws: EnrichmentError.permanent(code: "http_4xx")) { _ = try await fetch(f, "nf.test") }

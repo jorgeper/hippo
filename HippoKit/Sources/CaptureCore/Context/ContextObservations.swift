@@ -26,7 +26,7 @@ public enum ContextObservations {
         }
         if let d = s.device {
             var o: [String: JSONValue] = [:]
-            if let v = d.batteryLevel, v.isFinite, (0.0...1.0).contains(v) { o["battery_level"] = .number(v) }
+            if let v = d.batteryLevel, v.isFinite, (0.0...1.0).contains(v) { o["battery_level"] = .number((v * 100).rounded() / 100) }
             if let v = d.batteryState { o["battery_state"] = capped(v) }
             if let v = d.lowPowerMode { o["low_power_mode"] = .bool(v) }
             if let v = d.thermalState { o["thermal_state"] = capped(v) }

@@ -77,6 +77,17 @@ import Foundation
         #expect(object(ok[0])["battery_level"] == .number(0.62))
     }
 
+    @Test func batteryIsRoundedToTwoDecimals() {
+        func level(_ v: Double?) -> JSONValue? {
+            object(ContextObservations.observations(from: ContextSnapshot(
+                takenAt: t0, device: .init(batteryLevel: v, lowPowerMode: true)))[0])["battery_level"]
+        }
+        #expect(level(0.8500000238) == .number(0.85))
+        #expect(level(0) == .number(0))
+        #expect(level(1) == .number(1))
+        #expect(level(nil) == nil)
+    }
+
     @Test func burstMath() throws {
         let prev = LastSaved(captureID: "ID-1", capturedAt: t0)
         let e = try #require(ContextObservations.burst(previous: prev, capturedAt: t0.addingTimeInterval(41.24)))

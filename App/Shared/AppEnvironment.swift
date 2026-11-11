@@ -2,6 +2,7 @@ import CoreLocation
 import Foundation
 import os
 import CaptureCore
+import LocalRepository
 import SyncEngine
 import ShareIntake
 import HippoPresentation
@@ -87,7 +88,7 @@ struct AppEnvironment: Sendable {
             let coordinator = registry.map { registry in
                 SyncCoordinator(store: store, registry: registry, ownerPrefix: "app", appVersion: producer.appVersion,
                                 settings: LocationService.settings,
-                                formatUploader: store.makeFormatUploader(bundle: formatBundle(),
+                                formatUploader: store.makeFormatUploader(bundle: formatBundle(log: store.log),
                                                                          adapterFor: { try registry.adapter(for: $0) }),
                                 isConstrained: { NetworkStatus.shared.isExpensive })
             }
@@ -102,10 +103,14 @@ struct AppEnvironment: Sendable {
 
     /// The format documents and schemas the app ships (`project.yml` copies them into the Hippo target). Nil when
     /// they are not there, in which case nothing is uploaded and the app is otherwise unaffected.
-    private static func formatBundle() -> FormatBundle? {
-        guard let resources = Bundle.main.resourceURL else { return nil }
-        return try? FormatBundle.load(docsDirectory: resources,
-                                      schemaDirectory: resources.appendingPathComponent("schema", isDirectory: true))
+    private static func formatBundle(log: ActivityLog) -> FormatBundle? {
+        let bundle: FormatBundle? = Bundle.main.resourceURL.flatMap { resources in
+            try? FormatBundle.load(docsDirectory: resources,
+                                   schemaDirectory: resources.appendingPathComponent("schema", isDirectory: true))
+        }
+        // One fixed line, no path or error text, so a build that lost its resources is not silent.
+        if bundle == nil { log.append(LogEvent(event: .formatUploadFailed, code: "bundle_missing")) }
+        return bundle
     }
 
     /// Both processes read the same App Group settings. Location authorization is read, never requested.

@@ -27,6 +27,7 @@ private struct Harness {
          permission: @escaping () async -> Bool = { true }, online: Bool = true,
          onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in },
          motion: @escaping () async -> Bool = { false }, motionDenied: @escaping () -> Bool = { false },
+         motionNotDetermined: @escaping () -> Bool = { false },
          random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) throws {
         t = try TestStore()
         remote = t.base.appendingPathComponent("Remote", isDirectory: true)
@@ -40,6 +41,7 @@ private struct Harness {
                                       settings: settings, random: random)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
                               requestLocationPermission: permission, requestMotionPermission: motion, motionDenied: motionDenied,
+                              motionNotDetermined: motionNotDetermined,
                               onEnrichmentEnabled: onEnrichmentEnabled,
                               isOnline: { online }, now: { Date(timeIntervalSince1970: 1_800_000_000) }, locale: Locale(identifier: "en_US"))
     }
@@ -871,6 +873,56 @@ struct SettingsTests {
         await first.value
         #expect(h.model.motionEnabled)
         #expect(asked.withLock { $0 } == 1)
+    }
+
+    @Test func undeterminedMotionSwitchIsTurnedOffQuietly() async throws {
+        let asked = Mutex(0)
+        let h = try Harness(motion: { asked.withLock { $0 += 1 }; return true }, motionNotDetermined: { true })
+        defer { h.cleanup() }
+        h.settings.setEnrichmentEnabled(.motionActivity, true)   // e.g. restored to a new iPhone
+        await h.model.refresh()
+        #expect(h.model.motionEnabled)
+        await h.model.reconcileMotion()
+        #expect(!h.model.motionEnabled)
+        #expect(!h.settings.isEnrichmentEnabled(.motionActivity))
+        #expect(!h.model.motionDenied)
+        #expect(asked.withLock { $0 } == 0)
+        // Nothing left to reconcile: no second change is logged.
+        await h.model.reconcileMotion()
+        #expect(changes(h).map(\.kind) == ["motion_activity"])
+    }
+
+    @Test func authorizedOrSwitchedOffMotionIsLeftAlone() async throws {
+        let h = try Harness(motionNotDetermined: { false })
+        defer { h.cleanup() }
+        h.settings.setEnrichmentEnabled(.motionActivity, true)
+        await h.model.refresh()
+        await h.model.reconcileMotion()
+        #expect(h.model.motionEnabled)
+        let off = try Harness(motionNotDetermined: { true })
+        defer { off.cleanup() }
+        await off.model.reconcileMotion()
+        #expect(changes(off).isEmpty)
+    }
+
+    @Test func undeterminedMotionIsNotReconciledWhileARequestIsInFlight() async throws {
+        let asked = Mutex(0)
+        let gate = AsyncStream<Void>.makeStream()
+        let h = try Harness(motion: {
+            asked.withLock { $0 += 1 }
+            for await _ in gate.stream { break }
+            return true
+        }, motionNotDetermined: { true })
+        defer { h.cleanup() }
+        h.settings.setEnrichmentEnabled(.motionActivity, true)
+        await h.model.refresh()
+        let first = Task { @MainActor in await h.model.setMotionEnabled(true) }
+        while asked.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(1)) }
+        await h.model.reconcileMotion()
+        #expect(h.model.motionEnabled)
+        gate.continuation.yield()
+        await first.value
+        #expect(h.model.motionEnabled)
     }
 
     @Test func motionDeniedIsRefreshedOnReload() async throws {

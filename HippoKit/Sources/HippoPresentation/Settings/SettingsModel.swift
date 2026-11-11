@@ -75,6 +75,7 @@ public final class SettingsModel {
     @ObservationIgnored private let requestLocationPermission: () async -> Bool
     @ObservationIgnored private let requestMotionPermission: () async -> Bool
     @ObservationIgnored private let motionDeniedProbe: () -> Bool
+    @ObservationIgnored private let motionNotDeterminedProbe: () -> Bool
     @ObservationIgnored private var motionRequestInFlight = false
     @ObservationIgnored private let onEnrichmentEnabled: @Sendable (FacetKind) async -> Void
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "settings")
@@ -83,6 +84,7 @@ public final class SettingsModel {
                 requestLocationPermission: @escaping () async -> Bool,
                 requestMotionPermission: @escaping () async -> Bool = { false },
                 motionDenied: @escaping () -> Bool = { false },
+                motionNotDetermined: @escaping () -> Bool = { false },
                 onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in },
                 isOnline: @escaping @Sendable () -> Bool = { true },
                 now: @escaping @Sendable () -> Date = Date.init, locale: Locale = .current) {
@@ -97,6 +99,7 @@ public final class SettingsModel {
         self.requestLocationPermission = requestLocationPermission
         self.requestMotionPermission = requestMotionPermission
         motionDeniedProbe = motionDenied
+        motionNotDeterminedProbe = motionNotDetermined
         locationEnabled = settings.locationEnabled
         deviceContextEnabled = settings.deviceContextEnabled
         motionEnabled = settings.isEnrichmentEnabled(.motionActivity)
@@ -169,6 +172,13 @@ public final class SettingsModel {
         } else {
             await setEnrichment(.motionActivity, on: false)
         }
+    }
+
+    /// A switch that is on while iOS access is denied, or has never been asked (a restore to a new iPhone),
+    /// is turned off to match. Never prompts, and waits while a request the person started is open.
+    public func reconcileMotion() async {
+        guard motionEnabled, !motionRequestInFlight else { return }
+        if motionDenied || motionNotDeterminedProbe() { await setMotionEnabled(false) }
     }
 
     public func setWeatherEnabled(_ on: Bool) {
@@ -320,6 +330,8 @@ public final class SettingsModel {
         let store = store
         _ = try await Task.detached { try store.destinations.connect(destination) }.value
         store.log.append(LogEvent(event: .authConnected, dest: p.kind))
+        // The folder may have lost `format/` or `README.md` while this account was away.
+        await coordinator.forgetFormatUpload(destinationID: destination.id)
         await refresh()
         await syncThenRefresh()
     }

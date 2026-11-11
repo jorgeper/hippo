@@ -124,15 +124,17 @@ Six kinds, each facet `version` 1. A reader that does not know them keeps and ig
 
 When the phone decides a kind does not apply to a capture, or has to wait, it records that in its own local job table and writes no facet. So for a kind below, "no facet" can mean "not applicable", "not run yet", "switched off" or "unknown". The `status` `empty` means the source was queried and held nothing. See `context-signals.md` for what absence means per signal.
 
+Any kind below can also end as `failed`: after repeated failed tries (the phone gives up after five), or at once on an error that retrying cannot fix. A `failed` facet has no `data`, and its `provenance` is the error code (for example `weather_http_400`), not the source name listed in each heading. `failed` means unknown, not negative: nothing was learned, and it says nothing about the circumstances of the capture.
+
 ### `motion_activity` (provenance `core_motion`), off by default
 
-What Core Motion recorded for 10 minutes before to 10 minutes after `captured_at`.
+What Core Motion recorded from 10 minutes before to 10 minutes after `captured_at`, plus the activity already in progress when that window opens.
 
 | Field | Type / units | Notes |
 |---|---|---|
 | `window_start`, `window_end` | RFC 3339 UTC | `captured_at` minus 10 min, and plus 10 min. |
-| `at_capture` | object | The last sample that started at or before `captured_at`. Omitted when there is none. |
-| `segments` | array | Every sample in the window in time order. Consecutive samples with identical flags and confidence are merged. At most 60: the first 60 are kept. |
+| `at_capture` | object | The last sample that started at or before `captured_at`. It can be the in-progress segment. Omitted when there is none. |
+| `segments` | array | The activity in progress when the window opens comes first, with its real `started_at`, which can be up to six hours before `window_start` (Core Motion reports changes, so a long drive began long before the window). Then every sample in the window, in time order. Consecutive samples with identical flags and confidence are merged. At most 60: the first 60 are kept. |
 
 Sample: `{started_at, activities, confidence}`.
 
@@ -199,8 +201,8 @@ Barcodes and QR codes found in image attachments. `{items: [...]}`, keyed by `at
 |---|---|---|
 | `attachment_id` | yes | The image attachment. |
 | `symbology` | yes | Lowercase; an open set (`qr`, `ean13`, `code128`, ...). |
-| `payload` | yes | The decoded string, at most 2,048 characters. |
-| `url` | no | The payload, when it is a single `http` or `https` URL with a host and no whitespace. Never present when the payload was cut at 2,048 characters. |
+| `payload` | yes | The decoded string, at most 2,048 Unicode code points. |
+| `url` | no | The payload, when it is a single `http` or `https` URL with a host and no whitespace. Never present when the payload was cut at 2,048 code points. |
 
 - At most 20 items per attachment.
 - A URL is recorded, never fetched, and is not added to the capture's `urls`.

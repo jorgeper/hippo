@@ -125,7 +125,7 @@ Port: `{port_type, port_name?}`. `port_type` is an open set. Known values: `buil
 
 | Field | Type / units | Notes |
 |---|---|---|
-| `battery_level` | number, 0 to 1 | Omitted when unknown. |
+| `battery_level` | number, 0 to 1 | Rounded to two decimals. Omitted when unknown. |
 | `battery_state` | string | `unplugged`, `charging`, `full`. |
 | `low_power_mode` | boolean | |
 | `thermal_state` | string | `nominal`, `fair`, `serious`, `critical`. |

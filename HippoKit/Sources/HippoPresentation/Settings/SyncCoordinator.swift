@@ -66,6 +66,11 @@ public actor SyncCoordinator {
                                           isConstrained: isConstrained)
     }
 
+    /// Makes the next pass write the format files to `destinationID` again, even if they were uploaded before.
+    public func forgetFormatUpload(destinationID: String) {
+        formatUploader?.forgetUpload(destinationID: destinationID)
+    }
+
     /// When the earliest waiting retry of the connected destination is due, or nil when nothing waits
     /// or nothing is connected.
     public func nextRetryAt() -> Date? {

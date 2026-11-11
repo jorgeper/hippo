@@ -46,6 +46,7 @@ struct SettingsView: View {
             requestLocationPermission: { await LocationService.shared.requestPermission() },
             requestMotionPermission: { await CoreMotionHistory.requestAccess() },
             motionDenied: { CoreMotionHistory.authorization == .denied || CoreMotionHistory.authorization == .restricted },
+            motionNotDetermined: { CoreMotionHistory.authorization == .notDetermined },
             onEnrichmentEnabled: onEnrichmentEnabled,
             isOnline: { EnrichmentScheduling.isOnline }))
     }
@@ -344,7 +345,7 @@ struct SettingsView: View {
     private func reconcileLocation() async {
         locationDenied = LocationService.shared.isDenied
         if locationDenied && model.locationEnabled { await model.setLocationEnabled(false) }
-        if model.motionDenied && model.motionEnabled { await model.setMotionEnabled(false) }
+        await model.reconcileMotion()
     }
 
     // MARK: On this iPhone / About

@@ -59,6 +59,9 @@ public struct WeatherEnricher: Enricher {
             return try await http.get(url, timeout: Self.timeout, maxBytes: Self.maxBytes)
         } catch is CancellationError {
             throw CancellationError()
+        } catch EnrichmentError.transient(code: "http_429") {
+            // Rate limited: wait an hour and spend no attempt.
+            throw EnrichmentError.deferred(code: "rate_limited", retryAfter: 3600)
         } catch let error as EnrichmentError {
             throw error
         } catch {
