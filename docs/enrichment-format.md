@@ -1,6 +1,6 @@
-# Hippo enrichment format, version 1
+# Hippo enrichment format, version 1.1
 
-For developers writing or reading enrichment: the desktop reader, and the server that produces gold. Machine-readable definition: `schema/enrichment-v1.schema.json`. Worked examples: `fixtures/packages/enrichments/`. The reference reader and writer are `EnrichmentDocument` and `EnrichmentJSON` in `HippoKit/Sources/CaptureCore/Enrichment`. Read `package-format.md` first: this format follows its conventions and sits beside the capture packages it describes.
+For developers writing or reading enrichment: the desktop reader, and the server that produces gold. Machine-readable definition: `schema/enrichment-v1.schema.json`. Worked examples: `fixtures/packages/enrichments/`. The reference reader and writer are `EnrichmentDocument` and `EnrichmentJSON` in `HippoKit/Sources/CaptureCore/Enrichment`. The signals added in 1.1 are listed in one table in `context-signals.md`. In a synced Hippo folder these documents are in `format/` and the schemas in `format/schema/`. Read `package-format.md` first (it also defines the versioning rules): this format follows its conventions and sits beside the capture packages it describes.
 
 Enrichment is derived data (title of a linked page, text recognized in an image, a transcript, a summary). It never changes a capture package's manifested files. A package is the source of truth and stays immutable.
 
@@ -32,7 +32,7 @@ Same as `package-format.md`:
 - Omission rule: an unavailable optional field is omitted. It is never `null` and never an empty string. Treat a missing key as unknown.
 - Open sets: facet kinds, `status` and `provenance` may take values you do not know. Accept and preserve them.
 - Unknown additional keys, anywhere, must be ignored. Unknown facet kinds are kept and ignored.
-- `schema_version` is an integer. This document is version 1. Reject any other value with an "unsupported version" error.
+- `schema_version` is an integer, the major version. This document is major 1. Reject any other value with an "unsupported version" error. `schema_minor` is an optional integer, missing means 0; accept any minor and ignore what you do not know (see Versioning in `package-format.md`).
 
 ## Write order
 
@@ -43,11 +43,12 @@ Same as `package-format.md`:
 
 ## `enrichment.json`
 
-All fields required:
+All fields required except `schema_minor`:
 
 | Field | Type | Notes |
 |---|---|---|
 | `schema_version` | integer | `1` |
+| `schema_minor` | integer | Optional. Format minor of the writer (1.1 writes `1`). Missing means 0. |
 | `capture_id` | UUID string | Lowercase. Matches the directory name. |
 | `layer` | string | `device` or `server`. Matches the directory. |
 | `package_digest` | hex string | SHA-256 of the exact bytes of the capture's `complete.json` that this was derived from. See below. |
@@ -116,6 +117,131 @@ A single item. `app` is a display name. `reason` says why (e.g. `uti:public.url`
 ### `tags` (gold only, by convention): `{values: [string]}`
 
 Any other kind is allowed, with any `data`.
+
+## Facet kinds added in format 1.1
+
+Six kinds, each facet `version` 1. A reader that does not know them keeps and ignores them. Timestamps in payloads are RFC 3339 UTC with milliseconds and `Z`. "On" or "off" below is the default of the phone's Settings switch.
+
+When the phone decides a kind does not apply to a capture, or has to wait, it records that in its own local job table and writes no facet. So for a kind below, "no facet" can mean "not applicable", "not run yet", "switched off" or "unknown". The `status` `empty` means the source was queried and held nothing. See `context-signals.md` for what absence means per signal.
+
+### `motion_activity` (provenance `core_motion`), off by default
+
+What Core Motion recorded for 10 minutes before to 10 minutes after `captured_at`.
+
+| Field | Type / units | Notes |
+|---|---|---|
+| `window_start`, `window_end` | RFC 3339 UTC | `captured_at` minus 10 min, and plus 10 min. |
+| `at_capture` | object | The last sample that started at or before `captured_at`. Omitted when there is none. |
+| `segments` | array | Every sample in the window in time order. Consecutive samples with identical flags and confidence are merged. At most 60: the first 60 are kept. |
+
+Sample: `{started_at, activities, confidence}`.
+
+| Field | Notes |
+|---|---|
+| `started_at` | RFC 3339 UTC. |
+| `activities` | Array of the flags Core Motion raised: `stationary`, `walking`, `running`, `cycling`, `automotive`, `unknown`. Several can be true at once (for example `automotive` and `stationary` at a red light). A sample with no flag raised is `["unknown"]`. Never empty. |
+| `confidence` | `low`, `medium` or `high`. |
+
+- Statuses: `ok`; `empty` when the history was queried and held no samples for the window.
+- No facet is written when the history has expired (Core Motion keeps about seven days), when Core Motion is unavailable on the device, or while Motion & Fitness permission is missing (the phone retries a day later). Absence means unknown.
+- The phone runs it only after the window has closed, 10 minutes after the capture.
+- Needs Motion & Fitness permission, asked once in the main app. Never asked from the Share Extension, so a share-sheet capture gets motion only if Hippo is opened within seven days.
+
+### `weather` (provenance `open_meteo`), off by default
+
+The weather for the hour containing `captured_at`, at the capture's location. Only for captures with a `capture_location`.
+
+| Field | Type / units | Notes |
+|---|---|---|
+| `observed_hour` | RFC 3339 UTC | The hour, floored to the hour in UTC. |
+| `temperature_celsius` | number, degrees Celsius | |
+| `apparent_temperature_celsius` | number, degrees Celsius | |
+| `relative_humidity_percent` | number, percent | As the source reports it, normally 0 to 100. |
+| `precipitation_millimeters` | number, millimeters | Over the hour. |
+| `cloud_cover_percent` | number, percent | |
+| `wind_speed_meters_per_second` | number, m/s | Wind at 10 m. |
+| `weather_code` | integer | The WMO code Open-Meteo returned, 0 to 99. |
+| `condition` | string | A coarse reading of `weather_code`; an open set. Table below. |
+| `is_day` | boolean | Open-Meteo's daylight flag for that hour. |
+| `source` | string | `open-meteo.com` |
+| `requested_latitude`, `requested_longitude` | number, degrees | The rounded coordinates that were sent. |
+
+Every field except `observed_hour`, `source` and the two requested coordinates is omitted when the source had no value for it. A weather code that is not a whole number from 0 to 99, and any non-finite number, is dropped. Other numbers are recorded as the source reports them; the phone does not range-check them. `is_day` is recorded only when the source says 0 or 1.
+
+- Statuses: `ok`; `empty` when Open-Meteo had no data for that hour.
+- No facet is written when the capture has no location.
+- Privacy: the request carries the coordinates rounded to 2 decimals (about 1 km) and the hour. No key or account is used. The forecast API is used for captures within 60 days of the request, the archive API for older ones. If the forecast API refuses with a permanent 4xx, the phone tries the archive API once.
+
+`condition` for each WMO code:
+
+| WMO `weather_code` | `condition` |
+|---|---|
+| 0, 1 | `clear` |
+| 2 | `partly_cloudy` |
+| 3 | `cloudy` |
+| 45, 48 | `fog` |
+| 51, 53, 55 | `drizzle` |
+| 56, 57, 66, 67 | `freezing_rain` |
+| 61, 63, 65 | `rain` |
+| 71, 73, 75, 77, 85, 86 | `snow` |
+| 80, 81, 82 | `showers` |
+| 95, 96, 99 | `thunderstorm` |
+
+Any other code has no `condition`, only the number.
+
+Weather data by Open-Meteo.com (CC BY 4.0). If you republish this data, keep that attribution.
+
+### `barcodes` (provenance `vision`), on by default
+
+Barcodes and QR codes found in image attachments. `{items: [...]}`, keyed by `attachment_id`; one attachment can have several items.
+
+| Field | Required | Notes |
+|---|---|---|
+| `attachment_id` | yes | The image attachment. |
+| `symbology` | yes | Lowercase; an open set (`qr`, `ean13`, `code128`, ...). |
+| `payload` | yes | The decoded string, at most 2,048 characters. |
+| `url` | no | The payload, when it is a single `http` or `https` URL with a host and no whitespace. Never present when the payload was cut at 2,048 characters. |
+
+- At most 20 items per attachment.
+- A URL is recorded, never fetched, and is not added to the capture's `urls`.
+- Statuses: `ok`; `empty` when no image held a barcode. No facet when the capture has no image.
+
+### `language` (provenance `natural_language`), on by default
+
+The language of the capture's own text.
+
+| Field | Notes |
+|---|---|
+| `source` | `user_note`, `shared_text` or `note_body` (the body of a typed note). |
+| `language` | BCP 47 tag, for example `en`. |
+| `confidence` | number, 0 to 1. |
+
+- Text shorter than 20 characters (after trimming) is skipped. If nothing is long enough, no facet is written (the phone records the code `text_too_short` locally). Absence means unknown.
+- A language that could not be determined is dropped. If no text yields a language, the status is `empty`.
+- Recognized text and transcripts carry their own language fields and are not repeated here.
+
+### `sound_classification` (provenance `sound_analysis`), on by default
+
+What Apple's built-in sound classifier (version 1) heard in audio attachments and audio comments. `{items: [...]}`.
+
+| Field | Notes |
+|---|---|
+| `attachment_id` | The audio attachment, or the `comment_id` for a comment's audio (as in `transcript`). |
+| `labels` | Array of `{label, confidence}`: the classifier's own label identifiers (for example `speech`, `music`, `traffic_noise`), `confidence` the mean over the file, 0 to 1. Only labels at 0.3 or above, at most 8, strongest first. |
+
+- A file with no label at 0.3 or above has no item. If no file has one, the status is `empty`.
+- When Save space has trimmed an audio attachment, the earlier labels for it are carried forward from the current facet of the same version.
+
+### `screenshot` (provenance `heuristic`), on by default
+
+A guess, never a fact. `{items: [{attachment_id, reason}]}` for image attachments that look like a screenshot.
+
+| `reason` | Meaning |
+|---|---|
+| `exif_user_comment` | The image's EXIF user comment is "Screenshot", which iOS writes. |
+| `screen_size_match` | The pixel size equals this phone's screen (the size the app last remembered) in either orientation, and the camera make and model are both missing or blank. |
+
+No match: the status is `empty`.
 
 ## Override rule
 

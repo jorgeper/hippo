@@ -77,6 +77,7 @@ Hippo saves a location with a capture only if you turn on "Save location with ca
 - Background upload timing is up to iOS.
 - Comments can't be edited or deleted.
 - Download from Dropbox brings back captures without their comments; the comments stay in Dropbox.
+- A capture made from the share sheet gets motion activity only if Hippo is opened within seven days of the capture (iOS keeps about seven days of motion history, and only the main app may ask for the permission).
 
 ## Dropbox
 
@@ -124,6 +125,21 @@ On launch, on activation, while the app is open, when connectivity returns, on a
 ### Integration tests
 
 `HippoKit/Tests/AdapterContractTests/DropboxAdapterContractTests.swift` runs only when `.env` exists. It writes under `Apps/Hippo/_hippo-test/<run-id>/` and deletes that folder afterwards.
+
+## Format and versioning
+
+Packages and enrichment are versioned `major.minor`. `schema_version` is the major; the optional `schema_minor` counts additive releases (missing means 0). This build writes format 1.1. A reader accepts any minor and rejects an unknown major. The documents:
+
+- [`docs/package-format.md`](docs/package-format.md): the package, the versioning rules, the context observations and the format history.
+- [`docs/enrichment-format.md`](docs/enrichment-format.md): the enrichment files and every facet kind.
+- [`docs/context-signals.md`](docs/context-signals.md): one table of every context signal, with units and what absence means.
+- [`docs/folder-readme.md`](docs/folder-readme.md): the README the app writes into the destination folder, so an agent pointed at the folder can learn the format from it.
+
+### Context
+
+Settings has a "Context" section. "Save device context with captures" (on by default) records the audio route, battery and device state, the network and the time since the previous capture. "Motion activity" (off) reads Core Motion history and asks for Motion & Fitness access once, in the main app. "Weather" (off) looks up the weather for every capture that has a location and sends an approximate location (two decimals) and the hour to Open-Meteo.com. Barcodes and QR codes, Language, Sounds in recordings and Screenshots are on by default under Enrichment. Capture Detail shows a "Context" section with one plain row per recorded signal. Hippo records facts only; it never records a conclusion such as "in a car".
+
+Weather data by Open-Meteo.com (CC BY 4.0).
 
 ## Enrichment
 
@@ -214,7 +230,7 @@ swift run --package-path HippoKit hippo-fixtures fixtures/packages
 scripts/validate-fixtures.sh
 ```
 
-The generator is deterministic for IDs, clock and time zone, but media files embed creation timestamps, so their hashes change on every run. See [`fixtures/README.md`](fixtures/README.md).
+The generator is deterministic for IDs, clock and time zone, but media files embed creation timestamps, so their hashes change on every run. Packages 1 to 6 are frozen as format 1.0 (the files must stay byte-identical, to prove old files still validate), so do not regenerate them. Format 1.1 package 7 has its own byte-stable mode: `swift run --package-path HippoKit hippo-fixtures context fixtures/packages`. See [`fixtures/README.md`](fixtures/README.md).
 
 ### Local storage layout
 

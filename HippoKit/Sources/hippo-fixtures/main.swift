@@ -8,6 +8,7 @@ import HippoTestSupport
 // Regenerates the committed fixture packages. Deterministic: IDs, clock, time zone and producer are fixed.
 // Usage: hippo-fixtures <output-directory>
 //        hippo-fixtures enrichments <root>   (adds enrichment files beside existing packages; never touches captures/)
+//        hippo-fixtures context <root>       (adds format 1.1 package 7 and its device enrichment; never touches 1-6)
 
 struct Fixture {
     let name: String
@@ -20,10 +21,11 @@ func fail(_ message: String) -> Never {
 }
 
 let isEnrichments = CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "enrichments"
-guard isEnrichments || CommandLine.arguments.count == 2 else {
-    fail("usage: hippo-fixtures <output-directory> | hippo-fixtures enrichments <root>")
+let isContext = CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "context"
+guard isEnrichments || isContext || CommandLine.arguments.count == 2 else {
+    fail("usage: hippo-fixtures <output-directory> | hippo-fixtures enrichments <root> | hippo-fixtures context <root>")
 }
-let out = URL(fileURLWithPath: CommandLine.arguments[isEnrichments ? 2 : 1], isDirectory: true).standardizedFileURL
+let out = URL(fileURLWithPath: CommandLine.arguments[isEnrichments || isContext ? 2 : 1], isDirectory: true).standardizedFileURL
 let layout = StoreLayout(root: out)
 let fm = FileManager.default
 let scratch = fm.temporaryDirectory.appendingPathComponent("hippo-fixtures-\(UUID().uuidString)", isDirectory: true)
@@ -47,6 +49,15 @@ if isEnrichments {
         exit(0)
     } catch {
         fail("hippo-fixtures enrichments failed: \(error)")
+    }
+}
+
+if isContext {
+    do {
+        try await writeContextFixture(root: out)
+        exit(0)
+    } catch {
+        fail("hippo-fixtures context failed: \(error)")
     }
 }
 
@@ -179,4 +190,126 @@ func writeEnrichmentFixtures(root: URL) throws {
                 LinkPreviewItem(url: "https://example.com/item", title: "Example Domain (server)")])),
         ])
     try write(server, assets: [])
+}
+
+/// Format 1.1 fixture: package 7 carrying every context signal, and its device enrichment document with the six
+/// new facet kinds. Adds files only; packages 1-6 are frozen 1.0 files and are not touched. All inputs are fixed.
+/// The facet payloads are hand-built (the audio is silence and the QR image is drawn here), not detector output.
+func writeContextFixture(root: URL) async throws {
+    let fm = FileManager.default
+    let scratch = fm.temporaryDirectory.appendingPathComponent("hippo-fixtures-\(UUID().uuidString)", isDirectory: true)
+    try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: scratch) }
+    let layout = StoreLayout(root: root)
+    // Replaces only package 7, so the mode can be run again; packages 1-6 are never opened.
+    try? fm.removeItem(at: root.appendingPathComponent("captures/2026/11/07/\(captureID(7).uuidString.lowercased())"))
+
+    // One QR code on a phone-sized white canvas (so the screenshot guess is coherent), and 1 s of silence.
+    let qr = try MediaMaker.qrCodePNG(payload: "https://example.com/hippo", canvasWidth: 1170, canvasHeight: 2532)
+    let audioURL = scratch.appendingPathComponent("memo.m4a")
+    try MediaMaker.writeAudio(to: audioURL)
+    let audio = zeroingMovieTimestamps(try Data(contentsOf: audioURL))
+    try audio.write(to: audioURL)
+
+    let snapshot = ContextSnapshot(
+        takenAt: started(7),
+        audioRoute: ContextSnapshot.AudioRoute(
+            outputs: [ContextSnapshot.Port(type: "car_audio", name: "CarPlay")],
+            inputs: [ContextSnapshot.Port(type: "built_in_mic", name: "iPhone Microphone")]),
+        device: ContextSnapshot.Device(batteryLevel: 0.62, batteryState: "charging", lowPowerMode: false,
+                                       thermalState: "nominal", interfaceStyle: "dark", orientation: "portrait",
+                                       locale: "en_US", uses24HourClock: false),
+        network: ContextSnapshot.Network(interface: "wifi", expensive: false, constrained: false))
+    var observations = ContextObservations.observations(from: snapshot)
+    observations.append(ContextObservations.enabled(deviceContext: true, location: true))
+    let previous = LastSaved(captureID: captureID(6).uuidString.lowercased(), capturedAt: started(6))
+    if let burst = ContextObservations.burst(previous: previous, capturedAt: started(7)) { observations.append(burst) }
+
+    var captureDraft = draft(7, .shareExtension,
+        userNote: "Menu from the cafe on the corner, scan the code for the specials",
+        attachments: [
+            AttachmentSource(body: .data(qr), originalFilename: "IMG_0007.PNG", uti: "public.png", mimeType: "image/png",
+                             representationSource: "item_provider_file"),
+            AttachmentSource(body: .file(audioURL), originalFilename: "memo.m4a", uti: "com.apple.m4a-audio",
+                             mimeType: "audio/mp4", representationSource: "recording"),
+        ])
+    captureDraft.location = CaptureLocation(
+        latitude: 37.7749, longitude: -122.4194, horizontalAccuracyMeters: 12,
+        observedAt: started(7).addingTimeInterval(-4), provenance: "core_location_request",
+        altitudeMeters: 16, verticalAccuracyMeters: 8, speedMetersPerSecond: 11.2, speedAccuracyMetersPerSecond: 0.6,
+        courseDegrees: 274, courseAccuracyDegrees: 12)
+    captureDraft.observations = observations
+
+    let counter = Mutex(0)
+    let writer = PackageWriter(layout: layout, producer: producer, makeID: {
+        let m = counter.withLock { value -> Int in value += 1; return value }
+        return UUID(uuidString: String(format: "00000000-0000-4000-8000-%04d%08d", 7, m))!
+    })
+    let package = try await writer.commit(captureDraft)
+    print("context -> \(package.relativeDirectory)")
+    rmdir(layout.stagingDir.path) // removes only an empty directory
+    let imageID = package.metadata.attachments[0].attachmentID
+    let audioID = package.metadata.attachments[1].attachmentID
+
+    let directory = package.relativeDirectory
+    let digest = try StreamingHasher.digest(of: root.appendingPathComponent(directory).appendingPathComponent("complete.json")).sha256
+    let generatedAt = started(7).addingTimeInterval(1_800)
+    func facet<T: Encodable>(_ provenance: String, _ payload: T) throws -> Facet {
+        let value = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(payload))
+        return Facet(version: 1, status: .ok, generatedAt: generatedAt, provenance: provenance, data: value)
+    }
+    func sample(_ minutes: Double, _ activities: [String], _ confidence: String) -> MotionActivityData.Sample {
+        .init(startedAt: started(7).addingTimeInterval(minutes * 60), activities: activities, confidence: confidence)
+    }
+    let motion = MotionActivityData(
+        windowStart: started(7).addingTimeInterval(-600), windowEnd: started(7).addingTimeInterval(600),
+        atCapture: sample(-4, ["automotive"], "high"),
+        segments: [sample(-10, ["walking"], "medium"), sample(-4, ["automotive"], "high"),
+                   sample(3, ["automotive", "stationary"], "high"), sample(7, ["walking"], "medium")])
+    let weather = WeatherData(
+        observedHour: base, temperatureCelsius: 14.2, apparentTemperatureCelsius: 12.9,
+        relativeHumidityPercent: 81, precipitationMillimeters: 0.4, cloudCoverPercent: 100, windSpeedMetersPerSecond: 3.1,
+        weatherCode: 61, condition: "rain", isDay: true, source: "open-meteo.com",
+        requestedLatitude: 37.77, requestedLongitude: -122.42)
+    let enrichmentProducer = EnrichmentProducer(name: "hippo-fixtures", version: "1", build: "1")
+    let device = EnrichmentDocument(
+        schemaVersion: FormatVersion.major, captureID: captureID(7).uuidString.lowercased(), layer: .device,
+        packageDigest: digest, producer: enrichmentProducer, generatedAt: generatedAt,
+        facets: [
+            FacetKind.motionActivity.rawValue: try facet("core_motion", motion),
+            FacetKind.weather.rawValue: try facet("open_meteo", weather),
+            FacetKind.barcodes.rawValue: try facet("vision", BarcodesData(items: [
+                .init(attachmentID: imageID, symbology: "qr", payload: "https://example.com/hippo", url: "https://example.com/hippo")])),
+            FacetKind.language.rawValue: try facet("natural_language", LanguageData(items: [
+                .init(source: "user_note", language: "en", confidence: 0.98)])),
+            FacetKind.soundClassification.rawValue: try facet("sound_analysis", SoundClassificationData(items: [
+                .init(attachmentID: audioID, labels: [.init(label: "speech", confidence: 0.62), .init(label: "music", confidence: 0.41)])])),
+            FacetKind.screenshot.rawValue: try facet("heuristic", ScreenshotData(items: [
+                .init(attachmentID: imageID, reason: "screen_size_match")])),
+        ],
+        schemaMinor: FormatVersion.minor)
+    let dir = root.appendingPathComponent(try EnrichmentPaths.remoteDirectory(.device, packageDirectory: directory), isDirectory: true)
+    try? fm.removeItem(at: dir)
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    try EnrichmentJSON.encode(device).write(to: dir.appendingPathComponent(EnrichmentPaths.documentName))
+    print("device -> \(dir.path)")
+}
+
+/// AAC files from `AVAudioFile` record the time they were written in their `mvhd`, `tkhd` and `mdhd` boxes. Sets
+/// those creation and modification times to 0 so the same inputs give the same bytes.
+func zeroingMovieTimestamps(_ input: Data) -> Data {
+    var data = input
+    for tag in ["mvhd", "tkhd", "mdhd"] {
+        var from = data.startIndex
+        while let hit = data.range(of: Data(tag.utf8), in: from..<data.endIndex) {
+            let version = data[hit.upperBound]
+            let width = version == 1 ? 8 : 4
+            let start = hit.upperBound + 4 // after version and flags
+            if start + 2 * width <= data.endIndex {
+                for i in start..<(start + 2 * width) { data[i] = 0 }
+            }
+            from = hit.upperBound
+        }
+    }
+    return data
 }

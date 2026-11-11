@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 import AVFoundation
 import CoreVideo
 import CoreGraphics
+import CoreImage
 
 /// Generates small media files for tests and fixtures. Self-contained: no test-framework imports.
 public enum MediaMaker {
@@ -118,6 +119,34 @@ public enum MediaMaker {
         ctx.beginPDFPage(nil)
         ctx.endPDFPage()
         ctx.closePDF()
+        return data as Data
+    }
+
+    /// A PNG of a QR code for `payload`, black on white, centred on a white canvas. No metadata, so the same
+    /// inputs give the same bytes.
+    public static func qrCodePNG(payload: String, canvasWidth: Int, canvasHeight: Int, module: Int = 8) throws -> Data {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { throw MakerError(message: "qr filter") }
+        filter.setValue(Data(payload.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { throw MakerError(message: "qr output") }
+        let context = CIContext(options: [.useSoftwareRenderer: true])
+        guard let code = context.createCGImage(output, from: output.extent) else { throw MakerError(message: "qr image") }
+        let side = code.width * module
+        guard let ctx = CGContext(data: nil, width: canvasWidth, height: canvasHeight, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+            throw MakerError(message: "qr context")
+        }
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: canvasWidth, height: canvasHeight))
+        ctx.interpolationQuality = .none
+        ctx.draw(code, in: CGRect(x: (canvasWidth - side) / 2, y: (canvasHeight - side) / 2, width: side, height: side))
+        guard let image = ctx.makeImage() else { throw MakerError(message: "qr canvas") }
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+            throw MakerError(message: "qr destination")
+        }
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest) else { throw MakerError(message: "qr finalize") }
         return data as Data
     }
 }

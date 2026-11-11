@@ -1,0 +1,129 @@
+{
+  "attachments" : [
+    {
+      "attachment_id" : "00000000-0000-4000-8000-000700000001",
+      "byte_count" : 47218,
+      "media" : {
+        "height_pixels" : 2532,
+        "width_pixels" : 1170
+      },
+      "mime_type" : "image/png",
+      "original_filename" : "IMG_0007.PNG",
+      "relative_path" : "content/00000000-0000-4000-8000-000700000001.png",
+      "representation_source" : "item_provider_file",
+      "sha256" : "21c066844db8d0c794e83f12c4679204ce176305b4e02edd57788f0a72acbe95",
+      "uti" : "public.png"
+    },
+    {
+      "attachment_id" : "00000000-0000-4000-8000-000700000002",
+      "byte_count" : 57528,
+      "media" : {
+        "duration_seconds" : 1
+      },
+      "mime_type" : "audio/mp4",
+      "original_filename" : "memo.m4a",
+      "relative_path" : "content/00000000-0000-4000-8000-000700000002.m4a",
+      "representation_source" : "recording",
+      "sha256" : "12ed1203bd5645d77c692b51c2699c5d53f009aa408747e28259da2a7eab0d14",
+      "uti" : "com.apple.m4a-audio"
+    }
+  ],
+  "capture_id" : "00000000-0000-4000-8000-000000000007",
+  "capture_location" : {
+    "altitude_meters" : 16,
+    "course_accuracy_degrees" : 12,
+    "course_degrees" : 274,
+    "horizontal_accuracy_meters" : 12,
+    "latitude" : 37.7749,
+    "longitude" : -122.4194,
+    "observed_at" : "2026-11-07T17:06:56.000Z",
+    "provenance" : "core_location_request",
+    "speed_accuracy_meters_per_second" : 0.6,
+    "speed_meters_per_second" : 11.2,
+    "vertical_accuracy_meters" : 8
+  },
+  "capture_method" : "share_extension",
+  "captured_at" : "2026-11-07T17:07:00.000Z",
+  "content_types" : [
+    "image",
+    "audio"
+  ],
+  "extensions" : {
+
+  },
+  "local_datetime" : "2026-11-07T09:07:00-08:00",
+  "metadata_observations" : [
+    {
+      "key" : "context.audio_route",
+      "provenance" : "av_audio_session",
+      "value" : {
+        "inputs" : [
+          {
+            "port_name" : "iPhone Microphone",
+            "port_type" : "built_in_mic"
+          }
+        ],
+        "outputs" : [
+          {
+            "port_name" : "CarPlay",
+            "port_type" : "car_audio"
+          }
+        ]
+      }
+    },
+    {
+      "key" : "context.device",
+      "provenance" : "device_state",
+      "value" : {
+        "battery_level" : 0.62,
+        "battery_state" : "charging",
+        "interface_style" : "dark",
+        "locale" : "en_US",
+        "low_power_mode" : false,
+        "orientation" : "portrait",
+        "thermal_state" : "nominal",
+        "uses_24_hour_clock" : false
+      }
+    },
+    {
+      "key" : "context.network",
+      "provenance" : "nw_path",
+      "value" : {
+        "constrained" : false,
+        "expensive" : false,
+        "interface" : "wifi"
+      }
+    },
+    {
+      "key" : "context.enabled",
+      "provenance" : "settings",
+      "value" : {
+        "groups" : [
+          "device_context",
+          "location"
+        ]
+      }
+    },
+    {
+      "key" : "context.burst",
+      "provenance" : "last_saved",
+      "value" : {
+        "previous_capture_id" : "00000000-0000-4000-8000-000000000006",
+        "seconds_since_previous" : 60
+      }
+    }
+  ],
+  "producer" : {
+    "app_version" : "0.1.0",
+    "build" : "1",
+    "os_version" : "fixture"
+  },
+  "schema_minor" : 1,
+  "schema_version" : 1,
+  "timezone_identifier" : "America/Los_Angeles",
+  "urls" : [
+
+  ],
+  "user_note" : "Menu from the cafe on the corner, scan the code for the specials",
+  "utc_offset_seconds" : -28800
+}

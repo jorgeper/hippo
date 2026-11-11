@@ -14,7 +14,7 @@ What comes after Plan 3 (Dropbox, merged 2026-11-09). Items are not ordered yet;
 
 ## Decided: capture context (all behind Settings toggles and the relevant permission)
 
-In design (2026-11-10, [design](superpowers/specs/2026-11-10-hippo-capture-context-design.md)): the signals below, a major.minor format version, a signal registry, and a self-describing destination folder. The purpose sharpened to recall by circumstance: "the pictures I shared last week while I was in a car".
+**Done (2026-11-10, [design](superpowers/specs/2026-11-10-hippo-capture-context-design.md)).** Built: the signals below, a major.minor format version, a signal registry, and a self-describing destination folder. The purpose sharpened to recall by circumstance: "the pictures I shared last week while I was in a car".
 
 Purpose: record factual signals at capture time so that, later, Hippo or the desktop can infer an activity ("looks like you were running", "in the car", "on headphones") and ask the user to confirm it. Everything lands as `metadata_observations` entries (with provenance) or device-layer enrichment facets, omitted when unknown; inference happens later, not at capture time.
 
@@ -25,7 +25,8 @@ Purpose: record factual signals at capture time so that, later, Hippo or the des
   - Location extras already on the `CLLocation` fix: altitude, speed, course.
   - On-device content detectors: barcodes and QR codes in images (a QR code becomes a URL), language of text and speech, sound classification of recordings (traffic, music, crowd, birds), screenshot detection.
 - **Motion activity, backfilled by the main app** from Core Motion's seven-day history at the capture timestamp: stationary, walking, running, cycling, automotive. The share extension never asks for the permission.
-- **Weather, backfilled by the main app** at the capture's location and time: temperature, conditions, daylight or dark. Open-Meteo's historical endpoint until the paid developer program makes WeatherKit available.
+- **Weather, backfilled by the main app** at the capture's location and time: temperature, conditions, daylight or dark. Open-Meteo's historical endpoint until the paid developer program makes WeatherKit available. Later: swap Open-Meteo for WeatherKit.
+- **Later: the offline indexer.** A separate project that reads the synced folder and builds a rebuildable index over these signals; the phone does no search or filtering by context.
 
 Dropped for now: Health (heart rate, workout in progress, sleep). Judged too hard for the value.
 
