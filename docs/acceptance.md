@@ -2,7 +2,7 @@
 
 Scenarios that can only be checked on a real iPhone. Install with `make device`, run each row, then fill in Result (pass, fail with a note, or "not run") and Date. Spec refers to `hippo-v0-spec.md`; design refers to `docs/superpowers/specs/2026-11-07-hippo-v0-design.md`.
 
-Rows 1–24, whose upload halves waited for Dropbox, are re-run in the same device session as the D rows. Design D refers to `docs/superpowers/specs/2026-11-08-hippo-dropbox-design.md` §9.
+Rows 1–24, whose upload halves waited for Dropbox, are re-run in the same device session as the D rows. Design D refers to `docs/superpowers/specs/2026-11-08-hippo-dropbox-design.md` §9. Design (comments) refers to `docs/superpowers/specs/2026-11-10-hippo-comments-design.md` §9. Design (context) refers to `docs/superpowers/specs/2026-11-10-hippo-capture-context-design.md` §10.
 
 | # | Scenario | Steps | Expected | Result | Date |
 |---|---|---|---|---|---|

@@ -75,7 +75,7 @@ Optional (omitted when unknown):
 | `schema_minor` | integer | Format minor of the writer (1.1 writes `1`). Missing means 0. |
 | `capture_location` | object | `latitude`, `longitude` (degrees), `horizontal_accuracy_meters`, `observed_at` (RFC 3339 UTC), `provenance`, and the optional extras below. |
 
-`capture_location` extras (format 1.1). All optional. Each is omitted when Core Location reports it as invalid (negative accuracy, negative speed, a course outside 0-360, a value that is not finite). The location itself is kept. A single fix often has no speed or course; they are then absent.
+`capture_location` extras (format 1.1). All optional. A value and its accuracy are dropped together: if the value is invalid (not finite, a negative speed, a course outside 0-360) or its accuracy is invalid (negative or not finite), both fields of that pair are omitted. A valid value with no accuracy is kept without it. The location itself is always kept. A single fix often has no speed or course; they are then absent.
 
 | Field | Type / units | Notes |
 |---|---|---|
@@ -142,7 +142,7 @@ Port: `{port_type, port_name?}`. `port_type` is an open set. Known values: `buil
 | `expensive` | boolean | |
 | `constrained` | boolean | Low Data Mode. |
 
-Taken from the most recent network path the process had received. The snapshot is taken when the capture begins; the network part is read again at save time. If no path had arrived, the entry is omitted.
+Taken from the most recent network path the process had received. The snapshot is taken when the capture begins, and a network value read then is kept. Only when the snapshot has no network value (no path had arrived yet, or the snapshot was too old) is the path read at save time instead. If no path had arrived at either moment, the entry is omitted.
 
 ### `context.burst` (provenance `last_saved`)
 

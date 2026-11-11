@@ -296,20 +296,29 @@ func writeContextFixture(root: URL) async throws {
 }
 
 /// AAC files from `AVAudioFile` record the time they were written in their `mvhd`, `tkhd` and `mdhd` boxes. Sets
-/// those creation and modification times to 0 so the same inputs give the same bytes.
+/// those creation and modification times to 0 so the same inputs give the same bytes. Each box must be found
+/// exactly once with a plausible size; otherwise the generator stops instead of writing unstable or damaged bytes.
 func zeroingMovieTimestamps(_ input: Data) -> Data {
     var data = input
     for tag in ["mvhd", "tkhd", "mdhd"] {
+        var hits: [Range<Int>] = []
         var from = data.startIndex
         while let hit = data.range(of: Data(tag.utf8), in: from..<data.endIndex) {
-            let version = data[hit.upperBound]
-            let width = version == 1 ? 8 : 4
-            let start = hit.upperBound + 4 // after version and flags
-            if start + 2 * width <= data.endIndex {
-                for i in start..<(start + 2 * width) { data[i] = 0 }
-            }
+            hits.append(hit)
             from = hit.upperBound
         }
+        guard hits.count == 1, let hit = hits.first else {
+            fail("audio timestamps: expected exactly one \(tag) box, found \(hits.count)")
+        }
+        guard hit.lowerBound - 4 >= data.startIndex else { fail("audio timestamps: \(tag) has no size field") }
+        let size = data[(hit.lowerBound - 4)..<hit.lowerBound].reduce(0) { $0 << 8 | Int($1) }
+        guard size >= 12 + 8, hit.lowerBound - 4 + size <= data.endIndex else {
+            fail("audio timestamps: \(tag) box size \(size) is not plausible")
+        }
+        let width = data[hit.upperBound] == 1 ? 8 : 4
+        let start = hit.upperBound + 4 // after version and flags
+        guard start + 2 * width <= hit.lowerBound - 4 + size else { fail("audio timestamps: \(tag) box is too short") }
+        for i in start..<(start + 2 * width) { data[i] = 0 }
     }
     return data
 }

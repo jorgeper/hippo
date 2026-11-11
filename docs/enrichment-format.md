@@ -1,6 +1,6 @@
 # Hippo enrichment format, version 1.1
 
-For developers writing or reading enrichment: the desktop reader, and the server that produces gold. Machine-readable definition: `schema/enrichment-v1.schema.json`. Worked examples: `fixtures/packages/enrichments/`. The reference reader and writer are `EnrichmentDocument` and `EnrichmentJSON` in `HippoKit/Sources/CaptureCore/Enrichment`. The signals added in 1.1 are listed in one table in `context-signals.md`. In a synced Hippo folder these documents are in `format/` and the schemas in `format/schema/`. Read `package-format.md` first (it also defines the versioning rules): this format follows its conventions and sits beside the capture packages it describes.
+For developers writing or reading enrichment: the desktop reader, and the server that produces gold. Machine-readable definition: `schema/enrichment-v1.schema.json`. Worked examples: `fixtures/packages/enrichments/` in the Hippo repository. The reference reader and writer are `EnrichmentDocument` and `EnrichmentJSON` in `HippoKit/Sources/CaptureCore/Enrichment` in the Hippo repository. The signals added in 1.1 are listed in one table in `context-signals.md`. In a synced Hippo folder these documents are in `format/` and the schemas in `format/schema/`. Read `package-format.md` first (it also defines the versioning rules): this format follows its conventions and sits beside the capture packages it describes.
 
 Enrichment is derived data (title of a linked page, text recognized in an image, a transcript, a summary). It never changes a capture package's manifested files. A package is the source of truth and stays immutable.
 
@@ -172,7 +172,7 @@ Every field except `observed_hour`, `source` and the two requested coordinates i
 - No facet is written when the capture has no location.
 - Privacy: the request carries the coordinates rounded to 2 decimals (about 1 km) and the hour. No key or account is used. The forecast API is used for captures within 60 days of the request, the archive API for older ones. If the forecast API refuses with a permanent 4xx, the phone tries the archive API once.
 
-`condition` for each WMO code:
+`condition` for each WMO code (ranges are inclusive):
 
 | WMO `weather_code` | `condition` |
 |---|---|
@@ -180,14 +180,14 @@ Every field except `observed_hour`, `source` and the two requested coordinates i
 | 2 | `partly_cloudy` |
 | 3 | `cloudy` |
 | 45, 48 | `fog` |
-| 51, 53, 55 | `drizzle` |
+| 51 to 55 | `drizzle` |
 | 56, 57, 66, 67 | `freezing_rain` |
-| 61, 63, 65 | `rain` |
-| 71, 73, 75, 77, 85, 86 | `snow` |
-| 80, 81, 82 | `showers` |
-| 95, 96, 99 | `thunderstorm` |
+| 61 to 65 | `rain` |
+| 71 to 77, 85, 86 | `snow` |
+| 80 to 82 | `showers` |
+| 95 to 99 | `thunderstorm` |
 
-Any other code has no `condition`, only the number.
+A code in none of these rows (for example 4 to 44, 46, 47, 49 to 50, 58 to 60, 68 to 70, 78, 79, 83, 84, 87 to 94) has no `condition`, only the number.
 
 Weather data by Open-Meteo.com (CC BY 4.0). If you republish this data, keep that attribution.
 
