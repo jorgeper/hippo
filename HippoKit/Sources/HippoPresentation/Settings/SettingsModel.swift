@@ -20,6 +20,11 @@ public final class SettingsModel {
     /// Disk space used by the local store (database and capture packages).
     public private(set) var storageBytes: Int64 = 0
     public private(set) var locationEnabled: Bool
+    public private(set) var deviceContextEnabled: Bool
+    public private(set) var motionEnabled: Bool
+    /// The last motion request was refused, or iOS reports Motion & Fitness as denied or restricted.
+    public private(set) var motionDenied = false
+    public private(set) var weatherEnabled: Bool
     /// Whether stripes show where details came from.
     public private(set) var showsLayerStripes: Bool
     /// Whether camera shots are also saved to Photos.
@@ -68,11 +73,16 @@ public final class SettingsModel {
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let locale: Locale
     @ObservationIgnored private let requestLocationPermission: () async -> Bool
+    @ObservationIgnored private let requestMotionPermission: () async -> Bool
+    @ObservationIgnored private let motionDeniedProbe: () -> Bool
+    @ObservationIgnored private var motionRequestInFlight = false
     @ObservationIgnored private let onEnrichmentEnabled: @Sendable (FacetKind) async -> Void
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "settings")
 
     public init(store: HippoStore, registry: ProviderRegistry, coordinator: SyncCoordinator, settings: AppSettings,
                 requestLocationPermission: @escaping () async -> Bool,
+                requestMotionPermission: @escaping () async -> Bool = { false },
+                motionDenied: @escaping () -> Bool = { false },
                 onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in },
                 isOnline: @escaping @Sendable () -> Bool = { true },
                 now: @escaping @Sendable () -> Date = Date.init, locale: Locale = .current) {
@@ -85,7 +95,13 @@ public final class SettingsModel {
         self.coordinator = coordinator
         self.settings = settings
         self.requestLocationPermission = requestLocationPermission
+        self.requestMotionPermission = requestMotionPermission
+        motionDeniedProbe = motionDenied
         locationEnabled = settings.locationEnabled
+        deviceContextEnabled = settings.deviceContextEnabled
+        motionEnabled = settings.isEnrichmentEnabled(.motionActivity)
+        weatherEnabled = settings.isEnrichmentEnabled(.weather)
+        self.motionDenied = motionDenied()
         showsLayerStripes = settings.showsLayerStripes
         developerMode = settings.developerMode
         cameraSavesToPhotos = settings.cameraSavesToPhotos
@@ -98,7 +114,16 @@ public final class SettingsModel {
         EnrichmentSwitch(kind: .transcript, title: "Voice note transcripts"),
         EnrichmentSwitch(kind: .dataDetection, title: "Dates, phone numbers and addresses"),
         EnrichmentSwitch(kind: .sourceAppGuess, title: "App guesses"),
+        EnrichmentSwitch(kind: .barcodes, title: "Barcodes and QR codes"),
+        EnrichmentSwitch(kind: .language, title: "Language"),
+        EnrichmentSwitch(kind: .soundClassification, title: "Sounds in recordings"),
+        EnrichmentSwitch(kind: .screenshot, title: "Screenshots"),
     ]
+
+    public static let deviceContextFooter = "Records the audio route (speaker, headphones, car), battery, network and the time since your last capture. Nothing leaves this iPhone except with your captures."
+    public static let motionFooter = "Records whether you were still, walking, running, cycling or in a vehicle around each capture. Needs Motion & Fitness access. iOS keeps about seven days of history, so open Hippo within a week of a capture."
+    public static let motionDeniedFooter = "Motion & Fitness access is off for Hippo. Turn it on in iOS Settings."
+    public static let weatherFooter = "Looks up the weather where and when you captured, for all your captures with a location. Sends an approximate location and the time to Open-Meteo.com. Weather data by Open-Meteo.com."
 
     public static let enrichmentFooter = "Link previews fetch the page title and picture from the website. Place names are looked up with Apple Maps. Everything else runs on this iPhone."
     public static let layerStripesFooter = "Bronze: what you captured. Silver: added on this iPhone. Gold: added by your server."
@@ -125,9 +150,41 @@ public final class SettingsModel {
 
     public func isEnrichmentEnabled(_ kind: FacetKind) -> Bool { settings.isEnrichmentEnabled(kind) }
 
+    public func setDeviceContextEnabled(_ on: Bool) {
+        settings.deviceContextEnabled = on
+        deviceContextEnabled = on
+        store.log.append(LogEvent(event: .settingsChanged, kind: "device_context", on: on))
+    }
+
+    /// Turning motion on asks for permission first and stays off if it is not granted. A second
+    /// request while one is waiting for the user's answer is ignored.
+    public func setMotionEnabled(_ on: Bool) async {
+        if on {
+            guard !motionRequestInFlight else { return }
+            motionRequestInFlight = true
+            let granted = await requestMotionPermission()
+            motionRequestInFlight = false
+            motionDenied = !granted || motionDeniedProbe()
+            await setEnrichment(.motionActivity, on: granted)
+        } else {
+            await setEnrichment(.motionActivity, on: false)
+        }
+    }
+
+    public func setWeatherEnabled(_ on: Bool) {
+        // Synchronous for the view; the backfill hook runs in its own task.
+        let hook = onEnrichmentEnabled
+        settings.setEnrichmentEnabled(.weather, on)
+        weatherEnabled = on
+        store.log.append(LogEvent(event: .settingsChanged, kind: FacetKind.weather.rawValue, on: on))
+        if on { Task { await hook(.weather) } }
+    }
+
     /// Stores the switch. Turning a kind on backfills existing captures through `onEnrichmentEnabled`.
     public func setEnrichment(_ kind: FacetKind, on: Bool) async {
         settings.setEnrichmentEnabled(kind, on)
+        if kind == .motionActivity { motionEnabled = on }
+        if kind == .weather { weatherEnabled = on }
         store.log.append(LogEvent(event: .settingsChanged, kind: kind.rawValue, on: on))
         if on { await onEnrichmentEnabled(kind) }
     }
@@ -172,6 +229,10 @@ public final class SettingsModel {
     public func refresh() async {
         let store = store
         locationEnabled = settings.locationEnabled
+        deviceContextEnabled = settings.deviceContextEnabled
+        weatherEnabled = settings.isEnrichmentEnabled(.weather)
+        motionEnabled = settings.isEnrichmentEnabled(.motionActivity)
+        motionDenied = motionDeniedProbe()
         let snapshot: Snapshot? = await Task.detached {
             do {
                 let destination = try store.destinations.active()

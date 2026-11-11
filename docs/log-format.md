@@ -97,7 +97,7 @@ Global (no `capture_id`):
 | `auth.disconnected` | The destination was disconnected in Settings (`dest`) |
 | `auth.refresh_failed` | An upload found the destination's sign-in expired or revoked, so its job waits for Reconnect (`dest`) |
 | `app.launch` | The app launched (`code` = version-build) |
-| `settings.changed` | A switch changed (`kind`, `on`); never values such as folder names |
+| `settings.changed` | A switch changed (`kind`, `on`; `kind` is `location`, `device_context`, `camera_saves_to_photos`, `layer_stripes`, `developer_mode`, or an enrichment facet kind such as `motion_activity` or `weather`); never values such as folder names |
 | `log.truncated` | A segment reached its size cap; later events in it were dropped |
 | `log.cleared` | The user cleared the log on the phone |
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreMotion
 import CaptureCore
 import LocalRepository
 import SyncEngine
@@ -43,6 +44,8 @@ struct SettingsView: View {
         _model = State(initialValue: SettingsModel(
             store: store, registry: registry, coordinator: coordinator, settings: LocationService.settings,
             requestLocationPermission: { await LocationService.shared.requestPermission() },
+            requestMotionPermission: { await CoreMotionHistory.requestAccess() },
+            motionDenied: { CoreMotionHistory.authorization == .denied || CoreMotionHistory.authorization == .restricted },
             onEnrichmentEnabled: onEnrichmentEnabled,
             isOnline: { EnrichmentScheduling.isOnline }))
     }
@@ -52,6 +55,9 @@ struct SettingsView: View {
             storageSection
             syncSection
             locationSection
+            deviceContextSection
+            motionSection
+            weatherSection
             cameraSection
             enrichmentSection
             onThisPhoneSection
@@ -232,6 +238,52 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: Context
+
+    private var deviceContextSection: some View {
+        Section {
+            Toggle("Save device context with captures", isOn: Binding(
+                get: { model.deviceContextEnabled },
+                set: { model.setDeviceContextEnabled($0) }))
+                .accessibilityIdentifier("device-context-switch")
+        } header: {
+            Text("Context")
+        } footer: {
+            Text(SettingsModel.deviceContextFooter)
+        }
+    }
+
+    private var motionSection: some View {
+        Section {
+            Toggle("Motion activity", isOn: Binding(
+                get: { model.motionEnabled },
+                set: { on in Task { await model.setMotionEnabled(on) } }))
+                .accessibilityIdentifier("motion-switch")
+            if model.motionDenied {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+            }
+        } footer: {
+            if model.motionDenied {
+                Text("\(SettingsModel.motionDeniedFooter) \(SettingsModel.motionFooter)")
+            } else {
+                Text(SettingsModel.motionFooter)
+            }
+        }
+    }
+
+    private var weatherSection: some View {
+        Section {
+            Toggle("Weather", isOn: Binding(
+                get: { model.weatherEnabled },
+                set: { model.setWeatherEnabled($0) }))
+                .accessibilityIdentifier("weather-switch")
+        } footer: {
+            Text(SettingsModel.weatherFooter)
+        }
+    }
+
     // MARK: Camera
 
     private var cameraSection: some View {
@@ -292,6 +344,7 @@ struct SettingsView: View {
     private func reconcileLocation() async {
         locationDenied = LocationService.shared.isDenied
         if locationDenied && model.locationEnabled { await model.setLocationEnabled(false) }
+        if model.motionDenied && model.motionEnabled { await model.setMotionEnabled(false) }
     }
 
     // MARK: On this iPhone / About
