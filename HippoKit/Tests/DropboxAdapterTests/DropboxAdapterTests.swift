@@ -290,6 +290,25 @@ private final class Saved: @unchecked Sendable {
         }
     }
 
+    @Test func replaceAllowedPaths() async throws {
+        let h = Harness()
+        let (url, integrity) = try h.file("p.bin", bytes: 200)
+        let allowed = ["README.md", "format/README.md", "format/schema/a.schema.json",
+                       "enrichments/device/2026/11/07/p/enrichment.json", "logs/abc/2026-11-08.jsonl"]
+        for path in allowed {
+            h.on("files/upload", ScriptedTransport.json(try h.meta(url, path: "/" + path)))
+            let receipt = try await h.adapter.replaceFile(localURL: url, relativePath: path, expected: integrity)
+            #expect(receipt.relativePath == path)
+        }
+        for path in ["README.md.bak", "readme.md", "formatting/a.md", "format", "captures/2026/11/07/x/metadata.json",
+                     "notes/README.md"] {
+            await #expect(throws: StorageError.permanent(code: "replace_not_allowed")) {
+                _ = try await h.adapter.replaceFile(localURL: url, relativePath: path, expected: integrity)
+            }
+        }
+        #expect(h.paths("files/upload").count == allowed.count)
+    }
+
     @Test func deleteFolderNotFoundIsSuccess() async throws {
         let h = Harness(root: "r")
         h.on("files/delete_v2", h.apiError([".tag": "path_lookup", "path_lookup": [".tag": "not_found"]]))

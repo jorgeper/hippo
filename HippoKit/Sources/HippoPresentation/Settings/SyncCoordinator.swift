@@ -26,6 +26,7 @@ public actor SyncCoordinator {
     private let puller: GoldPuller
     private let detector: RemoteChangeDetector
     private let logUploader: LogUploader
+    private let formatUploader: FormatUploader?
     private let settings: AppSettings
     private let appVersion: String
 
@@ -49,10 +50,12 @@ public actor SyncCoordinator {
 
     /// `random` draws the upload retry jitter (0...1); tests pass a constant.
     public init(store: HippoStore, registry: ProviderRegistry, ownerPrefix: String, appVersion: String,
-                settings: AppSettings, isConstrained: @escaping @Sendable () -> Bool = { false },
+                settings: AppSettings, formatUploader: FormatUploader? = nil,
+                isConstrained: @escaping @Sendable () -> Bool = { false },
                 random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) {
         self.store = store
         self.settings = settings
+        self.formatUploader = formatUploader
         self.appVersion = appVersion
         worker = store.makeWorker(adapterFor: { try registry.adapter(for: $0) }, owner: ownerPrefix, random: random)
         deleter = store.makeRemoteDeleter(adapterFor: { try registry.adapter(for: $0) })
@@ -163,6 +166,9 @@ public actor SyncCoordinator {
         // Delete-everywhere tombstones go first, so a deleted capture is never uploaded again. They never
         // change the pass result or the follow-up decision.
         if !Task.isCancelled { _ = await deleter.runOnce() }
+        // The folder describes itself before anything else lands in it. A failure is logged by the uploader,
+        // retried on a later pass, and never stops this one.
+        if !Task.isCancelled { _ = await formatUploader?.upload() }
         for _ in 0..<Self.maxRounds {
             if Task.isCancelled { moreWork = false; break }
             let round = await worker.runOnce()

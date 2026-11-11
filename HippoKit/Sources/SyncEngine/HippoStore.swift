@@ -270,6 +270,13 @@ public final class HippoStore: Sendable {
                     isConstrained: isConstrained)
     }
 
+    /// Uploads the format documents and README to the active destination. A nil `bundle` makes it a no-op.
+    public func makeFormatUploader(bundle: FormatBundle?,
+                                   adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> FormatUploader {
+        FormatUploader(layout: layout, log: log, destinations: destinations, bundle: bundle, adapterFor: adapterFor)
+    }
+
     /// Pulls gold enrichment from the active destination's `enrichments/server/` tree, with the default clock.
     public func makeGoldPuller(adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
         -> GoldPuller {

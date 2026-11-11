@@ -84,9 +84,11 @@ struct AppEnvironment: Sendable {
             let providers = processKind == .app ? appProviders(storeRoot: storeRoot) : []
             #endif
             let registry = processKind == .app ? ProviderRegistry(providers) : nil
-            let coordinator = registry.map {
-                SyncCoordinator(store: store, registry: $0, ownerPrefix: "app", appVersion: producer.appVersion,
+            let coordinator = registry.map { registry in
+                SyncCoordinator(store: store, registry: registry, ownerPrefix: "app", appVersion: producer.appVersion,
                                 settings: LocationService.settings,
+                                formatUploader: store.makeFormatUploader(bundle: formatBundle(),
+                                                                         adapterFor: { try registry.adapter(for: $0) }),
                                 isConstrained: { NetworkStatus.shared.isExpensive })
             }
             return .success(AppEnvironment(processKind: processKind, storeRoot: storeRoot, producer: producer,
@@ -96,6 +98,14 @@ struct AppEnvironment: Sendable {
             log.error("\("store_open_failed", privacy: .public)")
             return .failure(.storeUnavailable)
         }
+    }
+
+    /// The format documents and schemas the app ships (`project.yml` copies them into the Hippo target). Nil when
+    /// they are not there, in which case nothing is uploaded and the app is otherwise unaffected.
+    private static func formatBundle() -> FormatBundle? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        return try? FormatBundle.load(docsDirectory: resources,
+                                      schemaDirectory: resources.appendingPathComponent("schema", isDirectory: true))
     }
 
     /// Both processes read the same App Group settings. Location authorization is read, never requested.

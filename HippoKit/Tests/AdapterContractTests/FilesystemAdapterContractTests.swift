@@ -42,6 +42,11 @@ private final class Box: @unchecked Sendable {
         try await runAdapterContract(makeAdapter: { FilesystemAdapter(root: root) }, scratch: scratch)
     }
 
+    @Test func replaceAllowedPaths() async throws {
+        let root = try tempDir(), scratch = try tempDir()
+        try await runReplaceAllowedPathsContract(adapter: FilesystemAdapter(root: root), scratch: scratch)
+    }
+
     @Test func deletedFilesAreReported() async throws {
         let root = try tempDir(), scratch = try tempDir()
         let adapter = FilesystemAdapter(root: root)

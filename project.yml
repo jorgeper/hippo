@@ -22,7 +22,21 @@ targets:
   Hippo:
     type: application
     platform: iOS
-    sources: [App/Hippo, App/Shared]
+    sources:
+      - App/Hippo
+      - App/Shared
+      # Uploaded to the sync destination so the folder describes itself; see docs/folder-readme.md.
+      - path: docs/folder-readme.md
+        buildPhase: resources
+      - path: docs/package-format.md
+        buildPhase: resources
+      - path: docs/enrichment-format.md
+        buildPhase: resources
+      - path: docs/context-signals.md
+        buildPhase: resources
+      - path: schema
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jorgeper.hippo

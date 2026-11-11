@@ -41,7 +41,8 @@ public struct LogLine: Equatable, Sendable, Identifiable {
              .enrichScheduled, .enrichPass:
             .silver
         case .goldApplied, .goldRemoved, .goldSkipped, .goldPull: .gold
-        case .packageUploaded, .packageUploadFailed, .silverUploaded, .silverUploadFailed, .syncPass, .bgTask: .sync
+        case .packageUploaded, .packageUploadFailed, .silverUploaded, .silverUploadFailed, .syncPass, .bgTask,
+             .formatUploaded, .formatUploadFailed, .formatReadmeSkipped: .sync
         default: .bronze
         }
     }
@@ -118,6 +119,10 @@ public struct LogLine: Equatable, Sendable, Identifiable {
         case .silverUploadFailed, .packageUploadFailed:
             let d = destination(e.dest).map { "Upload to \($0) failed" } ?? "Upload failed"
             return join([d, e.code])
+        case .formatUploaded:
+            return e.count.map { "Folder description updated (\($0) \($0 == 1 ? "file" : "files"))" } ?? "Folder description updated"
+        case .formatUploadFailed: return join(["Folder description not updated", e.code])
+        case .formatReadmeSkipped: return "Kept your own README.md in the folder"
         case .remoteDelete:
             let d = destination(e.dest) ?? "storage"
             switch e.outcome {
