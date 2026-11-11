@@ -66,7 +66,7 @@ struct NoteEditorView: View {
         .onAppear {
             startedAt = Date()
             focused = true
-            if !isComment { location.beginSessionFix() }
+            if !isComment { location.beginSessionFix(); CaptureContextService.shared.begin() }
         }
     }
 
@@ -78,7 +78,8 @@ struct NoteEditorView: View {
         let started = startedAt
         guard let draft = NoteComposer.draft(
             text: text, captureID: UUID(), startedAt: started, timeZone: .current,
-            location: location.location(startedAt: started)) else { saving = false; return }
+            location: location.location(startedAt: started),
+            context: CaptureContextService.shared.observations(startedAt: started)) else { saving = false; return }
         let store = environment.store
         do {
             _ = try await BackgroundActivity.run(name: "note-save") { try await store.capture(draft) }

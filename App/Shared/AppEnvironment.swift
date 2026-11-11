@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import os
 import CaptureCore
@@ -75,7 +76,8 @@ struct AppEnvironment: Sendable {
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: protection)
             }
             let store = try HippoStore.open(root: storeRoot, producer: producer,
-                                          process: processKind == .shareExtension ? .share : .app)
+                                          process: processKind == .shareExtension ? .share : .app,
+                                            context: captureContextHooks())
             #if HIPPO_SHARE_EXTENSION
             let providers: [any StorageProvider] = []
             #else
@@ -94,6 +96,19 @@ struct AppEnvironment: Sendable {
             log.error("\("store_open_failed", privacy: .public)")
             return .failure(.storeUnavailable)
         }
+    }
+
+    /// Both processes read the same App Group settings. Location authorization is read, never requested.
+    private static func captureContextHooks() -> CaptureContextHooks {
+        CaptureContextHooks(
+            enabledGroups: {
+                let settings = LocationService.settings
+                let status = CLLocationManager().authorizationStatus
+                let authorized = status == .authorizedWhenInUse || status == .authorizedAlways
+                return (settings.deviceContextEnabled, settings.locationEnabled && authorized)
+            },
+            lastSaved: { LocationService.settings.lastSaved },
+            recordSaved: { LocationService.settings.lastSaved = $0 })
     }
 
     #if !HIPPO_SHARE_EXTENSION

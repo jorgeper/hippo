@@ -40,7 +40,7 @@ struct CameraCaptureView: View {
 
     var body: some View {
         content
-            .onAppear { location.beginSessionFix() }
+            .onAppear { location.beginSessionFix(); CaptureContextService.shared.begin() }
             .task { await checkPermission() }
             .onChange(of: sheetState) { _, state in
                 if state == .saved, case .sheet(let staged) = phase { saved(staged) }
@@ -126,12 +126,13 @@ struct CameraCaptureView: View {
         let captureID = UUID()
         let intake = environment.intake
         let fix = location.location(startedAt: startedAt)
+        let context = CaptureContextService.shared.observations(startedAt: startedAt)
         let prepared: PreparedCapture
         do {
             // Encoding a full-size still takes a moment: keep it off the main actor.
             prepared = try await Task.detached(priority: .userInitiated) {
                 try CameraCapture.stage(result, intake: intake, captureID: captureID, startedAt: startedAt,
-                                        timeZone: .current, location: fix)
+                                        timeZone: .current, location: fix, context: context)
             }.value
         } catch {
             intake.discard(captureID: captureID)
