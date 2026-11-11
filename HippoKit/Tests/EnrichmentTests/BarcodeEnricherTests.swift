@@ -65,13 +65,35 @@ private struct Boom: Error {}
         #expect(json.components(separatedBy: "\"url\"").count == 2)
     }
 
+    @Test func nonUrlPayloadsHaveNoUrl() async throws {
+        let payloads = ["", "example.com", "ftp://x", "https://example.com/a b", "https://example.com/a\nb", "http:", "https://"]
+        let out = try await run([image("A")]) { _ in payloads.map { .init(symbology: "qr", payload: $0) } }
+        let items = try decode(out).items
+        #expect(items.map(\.payload) == payloads)
+        #expect(items.allSatisfy { $0.url == nil })
+    }
+
+    @Test func truncatedPayloadHasNoUrl() async throws {
+        let prefix = "https://example.com/"
+        let tooLong = prefix + String(repeating: "x", count: 2048)
+        let exact = prefix + String(repeating: "y", count: 2048 - prefix.count)
+        let out = try await run([image("A")]) { _ in
+            [.init(symbology: "qr", payload: tooLong), .init(symbology: "qr", payload: exact)]
+        }
+        let items = try decode(out).items
+        #expect(items[0].payload.count == 2048)
+        #expect(items[0].url == nil)
+        #expect(items[1].payload == exact)
+        #expect(items[1].url == exact)
+    }
+
     @Test func capsApplied() async throws {
         let long = String(repeating: "x", count: 5000)
         var out = try await run([image("A")]) { _ in [.init(symbology: "qr", payload: long)] }
         #expect(try decode(out).items[0].payload.count == 2048)
 
         out = try await run([image("A")]) { _ in (0..<30).map { .init(symbology: "qr", payload: "p\($0)") } }
-        #expect(try decode(out).items.count == 20)
+        #expect(try decode(out).items.map(\.payload) == (0..<20).map { "p\($0)" })
 
         out = try await run([image("A"), image("B")]) { _ in (0..<20).map { .init(symbology: "qr", payload: "p\($0)") } }
         #expect(try decode(out).items.count == 40)

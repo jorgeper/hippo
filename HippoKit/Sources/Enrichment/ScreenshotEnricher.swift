@@ -62,8 +62,10 @@ public struct ScreenshotEnricher: Enricher {
     private func reason(for f: ImageFacts) -> String? {
         if f.exifUserComment?.trimmingCharacters(in: .whitespacesAndNewlines) == "Screenshot" { return "exif_user_comment" }
         guard let screen = screenPixelSize, let w = f.pixelWidth, let h = f.pixelHeight,
-              f.cameraMake == nil, f.cameraModel == nil else { return nil }
+              Self.isBlank(f.cameraMake), Self.isBlank(f.cameraModel) else { return nil }
         let matches = (w == screen.width && h == screen.height) || (w == screen.height && h == screen.width)
         return matches ? "screen_size_match" : nil
     }
+
+    private static func isBlank(_ s: String?) -> Bool { s?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true }
 }

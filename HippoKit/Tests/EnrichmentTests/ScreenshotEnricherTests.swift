@@ -52,6 +52,11 @@ private func reasons(_ out: EnricherOutput) throws -> [String] {
         #expect(noScreen.status == .empty)
     }
 
+    @Test func blankMakeAndModelCountAsAbsent() async throws {
+        let out = try await run { _ in .init(pixelWidth: 1206, pixelHeight: 2622, cameraMake: "", cameraModel: "  \n") }
+        #expect(try reasons(out) == ["screen_size_match"])
+    }
+
     @Test func exifWins() async throws {
         let out = try await run { _ in .init(pixelWidth: 1206, pixelHeight: 2622, exifUserComment: "Screenshot") }
         #expect(try reasons(out) == ["exif_user_comment"])
@@ -92,5 +97,29 @@ private func reasons(_ out: EnricherOutput) throws -> [String] {
         #expect(facts.pixelHeight == 20)
         #expect(facts.cameraMake == nil)
         #expect(ScreenshotEnricher.liveInspector(dir.appendingPathComponent("missing.png")) == nil)
+    }
+
+    @Test func liveInspectorReadsCommentAndMake() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hippo-shot-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ctx = try #require(CGContext(data: nil, width: 30, height: 20, bitsPerComponent: 8, bytesPerRow: 0,
+                                         space: CGColorSpaceCreateDeviceRGB(),
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let image = try #require(ctx.makeImage())
+        func write(_ name: String, _ props: [CFString: Any]) throws -> URL {
+            let url = dir.appendingPathComponent(name)
+            let dest = try #require(CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil))
+            CGImageDestinationAddImage(dest, image, props as CFDictionary)
+            #expect(CGImageDestinationFinalize(dest))
+            return url
+        }
+        let commented = try write("c.jpg", [kCGImagePropertyExifDictionary: [kCGImagePropertyExifUserComment: "Screenshot"]])
+        let made = try write("m.jpg", [kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFMake: "Apple",
+                                                                        kCGImagePropertyTIFFModel: "iPhone"]])
+        #expect(try #require(ScreenshotEnricher.liveInspector(commented)).exifUserComment == "Screenshot")
+        let facts = try #require(ScreenshotEnricher.liveInspector(made))
+        #expect(facts.cameraMake == "Apple")
+        #expect(facts.cameraModel == "iPhone")
     }
 }

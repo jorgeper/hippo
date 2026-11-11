@@ -53,8 +53,9 @@ public struct BarcodeEnricher: Enricher {
             catch { failed += 1; continue }
             for d in found.prefix(Self.maxItemsPerAttachment) {
                 let payload = String(d.payload.prefix(Self.maxPayloadLength))
-                items.append(BarcodesData.Item(attachmentID: a.attachmentID, symbology: d.symbology, payload: payload,
-                                               url: Self.webURL(payload)))
+                // A cut-off URL would point somewhere else, so a truncated payload never gets one.
+                let url = payload.count == d.payload.count ? Self.webURL(payload) : nil
+                items.append(BarcodesData.Item(attachmentID: a.attachmentID, symbology: d.symbology, payload: payload, url: url))
             }
         }
         // One bad image must not block the rest; only a pass where Vision failed on every image retries.
@@ -63,9 +64,11 @@ public struct BarcodeEnricher: Enricher {
         return EnricherOutput(status: .ok, data: try .payload(BarcodesData(items: items)), provenance: "vision")
     }
 
-    /// The payload when it parses as an `http` or `https` URL, else nil.
+    /// The payload when it is a single-token `http` or `https` URL with a host, else nil.
     private static func webURL(_ payload: String) -> String? {
-        guard let scheme = URL(string: payload)?.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+        guard !payload.contains(where: { $0.isWhitespace || $0.isNewline }),
+              let url = URL(string: payload), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host(percentEncoded: false), !host.isEmpty else { return nil }
         return payload
     }
 }
