@@ -163,13 +163,22 @@ enum EnrichmentScheduling {
     }
 
     /// The screen's native size in pixels, portrait-up (`nativeBounds` is already in pixels), from the
-    /// connected scene (`UIScreen.main` is deprecated). Nil if no scene has connected yet, which only
-    /// costs the screenshot heuristic its size match.
+    /// connected scene (`UIScreen.main` is deprecated). A valid size is remembered in `UserDefaults`, so a
+    /// process that builds the runner before any scene connects (a background launch) still has it. Nil
+    /// only when no scene has ever connected on this install.
     private static func screenPixelSize() -> (width: Int, height: Int)? {
+        let defaults = UserDefaults.standard
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        guard let bounds = scenes.first?.screen.nativeBounds else { return nil }
-        guard bounds.width > 0, bounds.height > 0, bounds.width.isFinite, bounds.height.isFinite else { return nil }
-        return (Int(bounds.width.rounded()), Int(bounds.height.rounded()))
+        if let bounds = scenes.first?.screen.nativeBounds,
+           bounds.width > 0, bounds.height > 0, bounds.width.isFinite, bounds.height.isFinite {
+            let size = (width: Int(bounds.width.rounded()), height: Int(bounds.height.rounded()))
+            defaults.set(size.width, forKey: "screen.native_pixel_width")
+            defaults.set(size.height, forKey: "screen.native_pixel_height")
+            return size
+        }
+        let width = defaults.integer(forKey: "screen.native_pixel_width")
+        let height = defaults.integer(forKey: "screen.native_pixel_height")
+        return width > 0 && height > 0 ? (width, height) : nil
     }
 
     /// The enrichers' versions for the kinds switched on in Settings, for `EnrichmentTaskStore.hasWork`.

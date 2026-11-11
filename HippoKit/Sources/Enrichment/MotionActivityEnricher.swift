@@ -94,7 +94,8 @@ public struct MotionActivityEnricher: Enricher {
     }
 
     private static func ordered(_ activities: [String]) -> [String] {
-        let set = Set(activities)
+        // A sample with no flag raised is unknown: a facet never carries an empty activity list.
+        let set = activities.isEmpty ? Set(["unknown"]) : Set(activities)
         let known = activityOrder.filter(set.contains)
         let other = set.subtracting(activityOrder).sorted()
         return known + other

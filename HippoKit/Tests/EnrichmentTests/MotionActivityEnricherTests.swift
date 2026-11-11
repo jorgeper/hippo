@@ -150,6 +150,13 @@ private func errorOf(_ e: MotionActivityEnricher) async -> EnrichmentError? {
         #expect(d.segments[0].activities == ["stationary", "walking", "running", "cycling", "automotive", "unknown"])
     }
 
+    @Test func emptyActivitiesAreUnknownAndMerge() async throws {
+        let h = FakeHistory([sample(-300, [], "low"), sample(-200, [], "low"), sample(-100, ["walking"], "low")])
+        let d = try decode(try await enricher(h).run(fixtureInput(metadata())))
+        #expect(d.segments.map(\.activities) == [["unknown"], ["walking"]])
+        #expect(d.segments[0].startedAt == T.addingTimeInterval(-300))
+    }
+
     @Test func providerErrorsAreClassified() async {
         let now = 700.0
         #expect(await errorOf(enricher(FakeHistory(throwing: MotionHistoryError.unauthorized), nowOffset: now))
