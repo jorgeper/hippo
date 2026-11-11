@@ -905,7 +905,10 @@ struct SettingsTests {
         h.model.setWeatherEnabled(true)
         #expect(h.model.weatherEnabled)
         #expect(h.settings.isEnrichmentEnabled(.weather))
-        while calls.withLock({ $0 }).isEmpty { try await Task.sleep(for: .milliseconds(1)) }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while calls.withLock({ $0 }).isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
         #expect(calls.withLock { $0 } == ["weather"])
         h.model.setWeatherEnabled(false)
         #expect(!h.model.weatherEnabled)
