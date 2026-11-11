@@ -8,6 +8,7 @@
   "required": ["schema_version", "capture_id", "layer", "package_digest", "producer", "generated_at", "facets"],
   "properties": {
     "schema_version": { "const": 1 },
+    "schema_minor": { "type": "integer", "minimum": 0 },
     "capture_id": { "$ref": "#/$defs/uuid" },
     "layer": { "enum": ["device", "server"] },
     "package_digest": { "$ref": "#/$defs/sha256", "description": "SHA-256 of the exact bytes of the capture's complete.json that this was derived from." },

@@ -170,6 +170,7 @@ public struct MetadataObservation: Codable, Sendable, Equatable {
 /// Contents of `metadata.json` (schema v1). Unavailable optional fields are omitted when encoded.
 public struct CaptureMetadata: Codable, Sendable, Equatable {
     public var schemaVersion: Int
+    public var schemaMinor: Int?
     public var captureID: String
     public var capturedAt: Date
     public var localDatetime: String
@@ -193,8 +194,8 @@ public struct CaptureMetadata: Codable, Sendable, Equatable {
                 contentTypes: [ContentType], userNote: String?, sharedTitle: String?, sharedText: String?,
                 urls: [CapturedURL], sourceApplication: String?, captureLocation: CaptureLocation?,
                 producer: Producer, attachments: [Attachment], metadataObservations: [MetadataObservation],
-                extensions: [String: JSONValue]) {
-        self.schemaVersion = schemaVersion; self.captureID = captureID; self.capturedAt = capturedAt
+                extensions: [String: JSONValue], schemaMinor: Int? = nil) {
+        self.schemaVersion = schemaVersion; self.schemaMinor = schemaMinor; self.captureID = captureID; self.capturedAt = capturedAt
         self.localDatetime = localDatetime; self.timezoneIdentifier = timezoneIdentifier
         self.utcOffsetSeconds = utcOffsetSeconds; self.captureMethod = captureMethod
         self.contentTypes = contentTypes; self.userNote = userNote; self.sharedTitle = sharedTitle
@@ -205,6 +206,7 @@ public struct CaptureMetadata: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
+        case schemaMinor = "schema_minor"
         case captureID = "capture_id"
         case capturedAt = "captured_at"
         case localDatetime = "local_datetime"

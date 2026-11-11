@@ -12,6 +12,7 @@
   ],
   "properties": {
     "schema_version": { "const": 1 },
+    "schema_minor": { "type": "integer", "minimum": 0 },
     "capture_id": { "$ref": "#/$defs/uuid" },
     "captured_at": {
       "type": "string",

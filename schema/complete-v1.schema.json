@@ -8,6 +8,7 @@
   "required": ["schema_version", "capture_id", "files"],
   "properties": {
     "schema_version": { "const": 1 },
+    "schema_minor": { "type": "integer", "minimum": 0 },
     "capture_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
     "files": {
       "type": "array",

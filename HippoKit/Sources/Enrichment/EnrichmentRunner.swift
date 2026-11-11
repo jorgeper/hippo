@@ -405,6 +405,7 @@ public actor EnrichmentRunner {
             let previous = doc[kind]?.data
             doc.facets[kind.rawValue] = facet
             doc.producer = producer
+            doc.schemaMinor = FormatVersion.minor
             doc.generatedAt = facet.generatedAt
             try store.write(doc, newAssets: newAssets)
             if attempt.currentUnreadable {

@@ -24,6 +24,7 @@ public struct CommentAudio: Codable, Sendable, Equatable {
 /// `text` / `audio` is set.
 public struct CaptureComment: Codable, Sendable, Equatable, Identifiable {
     public var schemaVersion: Int
+    public var schemaMinor: Int?
     public var captureID: String
     public var commentID: String
     public var addedAt: Date
@@ -36,8 +37,8 @@ public struct CaptureComment: Codable, Sendable, Equatable, Identifiable {
 
     public init(schemaVersion: Int = 1, captureID: String, commentID: String, addedAt: Date, localDatetime: String,
                 timezoneIdentifier: String, utcOffsetSeconds: Int, producer: Producer,
-                text: String? = nil, audio: CommentAudio? = nil) {
-        self.schemaVersion = schemaVersion; self.captureID = captureID; self.commentID = commentID
+                text: String? = nil, audio: CommentAudio? = nil, schemaMinor: Int? = nil) {
+        self.schemaVersion = schemaVersion; self.schemaMinor = schemaMinor; self.captureID = captureID; self.commentID = commentID
         self.addedAt = addedAt; self.localDatetime = localDatetime
         self.timezoneIdentifier = timezoneIdentifier; self.utcOffsetSeconds = utcOffsetSeconds
         self.producer = producer; self.text = text; self.audio = audio
@@ -49,7 +50,7 @@ public struct CaptureComment: Codable, Sendable, Equatable, Identifiable {
     public var filePaths: [String] { (audio.map { [$0.relativePath] } ?? []) + [relativePath] }
 
     enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version", captureID = "capture_id", commentID = "comment_id"
+        case schemaVersion = "schema_version", schemaMinor = "schema_minor", captureID = "capture_id", commentID = "comment_id"
         case addedAt = "added_at", localDatetime = "local_datetime"
         case timezoneIdentifier = "timezone_identifier", utcOffsetSeconds = "utc_offset_seconds"
         case producer, text, audio

@@ -46,13 +46,15 @@ public enum HippoJSON {
 
     private struct VersionProbe: Decodable {
         let schemaVersion: Int
-        enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version" }
+        let schemaMinor: Int?
+        enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", schemaMinor = "schema_minor" }
     }
 
     public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {
-            let version = try JSONDecoder().decode(VersionProbe.self, from: data).schemaVersion
-            guard version == 1 else { throw FormatError.unsupportedSchemaVersion(version) }
+            let probe = try JSONDecoder().decode(VersionProbe.self, from: data)
+            guard probe.schemaVersion == FormatVersion.major else { throw FormatError.unsupportedSchemaVersion(probe.schemaVersion) }
+            if let minor = probe.schemaMinor, minor < 0 { throw FormatError.malformed("schema_minor is negative") }
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .custom { dec in
                 let s = try dec.singleValueContainer().decode(String.self)

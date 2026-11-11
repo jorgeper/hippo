@@ -167,16 +167,18 @@ public final class PackageWriter: Sendable {
                 captureMethod: draft.method, contentTypes: contentTypes,
                 userNote: userNote, sharedTitle: sharedTitle, sharedText: sharedText, urls: draft.urls,
                 sourceApplication: nil, captureLocation: location, producer: producer,
-                attachments: attachments, metadataObservations: observations, extensions: [:])
+                attachments: attachments, metadataObservations: observations, extensions: [:],
+                schemaMinor: FormatVersion.minor)
             let metadataURL = staging.appendingPathComponent("metadata.json")
             try Self.writeDurably(Self.io("encode metadata") { try HippoJSON.encode(metadata) }, to: metadataURL, step: "metadata")
 
             // 7. Completion marker: metadata first, then attachments in order. Then sync the directories.
             let metadataDigest = try Self.io("hash metadata") { try StreamingHasher.digest(of: metadataURL) }
             let marker = CompletionMarker(
-                schemaVersion: 1, captureID: captureID,
+                schemaVersion: FormatVersion.major, captureID: captureID,
                 files: [ManifestEntry(relativePath: "metadata.json", byteCount: metadataDigest.byteCount, sha256: metadataDigest.sha256)]
-                    + attachments.map { ManifestEntry(relativePath: $0.relativePath, byteCount: $0.byteCount, sha256: $0.sha256) })
+                    + attachments.map { ManifestEntry(relativePath: $0.relativePath, byteCount: $0.byteCount, sha256: $0.sha256) },
+                schemaMinor: FormatVersion.minor)
             try Self.writeDurably(Self.io("encode marker") { try HippoJSON.encode(marker) },
                                   to: staging.appendingPathComponent("complete.json"), step: "marker")
             if !copied.isEmpty { try Self.io("sync content") { try Self.fullSync(contentDir) } }
