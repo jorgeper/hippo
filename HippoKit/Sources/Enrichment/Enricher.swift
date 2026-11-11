@@ -85,3 +85,8 @@ extension Attachment {
     /// Whether the attachment's type conforms to `public.image` (shared by the image enrichers).
     var isImage: Bool { UTType(uti)?.conforms(to: .image) ?? false }
 }
+
+extension Attachment {
+    /// Whether the attachment's type conforms to `public.audio`.
+    var isAudio: Bool { UTType(uti)?.conforms(to: .audio) ?? false }
+}
