@@ -22,9 +22,7 @@ public struct TextRecognitionEnricher: Enricher {
     public init() { recognize = Self.visionRecognize }
     init(recognize: @escaping Recognizer) { self.recognize = recognize }
 
-    public func applies(to m: CaptureMetadata) -> Bool { m.attachments.contains(where: Self.isImage) }
-
-    private static func isImage(_ a: Attachment) -> Bool { UTType(a.uti)?.conforms(to: .image) ?? false }
+    public func applies(to m: CaptureMetadata) -> Bool { m.attachments.contains(where: \.isImage) }
 
     private static let visionRecognize: Recognizer = { image, orientation in
         var request = RecognizeTextRequest()
@@ -44,7 +42,7 @@ public struct TextRecognitionEnricher: Enricher {
     public func run(_ input: EnricherInput) async throws -> EnricherOutput {
         var items: [CaptureCore.RecognizedText] = []
         var attempted = 0, failed = 0
-        for a in input.metadata.attachments where Self.isImage(a) {
+        for a in input.metadata.attachments where a.isImage {
             try Task.checkCancellation()
             let url = input.packageURL.appendingPathComponent(a.relativePath)
             // Unreadable or tiny images are skipped for good: packages are complete before indexing.

@@ -1,5 +1,6 @@
 import Foundation
 import CaptureCore
+import UniformTypeIdentifiers
 
 /// What an enricher gets for one capture.
 public struct EnricherInput: Sendable {
@@ -78,4 +79,9 @@ extension Enricher {
     public var readsAttachmentBytes: Bool { false }
     public var readsCommentAudio: Bool { false }
     public func applies(to m: CaptureMetadata, comments: [CaptureComment]) -> Bool { applies(to: m) }
+}
+
+extension Attachment {
+    /// Whether the attachment's type conforms to `public.image` (shared by the image enrichers).
+    var isImage: Bool { UTType(uti)?.conforms(to: .image) ?? false }
 }
