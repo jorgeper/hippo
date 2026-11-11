@@ -22,8 +22,12 @@ enum ContextReader {
         return ContextSnapshot.AudioRoute(outputs: outputs, inputs: inputs)
     }
 
+    /// Starts battery monitoring early so the first `device()` read in a process has a level.
+    static func startBatteryMonitoring() { UIDevice.current.isBatteryMonitoringEnabled = true }
+
     static func device() -> ContextSnapshot.Device {
         let ui = UIDevice.current
+        // Fallback for the extension; the app enables this at launch.
         ui.isBatteryMonitoringEnabled = true
         let level = ui.batteryLevel
         let battery: String? = switch ui.batteryState {
@@ -32,12 +36,12 @@ enum ContextReader {
         case .full: "full"
         default: nil
         }
-        let thermal: String = switch ProcessInfo.processInfo.thermalState {
+        let thermal: String? = switch ProcessInfo.processInfo.thermalState {
         case .nominal: "nominal"
         case .fair: "fair"
         case .serious: "serious"
         case .critical: "critical"
-        @unknown default: "nominal"
+        @unknown default: nil
         }
         let orientation: String? = switch ui.orientation {
         case .portrait: "portrait"

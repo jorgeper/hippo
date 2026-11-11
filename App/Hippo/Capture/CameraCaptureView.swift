@@ -123,6 +123,8 @@ struct CameraCaptureView: View {
         let isVideo = if case .video = result { true } else { false }
         // `captured_at` is the end of the shot.
         let startedAt = Date()
+        // The appear-time snapshot may be minutes old by now; take one at the shot.
+        CaptureContextService.shared.begin()
         let captureID = UUID()
         let intake = environment.intake
         let fix = location.location(startedAt: startedAt)

@@ -13,6 +13,7 @@ struct HippoApp: App {
 
     init() {
         startup = AppEnvironment.open(processKind: .app)
+        ContextReader.startBatteryMonitoring()
         if case .success(let environment) = startup {
             SyncScheduling.registerBackgroundTask(environment)
             SyncScheduling.startConnectivityTrigger(environment)

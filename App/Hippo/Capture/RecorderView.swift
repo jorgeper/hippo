@@ -157,7 +157,10 @@ struct RecorderView: View {
 
     private func recordButton(recording: Bool) -> some View {
         CaptureButton(kind: .record(recording: recording), size: 88) {
-            if recording { model.stop() } else { Task { await model.start() } }
+            if recording { model.stop() } else {
+                if !isComment { CaptureContextService.shared.begin() }
+                Task { await model.start() }
+            }
         }
     }
 }
