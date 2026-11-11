@@ -50,16 +50,35 @@ public struct CaptureLocation: Codable, Sendable, Equatable {
     public var horizontalAccuracyMeters: Double
     public var observedAt: Date
     public var provenance: String
-    public init(latitude: Double, longitude: Double, horizontalAccuracyMeters: Double, observedAt: Date, provenance: String) {
+    public var altitudeMeters: Double?
+    public var verticalAccuracyMeters: Double?
+    public var speedMetersPerSecond: Double?
+    public var speedAccuracyMetersPerSecond: Double?
+    public var courseDegrees: Double?
+    public var courseAccuracyDegrees: Double?
+    public init(latitude: Double, longitude: Double, horizontalAccuracyMeters: Double, observedAt: Date, provenance: String,
+                altitudeMeters: Double? = nil, verticalAccuracyMeters: Double? = nil,
+                speedMetersPerSecond: Double? = nil, speedAccuracyMetersPerSecond: Double? = nil,
+                courseDegrees: Double? = nil, courseAccuracyDegrees: Double? = nil) {
         self.latitude = latitude; self.longitude = longitude
         self.horizontalAccuracyMeters = horizontalAccuracyMeters
         self.observedAt = observedAt; self.provenance = provenance
+        self.altitudeMeters = altitudeMeters; self.verticalAccuracyMeters = verticalAccuracyMeters
+        self.speedMetersPerSecond = speedMetersPerSecond
+        self.speedAccuracyMetersPerSecond = speedAccuracyMetersPerSecond
+        self.courseDegrees = courseDegrees; self.courseAccuracyDegrees = courseAccuracyDegrees
     }
     enum CodingKeys: String, CodingKey {
         case latitude, longitude
         case horizontalAccuracyMeters = "horizontal_accuracy_meters"
         case observedAt = "observed_at"
         case provenance
+        case altitudeMeters = "altitude_meters"
+        case verticalAccuracyMeters = "vertical_accuracy_meters"
+        case speedMetersPerSecond = "speed_meters_per_second"
+        case speedAccuracyMetersPerSecond = "speed_accuracy_meters_per_second"
+        case courseDegrees = "course_degrees"
+        case courseAccuracyDegrees = "course_accuracy_degrees"
     }
 }
 

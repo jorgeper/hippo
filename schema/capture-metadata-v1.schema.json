@@ -62,7 +62,13 @@
         "longitude": { "type": "number", "minimum": -180, "maximum": 180, "description": "Degrees." },
         "horizontal_accuracy_meters": { "type": "number", "minimum": 0 },
         "observed_at": { "type": "string", "format": "date-time" },
-        "provenance": { "type": "string", "minLength": 1 }
+        "provenance": { "type": "string", "minLength": 1 },
+        "altitude_meters": { "type": "number", "description": "Meters above sea level, negative below." },
+        "vertical_accuracy_meters": { "type": "number", "minimum": 0 },
+        "speed_meters_per_second": { "type": "number", "minimum": 0 },
+        "speed_accuracy_meters_per_second": { "type": "number", "minimum": 0 },
+        "course_degrees": { "type": "number", "minimum": 0, "maximum": 360, "description": "Degrees clockwise from true north." },
+        "course_accuracy_degrees": { "type": "number", "minimum": 0 }
       }
     },
     "producer": {

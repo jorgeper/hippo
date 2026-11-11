@@ -37,6 +37,27 @@ import Foundation
         }
     }
 
+    @Test func sanitizerDropsBadExtrasKeepsLocation() async throws {
+        var bad = location()
+        bad.speedMetersPerSecond = -1; bad.speedAccuracyMetersPerSecond = -1
+        bad.courseDegrees = 400; bad.courseAccuracyDegrees = -1
+        bad.altitudeMeters = .infinity; bad.verticalAccuracyMeters = -1
+        let pkg = try await writer.commit(draft(location: bad))
+        #expect(pkg.metadata.captureLocation == location())
+        #expect(!pkg.metadata.metadataObservations.contains { $0.key == "capture_location_dropped" })
+
+        var good = location()
+        good.altitudeMeters = -12.5; good.speedMetersPerSecond = 0; good.courseDegrees = 360
+        good.verticalAccuracyMeters = .nan
+        let pkg2 = try await writer.commit(draft(location: good))
+        var expected = good
+        expected.verticalAccuracyMeters = nil
+        #expect(pkg2.metadata.captureLocation == expected)
+        #expect(pkg2.metadata.captureLocation?.altitudeMeters == -12.5)
+        #expect(pkg2.metadata.captureLocation?.speedMetersPerSecond == 0)
+        #expect(pkg2.metadata.captureLocation?.courseDegrees == 360)
+    }
+
     @Test func validLocationIsKept() async throws {
         let loc = location()
         let pkg = try await writer.commit(draft(location: loc))
