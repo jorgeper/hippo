@@ -23,7 +23,7 @@ public struct LanguageEnricher: Enricher {
     public static let liveRecognizer: Recognizer = { text in
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(text)
-        guard let language = recognizer.dominantLanguage else { return nil }
+        guard let language = recognizer.dominantLanguage, language != .undetermined else { return nil }
         let confidence = recognizer.languageHypotheses(withMaximum: 1)[language] ?? 0
         return (language.rawValue, min(max(confidence, 0), 1))
     }
@@ -40,7 +40,7 @@ public struct LanguageEnricher: Enricher {
         // Nothing long enough is terminal, like `applies` returning false.
         if texts.isEmpty { throw EnrichmentError.notApplicable(code: "text_too_short") }
         let items = texts.compactMap { source, text in
-            recognize(text).map { LanguageData.Item(source: source, language: $0.language, confidence: $0.confidence) }
+            recognize(text).flatMap { $0.language.isEmpty || $0.language == "und" ? nil : $0 }.map { LanguageData.Item(source: source, language: $0.language, confidence: $0.confidence) }
         }
         if items.isEmpty { return EnricherOutput(status: .empty, data: nil, provenance: "natural_language") }
         return EnricherOutput(status: .ok, data: try .payload(LanguageData(items: items)), provenance: "natural_language")

@@ -49,13 +49,22 @@ public struct SoundClassificationEnricher: Enricher {
         for a in input.metadata.attachments where a.isAudio { files.append((a.attachmentID, a.relativePath)) }
         for c in input.comments { if let audio = c.audio { files.append((c.commentID, audio.relativePath)) } }
 
+        // Labels already recorded, kept for a file that is gone (trimmed by Save space), like the transcript.
+        var known: [String: SoundClassificationData.Item] = [:]
+        if let facet = input.current?[.soundClassification], facet.status == .ok, facet.version == version,
+           let data = facet.decodeData(SoundClassificationData.self) {
+            for item in data.items where known[item.attachmentID] == nil { known[item.attachmentID] = item }
+        }
         var items: [SoundClassificationData.Item] = []
         var attempted = 0, failed = 0
         for f in files {
             try Task.checkCancellation()
             let url = input.packageURL.appendingPathComponent(f.path)
             // A trimmed attachment's file is gone; its comments' files never are.
-            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                if let item = known[f.id] { items.append(item) }
+                continue
+            }
             attempted += 1
             let found: [Label]
             do { found = try await classify(url) }

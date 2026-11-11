@@ -107,6 +107,51 @@ private struct Boom: Error {}
         #expect(try decode(out).items.map(\.attachmentID) == ["K1"])
     }
 
+    private func doc(version: Int = 1, status: FacetStatus = .ok, _ items: [SoundClassificationData.Item]) throws -> EnrichmentDocument {
+        let data = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(SoundClassificationData(items: items)))
+        let facet = Facet(version: version, status: status, generatedAt: Date(timeIntervalSince1970: 0),
+                          provenance: "sound_analysis", data: data)
+        return EnrichmentDocument(schemaVersion: 1, captureID: "c1", layer: .device, packageDigest: "d",
+                                  producer: EnrichmentProducer(name: "t", version: "1", build: "1"),
+                                  generatedAt: Date(timeIntervalSince1970: 0), facets: ["sound_classification": facet])
+    }
+
+    private func runWith(current: EnrichmentDocument?) async throws -> EnricherOutput {
+        // A's file is gone (trimmed); comment C's file is present.
+        let dir = try package(["comments/C.m4a"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let m = fixtureMetadata(attachments: [audio("A")])
+        let input = EnricherInput(captureID: m.captureID, metadata: m, packageURL: dir, noteBody: nil, current: current,
+                                  comments: [comment("C", audio: true)])
+        return try await SoundClassificationEnricher(classify: { _ in [Label(label: "music", confidence: 0.7)] }).run(input)
+    }
+
+    private let oldA = SoundClassificationData.Item(attachmentID: "A", labels: [.init(label: "speech", confidence: 0.9)])
+
+    @Test func trimmedAttachmentKeepsItsEarlierLabels() async throws {
+        let out = try await runWith(current: try doc([oldA]))
+        #expect(try decode(out).items.map(\.attachmentID) == ["A", "C"])
+        #expect(try decode(out).items[0] == oldA)
+    }
+
+    @Test func trimmedAttachmentWithoutCurrentFacetHasNothing() async throws {
+        let out = try await runWith(current: nil)
+        #expect(try decode(out).items.map(\.attachmentID) == ["C"])
+        let dir = try package([])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let m = fixtureMetadata(attachments: [audio("A")])
+        let empty = try await SoundClassificationEnricher(classify: { _ in [] })
+            .run(EnricherInput(captureID: m.captureID, metadata: m, packageURL: dir, noteBody: nil, current: nil))
+        #expect(empty.status == .empty)
+    }
+
+    @Test func staleCurrentFacetIsNotCarriedForward() async throws {
+        for current in [try doc(version: 2, [oldA]), try doc(status: .empty, [oldA])] {
+            let out = try await runWith(current: current)
+            #expect(try decode(out).items.map(\.attachmentID) == ["C"])
+        }
+    }
+
     @Test func nothingAboveThresholdIsEmpty() async throws {
         let out = try await run([audio("A")], files: ["content/A.m4a"]) { _ in [Label(label: "x", confidence: 0.2)] }
         #expect(out.status == .empty)

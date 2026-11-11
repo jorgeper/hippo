@@ -70,6 +70,25 @@ private let nineteen = String(repeating: "a", count: 19)
         #expect(out.provenance == "natural_language")
     }
 
+    @Test func undeterminedResultIsDropped() async throws {
+        let only = LanguageEnricher(recognize: { _ in ("und", 0.9) })
+        let out = try await only.run(fixtureInput(fixtureMetadata(userNote: twenty)))
+        #expect(out.status == .empty)
+
+        let mixed = LanguageEnricher(recognize: { $0 == twenty ? ("und", 0.9) : ("en", 0.8) })
+        let m = fixtureMetadata(userNote: twenty, sharedText: twenty + "b")
+        #expect(try decode(try await mixed.run(fixtureInput(m))).items.map(\.source) == ["shared_text"])
+
+        let blank = LanguageEnricher(recognize: { _ in ("", 0.9) })
+        #expect(try await blank.run(fixtureInput(fixtureMetadata(userNote: twenty))).status == .empty)
+    }
+
+    @Test func liveRecognizerReturnsNilWhenUndetermined() {
+        let r = LanguageEnricher.liveRecognizer("1234567890 1234567890 !!!")
+        #expect(r == nil || (r?.language != "und" && r?.language.isEmpty == false))
+        #expect(LanguageEnricher.liveRecognizer("1234567890 1234567890 !!!") == nil)
+    }
+
     @Test func recognizerSeesTrimmedText() async throws {
         let seen = Seen()
         let e = LanguageEnricher(recognize: { seen.add($0); return ("en", 1) })
