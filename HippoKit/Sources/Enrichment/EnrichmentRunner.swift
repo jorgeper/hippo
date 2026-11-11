@@ -353,6 +353,12 @@ public actor EnrichmentRunner {
             return .ran(failed: false)
         case .permanent(let code):
             return fail(attempt, code: code)
+        case .notApplicable(let code):
+            // Same terminal row `scheduleOne` writes when `applies` is false; no facet, no attempt.
+            record(attempt.task, status: "not_applicable", code: code, nextAttemptAt: nil, countsAttempt: false)
+            log?.append(LogEvent(event: .enrichFinished, captureID: attempt.captureID,
+                                 kind: attempt.task.kind.rawValue, outcome: .notApplicable, code: code))
+            return .ran(failed: false)
         case .transient(let code):
             return retryOrFail(attempt, code: code)
         case nil:

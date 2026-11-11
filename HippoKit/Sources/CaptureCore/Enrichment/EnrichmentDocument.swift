@@ -24,6 +24,12 @@ public struct FacetKind: RawRepresentable, Codable, Hashable, Sendable {
     public static let sourceAppGuess = FacetKind(rawValue: "source_app_guess")
     public static let summary = FacetKind(rawValue: "summary")
     public static let tags = FacetKind(rawValue: "tags")
+    public static let motionActivity = FacetKind(rawValue: "motion_activity")
+    public static let weather = FacetKind(rawValue: "weather")
+    public static let barcodes = FacetKind(rawValue: "barcodes")
+    public static let language = FacetKind(rawValue: "language")
+    public static let soundClassification = FacetKind(rawValue: "sound_classification")
+    public static let screenshot = FacetKind(rawValue: "screenshot")
 }
 
 /// Outcome of producing a facet. Open: readers accept values added by future versions.

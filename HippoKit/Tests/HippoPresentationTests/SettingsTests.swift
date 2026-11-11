@@ -747,6 +747,24 @@ struct SettingsTests {
         for item in SettingsModel.enrichmentSwitches { #expect(settings.isEnrichmentEnabled(item.kind)) }
     }
 
+    @Test func contextKindsDefaults() throws {
+        let suite = "hippo-defaults-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        #expect(AppSettings.enrichmentKindsOffByDefault == [.motionActivity, .weather])
+        #expect(settings.isEnrichmentEnabled(.motionActivity) == false)
+        #expect(settings.isEnrichmentEnabled(.weather) == false)
+        for kind in [FacetKind.barcodes, .language, .soundClassification, .screenshot,
+                     .linkPreview, .place, .textRecognition, .transcript, .dataDetection, .sourceAppGuess] {
+            #expect(settings.isEnrichmentEnabled(kind))
+        }
+        settings.setEnrichmentEnabled(.weather, true)
+        #expect(settings.isEnrichmentEnabled(.weather))
+        settings.setEnrichmentEnabled(.barcodes, false)
+        #expect(settings.isEnrichmentEnabled(.barcodes) == false)
+    }
+
     @Test func turningOnTriggersBackfill() async throws {
         let calls = Mutex<[String]>([])
         let h = try Harness(onEnrichmentEnabled: { kind in calls.withLock { $0.append(kind.rawValue) } })

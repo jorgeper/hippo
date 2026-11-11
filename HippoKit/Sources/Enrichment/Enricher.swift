@@ -45,6 +45,9 @@ public enum EnrichmentError: Error, Sendable, Equatable {
     case transient(code: String)
     /// Will never work for this capture at this version.
     case permanent(code: String)
+    /// This capture has nothing for this enricher (for example, history that expired). Recorded exactly as
+    /// `applies(to:)` returning false: terminal, no facet, no attempt counted, never retried.
+    case notApplicable(code: String)
 }
 
 /// Derives one facet kind from a capture (design §5). Runs at most once per (capture, kind, version).

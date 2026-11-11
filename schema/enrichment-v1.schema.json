@@ -134,6 +134,86 @@
     "tagsData": {
       "type": "object", "required": ["values"], "additionalProperties": true,
       "properties": { "values": { "type": "array", "items": { "type": "string" } } }
+    },
+    "motionSample": {
+      "type": "object", "required": ["started_at", "activities", "confidence"], "additionalProperties": true,
+      "properties": {
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "activities": { "type": "array", "items": { "type": "string" }, "description": "Open set: stationary, walking, running, cycling, automotive, unknown." },
+        "confidence": { "type": "string", "description": "Open set: low, medium, high." }
+      }
+    },
+    "motionActivityData": {
+      "type": "object", "required": ["window_start", "window_end", "segments"], "additionalProperties": true,
+      "properties": {
+        "window_start": { "$ref": "#/$defs/timestamp" },
+        "window_end": { "$ref": "#/$defs/timestamp" },
+        "at_capture": { "$ref": "#/$defs/motionSample" },
+        "segments": { "type": "array", "items": { "$ref": "#/$defs/motionSample" } }
+      }
+    },
+    "weatherData": {
+      "type": "object", "required": ["observed_hour", "source", "requested_latitude", "requested_longitude"],
+      "additionalProperties": true,
+      "properties": {
+        "observed_hour": { "$ref": "#/$defs/timestamp" },
+        "temperature_celsius": { "type": "number" },
+        "apparent_temperature_celsius": { "type": "number" },
+        "relative_humidity_percent": { "type": "number" },
+        "precipitation_millimeters": { "type": "number" },
+        "cloud_cover_percent": { "type": "number" },
+        "wind_speed_meters_per_second": { "type": "number" },
+        "weather_code": { "type": "integer", "description": "WMO code." },
+        "condition": { "type": "string", "description": "Open set: clear, partly_cloudy, cloudy, fog, drizzle, rain, freezing_rain, snow, showers, thunderstorm." },
+        "is_day": { "type": "boolean" },
+        "source": { "type": "string" },
+        "requested_latitude": { "type": "number" },
+        "requested_longitude": { "type": "number" }
+      }
+    },
+    "barcodesData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["attachment_id", "symbology", "payload"], "additionalProperties": true,
+        "properties": {
+          "attachment_id": { "$ref": "#/$defs/uuid" },
+          "symbology": { "type": "string", "description": "Lowercase; open set (qr, ean13, code128, ...)." },
+          "payload": { "type": "string", "maxLength": 2048 },
+          "url": { "type": "string" }
+        } } } }
+    },
+    "languageData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["source", "language", "confidence"], "additionalProperties": true,
+        "properties": {
+          "source": { "type": "string", "description": "Open set: user_note, shared_text, note_body." },
+          "language": { "type": "string", "description": "BCP 47 tag." },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        } } } }
+    },
+    "soundClassificationData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["attachment_id", "labels"], "additionalProperties": true,
+        "properties": {
+          "attachment_id": { "$ref": "#/$defs/uuid", "description": "The comment_id for a comment's audio." },
+          "labels": { "type": "array", "items": {
+            "type": "object", "required": ["label", "confidence"], "additionalProperties": true,
+            "properties": {
+              "label": { "type": "string" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+            } } }
+        } } } }
+    },
+    "screenshotData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["attachment_id", "reason"], "additionalProperties": true,
+        "properties": {
+          "attachment_id": { "$ref": "#/$defs/uuid" },
+          "reason": { "type": "string", "description": "Open set: exif_user_comment, screen_size_match." }
+        } } } }
     }
   },
   "allOf": [
@@ -148,7 +228,13 @@
             "data_detection": { "properties": { "data": { "$ref": "#/$defs/dataDetectionData" } } },
             "source_app_guess": { "properties": { "data": { "$ref": "#/$defs/sourceAppGuessData" } } },
             "summary": { "properties": { "data": { "$ref": "#/$defs/summaryData" } } },
-            "tags": { "properties": { "data": { "$ref": "#/$defs/tagsData" } } }
+            "tags": { "properties": { "data": { "$ref": "#/$defs/tagsData" } } },
+            "motion_activity": { "properties": { "data": { "$ref": "#/$defs/motionActivityData" } } },
+            "weather": { "properties": { "data": { "$ref": "#/$defs/weatherData" } } },
+            "barcodes": { "properties": { "data": { "$ref": "#/$defs/barcodesData" } } },
+            "language": { "properties": { "data": { "$ref": "#/$defs/languageData" } } },
+            "sound_classification": { "properties": { "data": { "$ref": "#/$defs/soundClassificationData" } } },
+            "screenshot": { "properties": { "data": { "$ref": "#/$defs/screenshotData" } } }
           }
         }
       }

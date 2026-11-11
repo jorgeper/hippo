@@ -120,7 +120,7 @@ private func fetch(_ f: URLSessionHTTPFetcher, _ host: String, maxBytes: Int = 1
             switch e {
             case .deferred(let c, let after): #expect(kind == "offline" && c == "offline" && after == 60)
             case .transient: #expect(kind == "transient")
-            case .permanent: Issue.record("unexpected permanent")
+            case .permanent, .notApplicable: Issue.record("unexpected permanent")
             }
         }
     }
@@ -195,7 +195,7 @@ private func fetch(_ f: URLSessionHTTPFetcher, _ host: String, maxBytes: Int = 1
             switch e {
             case .deferred(let c, let after): #expect(kind == "offline" && c == "offline" && after == 60)
             case .transient: #expect(kind == "transient")
-            case .permanent: Issue.record("unexpected permanent")
+            case .permanent, .notApplicable: Issue.record("unexpected permanent")
             }
         }
     }

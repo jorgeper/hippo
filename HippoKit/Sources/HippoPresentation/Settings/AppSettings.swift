@@ -73,10 +73,13 @@ public struct AppSettings: @unchecked Sendable {
         defaults.set(failed, forKey: "last_sync_failed")
     }
 
-    /// Whether enrichment of `kind` runs. On unless the user turned it off.
+    /// Kinds that stay off until the user switches them on (they ask for a permission or send data off the phone).
+    public static let enrichmentKindsOffByDefault: Set<FacetKind> = [.motionActivity, .weather]
+
+    /// Whether enrichment of `kind` runs. An unset key is on, except for `enrichmentKindsOffByDefault`.
     public func isEnrichmentEnabled(_ kind: FacetKind) -> Bool {
         let key = "enrichment.\(kind.rawValue)"
-        return defaults.object(forKey: key) == nil ? true : defaults.bool(forKey: key)
+        return defaults.object(forKey: key) == nil ? !Self.enrichmentKindsOffByDefault.contains(kind) : defaults.bool(forKey: key)
     }
 
     public func setEnrichmentEnabled(_ kind: FacetKind, _ on: Bool) {
