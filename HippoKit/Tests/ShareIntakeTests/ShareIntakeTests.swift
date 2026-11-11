@@ -27,10 +27,11 @@ import HippoTestSupport
 
     private func prepare(_ providers: [any ItemProviding], title: String? = nil, contentText: String? = nil,
                          userInfoKeys: [String] = [], captureID: UUID? = nil,
+                         context: [MetadataObservation] = [],
                          progress: @escaping @Sendable (Int, Int) -> Void = { _, _ in }) async -> IntakeResult {
         let input = ShareInput(title: title, contentText: contentText, providers: providers, userInfoKeys: userInfoKeys)
         return await intake.prepare(input, captureID: captureID ?? self.captureID, startedAt: startedAt,
-                                    timeZone: TimeZone(identifier: "America/Los_Angeles")!, progress: progress)
+                                    timeZone: TimeZone(identifier: "America/Los_Angeles")!, context: context, progress: progress)
     }
 
     private func fileURL(_ source: AttachmentSource) -> URL? {
@@ -43,6 +44,16 @@ import HippoTestSupport
     }
 
     // MARK: - Files
+
+    @Test func contextIsAppendedOnce() async throws {
+        let entry = MetadataObservation(key: "context.network", value: .object(["interface": .string("wifi")]),
+                                        provenance: "nw_path")
+        let url = FakeProvider(types: ["public.url"], url: URL(string: "https://example.com/a"))
+        let result = await prepare([url], context: [entry])
+        #expect(result.draft.observations.filter { $0.key == "context.network" }.count == 1)
+        let without = await prepare([url])
+        #expect(!without.draft.observations.contains { $0.key.hasPrefix("context.") })
+    }
 
     @Test func imageFileIsCopiedWithProviderTypeAndName() async throws {
         let bytes = try MediaMaker.imageData(width: 8, height: 6)

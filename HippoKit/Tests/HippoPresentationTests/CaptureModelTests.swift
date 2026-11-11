@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 import CaptureCore
 import ShareIntake
 import SyncEngine
@@ -21,11 +22,12 @@ private struct Rig {
     let recorder = FakeRecorder()
     let model: RecorderModel
 
-    init(permission: MicPermission = .granted, location: CaptureLocation? = nil) throws {
+    init(permission: MicPermission = .granted, location: CaptureLocation? = nil,
+         context: @escaping (Date) -> [MetadataObservation] = { _ in [] }) throws {
         ts = try TestStore()
         intake = IntakeDirectory(storeRoot: ts.base.appendingPathComponent("Hippo"))
         model = RecorderModel(store: ts.store, intake: intake, recorder: recorder,
-                              permission: { permission }, location: { _ in location }, now: { t0 })
+                              permission: { permission }, location: { _ in location }, context: context, now: { t0 })
     }
 }
 
@@ -312,5 +314,49 @@ private struct Rig {
         #expect(RecorderModel.elapsedText(725) == "12:05")
         #expect(RecorderModel.elapsedText(3723) == "1:02:03")
         #expect(RecorderModel.elapsedText(-3) == "0:00")
+    }
+}
+
+private let ctxEntry = MetadataObservation(key: "context.network", value: .object(["interface": .string("wifi")]),
+                                           provenance: "nw_path")
+
+@Suite struct CaptureContextPathTests {
+    @Test func noteDraftCarriesContext() throws {
+        let draft = try #require(NoteComposer.draft(text: "hi", captureID: UUID(), startedAt: t0, timeZone: la,
+                                                    location: nil, context: [ctxEntry]))
+        #expect(draft.observations == [ctxEntry])
+        let plain = try #require(NoteComposer.draft(text: "hi", captureID: UUID(), startedAt: t0, timeZone: la, location: nil))
+        #expect(plain.observations.isEmpty)
+    }
+
+    @MainActor @Test func newVoiceCaptureCarriesContextOnce() async throws {
+        let seen = Mutex<[Date]>([])
+        let rig = try Rig(context: { d in seen.withLock { $0.append(d) }; return [ctxEntry] })
+        defer { rig.ts.cleanup() }
+        await rig.model.start()
+        rig.model.stop()
+        await rig.model.save()
+        #expect(rig.model.state == .saved)
+        let row = try #require(try rig.ts.store.index.page(CaptureFilter(), after: nil, limit: 10).first)
+        let m = try #require(try rig.ts.store.index.metadata(captureID: row.id, layout: rig.ts.store.layout))
+        #expect(m.metadataObservations.filter { $0.key == "context.network" }.count == 1)
+        #expect(seen.withLock { $0 } == [t0])
+    }
+
+    @MainActor @Test func commentModeNeverCallsContext() async throws {
+        let ts = try TestStore()
+        defer { ts.cleanup() }
+        let pkg = try await ts.note("a", at: t0)
+        let calls = Mutex(0)
+        let recorder = FakeRecorder()
+        let model = RecorderModel(store: ts.store, intake: IntakeDirectory(storeRoot: ts.base.appendingPathComponent("Hippo")),
+                                  recorder: recorder, permission: { .granted }, location: { _ in nil },
+                                  context: { _ in calls.withLock { $0 += 1 }; return [ctxEntry] },
+                                  now: { t0 }, target: .comment(captureID: pkg.metadata.captureID))
+        await model.start()
+        model.stop()
+        await model.save()
+        #expect(model.state == .saved)
+        #expect(calls.withLock { $0 } == 0)
     }
 }

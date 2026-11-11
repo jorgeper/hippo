@@ -15,6 +15,27 @@ public struct AppSettings: @unchecked Sendable {
         nonmutating set { defaults.set(newValue, forKey: Self.locationKey) }
     }
 
+    /// Whether captures record the audio route, battery, network and time since the last capture. On unless turned off.
+    public var deviceContextEnabled: Bool {
+        get { defaults.object(forKey: "device_context_enabled") == nil ? true : defaults.bool(forKey: "device_context_enabled") }
+        nonmutating set { defaults.set(newValue, forKey: "device_context_enabled") }
+    }
+
+    /// The capture saved most recently on this phone. Nil when unset or undecodable.
+    public var lastSaved: LastSaved? {
+        get {
+            guard let data = defaults.data(forKey: "last_saved_capture") else { return nil }
+            return try? JSONDecoder().decode(LastSaved.self, from: data)
+        }
+        nonmutating set {
+            if let newValue, let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: "last_saved_capture")
+            } else {
+                defaults.removeObject(forKey: "last_saved_capture")
+            }
+        }
+    }
+
     /// A lowercase UUID created on first read; names this install's folder under `logs/` on the destination.
     public var installID: String {
         if let existing = defaults.string(forKey: "install_id"), !existing.isEmpty { return existing }

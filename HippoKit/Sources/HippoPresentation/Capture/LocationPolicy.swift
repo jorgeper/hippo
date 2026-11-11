@@ -7,10 +7,22 @@ public struct LocationFix: Sendable, Equatable {
     public var longitude: Double
     public var horizontalAccuracy: Double
     public var timestamp: Date
+    public var altitude: Double?
+    public var verticalAccuracy: Double?
+    public var speed: Double?
+    public var speedAccuracy: Double?
+    public var course: Double?
+    public var courseAccuracy: Double?
 
-    public init(latitude: Double, longitude: Double, horizontalAccuracy: Double, timestamp: Date) {
+    public init(latitude: Double, longitude: Double, horizontalAccuracy: Double, timestamp: Date,
+                altitude: Double? = nil, verticalAccuracy: Double? = nil,
+                speed: Double? = nil, speedAccuracy: Double? = nil,
+                course: Double? = nil, courseAccuracy: Double? = nil) {
         self.latitude = latitude; self.longitude = longitude
         self.horizontalAccuracy = horizontalAccuracy; self.timestamp = timestamp
+        self.altitude = altitude; self.verticalAccuracy = verticalAccuracy
+        self.speed = speed; self.speedAccuracy = speedAccuracy
+        self.course = course; self.courseAccuracy = courseAccuracy
     }
 }
 
@@ -38,8 +50,30 @@ public enum LocationPolicy {
             // The session fix wins a tie.
             (fix, provenance) = l.timestamp > s.timestamp ? (l, "core_location_last_known") : (s, "core_location_request")
         }
-        return CaptureLocation(latitude: fix.latitude, longitude: fix.longitude,
-                               horizontalAccuracyMeters: fix.horizontalAccuracy,
-                               observedAt: fix.timestamp, provenance: provenance)
+        var location = CaptureLocation(latitude: fix.latitude, longitude: fix.longitude,
+                                       horizontalAccuracyMeters: fix.horizontalAccuracy,
+                                       observedAt: fix.timestamp, provenance: provenance)
+        // Core Location semantics: a value is kept with its accuracy only when both are valid; otherwise
+        // the pair is dropped. A missing accuracy keeps a valid value.
+        if let alt = pair(fix.altitude, fix.verticalAccuracy, valid: { $0.isFinite }) {
+            location.altitudeMeters = alt.value; location.verticalAccuracyMeters = alt.accuracy
+        }
+        if let speed = pair(fix.speed, fix.speedAccuracy, valid: { $0.isFinite && $0 >= 0 }) {
+            location.speedMetersPerSecond = speed.value; location.speedAccuracyMetersPerSecond = speed.accuracy
+        }
+        if let course = pair(fix.course, fix.courseAccuracy, valid: { $0.isFinite && (0...360).contains($0) }) {
+            location.courseDegrees = course.value; location.courseAccuracyDegrees = course.accuracy
+        }
+        return location
+    }
+
+    private static func pair(_ value: Double?, _ accuracy: Double?,
+                             valid: (Double) -> Bool) -> (value: Double, accuracy: Double?)? {
+        guard let value, valid(value) else { return nil }
+        if let accuracy {
+            guard accuracy.isFinite, accuracy >= 0 else { return nil }
+            return (value, accuracy)
+        }
+        return (value, nil)
     }
 }

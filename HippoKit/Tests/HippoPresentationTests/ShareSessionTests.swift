@@ -23,12 +23,13 @@ private struct Rig {
     let recorder = FakeRecorder()
 
     init(_ providers: [FakeProvider], text: String? = nil, destination: String? = "Dropbox",
-         location: CaptureLocation? = nil) throws {
+         location: CaptureLocation? = nil,
+         context: @escaping (Date) -> [MetadataObservation] = { _ in [] }) throws {
         ts = try TestStore()
         intake = IntakeDirectory(storeRoot: ts.base.appendingPathComponent("Hippo"))
         let input = ShareInput(title: nil, contentText: text, providers: providers, userInfoKeys: [])
         model = ShareSessionModel(store: ts.store, intake: intake, input: input, destinationName: destination,
-                                  location: { _ in location }, now: { t0 }, timeZone: la)
+                                  location: { _ in location }, context: context, now: { t0 }, timeZone: la)
     }
 
     /// A draft already on disk (camera) with a voice session. The location is never re-read.
@@ -103,6 +104,18 @@ private func stagedPhoto(_ intake: IntakeDirectory, method: CaptureMethod = .cam
         #expect(rows.count == 1)
         #expect(rows[0].userNote == "worth reading")
         #expect(rig.captureDirectories.isEmpty)
+    }
+
+    @Test func savedShareCarriesContextOnce() async throws {
+        let entry = MetadataObservation(key: "context.network", value: .object(["interface": .string("wifi")]),
+                                        provenance: "nw_path")
+        let rig = try Rig([link()], context: { _ in [entry] })
+        defer { rig.ts.cleanup() }
+        await rig.model.prepare()
+        await rig.model.save()
+        #expect(rig.model.state == .saved)
+        let rows = try rig.committed()
+        #expect(rows[0].metadataObservations.filter { $0.key == "context.network" }.count == 1)
     }
 
     @Test func emptyCommentIsNil() async throws {
