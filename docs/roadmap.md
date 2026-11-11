@@ -14,6 +14,8 @@ What comes after Plan 3 (Dropbox, merged 2026-11-09). Items are not ordered yet;
 
 ## Decided: capture context (all behind Settings toggles and the relevant permission)
 
+In design (2026-11-10, [design](superpowers/specs/2026-11-10-hippo-capture-context-design.md)): the signals below, a major.minor format version, a signal registry, and a self-describing destination folder. The purpose sharpened to recall by circumstance: "the pictures I shared last week while I was in a car".
+
 Purpose: record factual signals at capture time so that, later, Hippo or the desktop can infer an activity ("looks like you were running", "in the car", "on headphones") and ask the user to confirm it. Everything lands as `metadata_observations` entries (with provenance) or device-layer enrichment facets, omitted when unknown; inference happens later, not at capture time.
 
 - **Cheap and permission-free, captured in the moment:**
@@ -47,6 +49,12 @@ Dropped for now: Health (heart rate, workout in progress, sleep). Judged too har
 - Editing or deleting a comment.
 - A desktop reader must list `comments/` on rescan (the package digest does not change).
 - Download from Dropbox should also fetch `comments/` so comments come back to a new phone.
+
+## Later: ask and browse (an idea, not scheduled)
+
+Jorge's idea (2026-11-10): agents are text in, text out. Build a surface where the question goes in as text and the answer comes back as a set of captures to look at: a list, a grid, or piles on a table, which he can then zoom into, filter and sort by hand. Talk to the agent and browse, both. Definitely on the desktop; interesting on the phone too, with a model running against the phone's own data.
+
+What it needs from the data, already true or coming: every signal a queryable fact with a stable key (capture context phase), captures addressable by `capture_id`, thumbnails available locally. The agent's answer would be capture IDs plus a grouping, rendered by native views, so the model never has to describe what the screen can show.
 
 ## The desktop reader (separate project)
 
