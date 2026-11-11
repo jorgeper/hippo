@@ -222,6 +222,11 @@ struct CaptureDetailView: View {
                         }
                     }
                 }
+                if !detail.context.isEmpty {
+                    Section("Context") {
+                        ForEach(Array(detail.context.enumerated()), id: \.offset) { _, item in row(item) }
+                    }
+                }
                 if !detail.attachments.isEmpty {
                     Section("Attachments") {
                         ForEach(Array(detail.attachments.enumerated()), id: \.offset) { _, rows in

@@ -92,6 +92,7 @@ public final class CaptureDetailModel {
                 for case let d? in names.values { accountNames[d.id] = await accountName(d) }
                 let enrichment = ResolvedEnrichment.load(store: store, captureID: id)
                 let tasks = try store.enrichmentTasks.tasks(captureIDs: [id])
+                let deviceDocument = (try? store.enrichments.document(.device, captureID: id)) ?? nil
                 let goldArrivedAt = (try? store.enrichments.document(.server, captureID: id))?.generatedAt
                 let changed = (try? store.remoteState.changed(captureID: id)) ?? nil
                 let trimmedPaths = (try? store.trims.trimmedPaths(captureID: id)) ?? []
@@ -113,6 +114,7 @@ public final class CaptureDetailModel {
                                                 activeDestination: active, accountName: { accountNames[$0] }, isEnabled: isEnabled,
                                                 isOnline: isOnline(), goldArrivedAt: goldArrivedAt,
                                                 comments: PackageComments.load(directory: url).comments,
+                                                deviceDocument: deviceDocument,
                                                 destination: { names[$0] ?? nil }, now: now,
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: boundName)
