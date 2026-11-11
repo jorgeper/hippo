@@ -44,6 +44,7 @@ targets:
         NSCameraUsageDescription: "Hippo uses the camera to take pictures and record videos as captures."
         NSPhotoLibraryAddUsageDescription: "Hippo can also keep the pictures and videos you take in your Photos library. This is off unless you turn it on in Settings."
         NSLocationWhenInUseUsageDescription: "Hippo can save where you were when you capture something. This is off unless you turn it on in Settings."
+        NSMotionUsageDescription: "Hippo records whether you were still, walking, running, cycling or in a vehicle around the time of each capture."
         UIBackgroundModes: [audio, processing]
         BGTaskSchedulerPermittedIdentifiers: [com.jorgeper.hippo.sync]
         UILaunchScreen: {}

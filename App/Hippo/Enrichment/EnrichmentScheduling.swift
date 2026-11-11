@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import UIKit
 import os
 import CaptureCore
 import SyncEngine
@@ -20,7 +21,8 @@ enum EnrichmentScheduling {
     private nonisolated static let log = Logger(subsystem: "com.jorgeper.hippo", category: "enrichment")
     /// The kinds the app's enrichers produce (the Settings switches).
     nonisolated static let kinds: [FacetKind] = [.linkPreview, .place, .textRecognition, .transcript,
-                                                 .dataDetection, .sourceAppGuess]
+                                                 .dataDetection, .sourceAppGuess, .barcodes, .screenshot,
+                                                 .language, .soundClassification, .weather, .motionActivity]
 
     /// Whether the device has a usable network path, from the shared monitor. Readable from any thread.
     nonisolated static var isOnline: Bool { NetworkStatus.shared.isOnline }
@@ -124,7 +126,7 @@ enum EnrichmentScheduling {
 
     // MARK: Runner
 
-    /// Built on first use from the app's store, with all six enrichers.
+    /// Built on first use from the app's store, with all twelve enrichers.
     private static func runner(for env: AppEnvironment) -> EnrichmentRunner {
         if let runner { return runner }
         let store = env.store
@@ -140,6 +142,13 @@ enum EnrichmentScheduling {
                                locale: TranscriptLocale.choose(current: .current)),
             DataDetectionEnricher(),
             SourceAppGuessEnricher(),
+            BarcodeEnricher(),
+            ScreenshotEnricher(screenPixelSize: Self.screenPixelSize()),
+            LanguageEnricher(),
+            SoundClassificationEnricher(),
+            // Built once: its `RequestPacer` must live as long as the process.
+            WeatherEnricher(http: URLSessionHTTPFetcher()),
+            MotionActivityEnricher(history: CoreMotionHistory()),
         ]
         let made = EnrichmentRunner(
             layout: store.layout, index: store.index, tasks: store.enrichmentTasks, store: store.enrichments,
@@ -151,6 +160,16 @@ enum EnrichmentScheduling {
             trimmedPaths: { try store.trims.trimmedPaths(captureID: $0) })
         runner = made
         return made
+    }
+
+    /// The screen's native size in pixels, portrait-up (`nativeBounds` is already in pixels), from the
+    /// connected scene (`UIScreen.main` is deprecated). Nil if no scene has connected yet, which only
+    /// costs the screenshot heuristic its size match.
+    private static func screenPixelSize() -> (width: Int, height: Int)? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let bounds = scenes.first?.screen.nativeBounds else { return nil }
+        guard bounds.width > 0, bounds.height > 0, bounds.width.isFinite, bounds.height.isFinite else { return nil }
+        return (Int(bounds.width.rounded()), Int(bounds.height.rounded()))
     }
 
     /// The enrichers' versions for the kinds switched on in Settings, for `EnrichmentTaskStore.hasWork`.
