@@ -224,11 +224,13 @@ private let archiveHost = "archive-api.open-meteo.com"
         let m = metadata()
         let thrown = FakeHTTP { _ in throw Boom() }
         await #expect(throws: EnrichmentError.transient(code: "weather_network")) { _ = try await enricher(thrown).run(fixtureInput(m)) }
-        for code in ["http_5xx"] {
-            let http = FakeHTTP { _ in throw EnrichmentError.transient(code: code) }
-            await #expect(throws: EnrichmentError.transient(code: code)) { _ = try await enricher(http).run(fixtureInput(m)) }
-            #expect(http.urls.count == 1)
-        }
+        let server = FakeHTTP { _ in throw EnrichmentError.transient(code: "http_5xx") }
+        await #expect(throws: EnrichmentError.transient(code: "http_5xx")) { _ = try await enricher(server).run(fixtureInput(m)) }
+        #expect(server.urls.count == 1)
+        // 408 reaches the enricher as the fetcher's transient http_4xx and is not retried against the archive.
+        let timeout = FakeHTTP { _ in throw EnrichmentError.transient(code: "http_4xx") }
+        await #expect(throws: EnrichmentError.transient(code: "http_4xx")) { _ = try await enricher(timeout).run(fixtureInput(m)) }
+        #expect(timeout.urls.count == 1)
         // 429 reaches the enricher as the fetcher's transient http_4xx.
         let limited = FakeHTTP { _ in throw EnrichmentError.transient(code: "http_4xx") }
         await #expect(throws: EnrichmentError.transient(code: "http_4xx")) { _ = try await enricher(limited).run(fixtureInput(m)) }
@@ -236,6 +238,8 @@ private let archiveHost = "archive-api.open-meteo.com"
 
         let bad = FakeHTTP { _ in Data("not json".utf8) }
         await #expect(throws: EnrichmentError.permanent(code: "weather_bad_response")) { _ = try await enricher(bad).run(fixtureInput(m)) }
+        let errorBody = FakeHTTP { _ in Data(#"{"error":true,"reason":"Latitude must be in range of -90 to 90"}"#.utf8) }
+        await #expect(throws: EnrichmentError.permanent(code: "weather_bad_response")) { _ = try await enricher(errorBody).run(fixtureInput(m)) }
         let noHourly = FakeHTTP { _ in Data("{}".utf8) }
         await #expect(throws: EnrichmentError.permanent(code: "weather_bad_response")) { _ = try await enricher(noHourly).run(fixtureInput(m)) }
     }
@@ -311,6 +315,63 @@ private let archiveHost = "archive-api.open-meteo.com"
         for url in http.urls {
             #expect(!url.absoluteString.contains("47.612"))
             #expect(!url.absoluteString.contains("122.334"))
+        }
+    }
+
+    @Test func concurrentPacerWaitersAreSpaced() async {
+        let clock = Clock()
+        let pacer = clock.pacer()
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await pacer.wait() }
+            group.addTask { await pacer.wait() }
+            group.addTask { await pacer.wait() }
+        }
+        // The first goes straight through; the others are held one and two intervals out, whichever task is first.
+        let ms = clock.sleeps.map { $0 / .milliseconds(1) }.sorted()
+        #expect(ms.count == 2)
+        #expect(abs(ms[0] - 1000) < 5 && abs(ms[1] - 2000) < 5)
+    }
+
+    private func codes(_ code: String = "61", isDay: String = "1", temp: String = "14.2") -> Data {
+        Data("""
+        {"hourly":{"time":["2026-11-08T14:00"],"temperature_2m":[\(temp)],"weather_code":[\(code)],"is_day":[\(isDay)]}}
+        """.utf8)
+    }
+
+    @Test func badWeatherCodeOmitsOnlyTheCode() throws {
+        for code in ["1e30", "61.5", "-1", "-1e30", "1e400"] {
+            guard let d = try? OpenMeteo.parse(codes(code), hour: captured, latitude: 1, longitude: 2) else { continue }   // rejecting the body is also safe
+            #expect(d.condition == nil, "code \(code)")
+            if code != "-1" { #expect(d.weatherCode == nil, "code \(code)") }
+            #expect(d.temperatureCelsius == 14.2, "code \(code)")
+            #expect(d.isDay == true, "code \(code)")
+        }
+        let minusOne = try #require(try OpenMeteo.parse(codes("-1"), hour: captured, latitude: 1, longitude: 2))
+        #expect(minusOne.condition == nil && minusOne.temperatureCelsius == 14.2)
+        let integral = try #require(try OpenMeteo.parse(codes("61.0"), hour: captured, latitude: 1, longitude: 2))
+        #expect(integral.weatherCode == 61 && integral.condition == "rain")
+    }
+
+    @Test func isDayAcceptsOnlyZeroOrOne() throws {
+        for v in ["2", "-1", "0.5", "1e30"] {
+            let d = try #require(try OpenMeteo.parse(codes(isDay: v), hour: captured, latitude: 1, longitude: 2))
+            #expect(d.isDay == nil, "is_day \(v)")
+            #expect(d.weatherCode == 61 && d.temperatureCelsius == 14.2)
+        }
+        #expect(try #require(try OpenMeteo.parse(codes(isDay: "0"), hour: captured, latitude: 1, longitude: 2)).isDay == false)
+    }
+
+    @Test func absurdNumbersNeverTrap() async throws {
+        for temp in ["1e400", "-1e400", "\"NaN\"", "NaN", "Infinity"] {
+            let http = FakeHTTP { _ in codes(temp: temp) }
+            do {
+                let out = try await enricher(http).run(fixtureInput(metadata()))
+                let json = try String(decoding: JSONEncoder().encode(try #require(out.data)), as: UTF8.self)
+                #expect(!json.contains("\"temperature_celsius\""), "temp \(temp)")   // field omitted, rest kept
+                #expect(json.contains("\"weather_code\""))
+            } catch let error as EnrichmentError {
+                #expect(error == .permanent(code: "weather_bad_response"), "temp \(temp)")
+            }
         }
     }
 }

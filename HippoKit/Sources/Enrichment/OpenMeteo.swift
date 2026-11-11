@@ -72,14 +72,18 @@ public enum OpenMeteo {
         let hour = floorToHour(hour)
         let wanted = hourString(hour)
         guard let i = h.time.firstIndex(of: wanted) else { return nil }
-        func value(_ a: [Double?]?) -> Double? { a.flatMap { i < $0.count ? $0[i] : nil } }
-        let code = value(h.weatherCode).map { Int($0) }
+        // Server numbers are untrusted: non-finite values are dropped, and an integer field must be exactly integral and in range.
+        func value(_ a: [Double?]?) -> Double? {
+            guard let v = a.flatMap({ i < $0.count ? $0[i] : nil }), v.isFinite else { return nil }
+            return v
+        }
+        let code = value(h.weatherCode).flatMap { Int(exactly: $0) }.flatMap { (0...99).contains($0) ? $0 : nil }
         let data = WeatherData(observedHour: hour, temperatureCelsius: value(h.temperature2m),
                                apparentTemperatureCelsius: value(h.apparentTemperature),
                                relativeHumidityPercent: value(h.relativeHumidity2m),
                                precipitationMillimeters: value(h.precipitation), cloudCoverPercent: value(h.cloudCover),
                                windSpeedMetersPerSecond: value(h.windSpeed10m), weatherCode: code,
-                               condition: code.flatMap(condition(forCode:)), isDay: value(h.isDay).map { $0 != 0 },
+                               condition: code.flatMap(condition(forCode:)), isDay: value(h.isDay).flatMap { $0 == 0 ? false : $0 == 1 ? true : nil },
                                source: "open-meteo.com", requestedLatitude: latitude, requestedLongitude: longitude)
         let empty = data.temperatureCelsius == nil && data.apparentTemperatureCelsius == nil
             && data.relativeHumidityPercent == nil && data.precipitationMillimeters == nil

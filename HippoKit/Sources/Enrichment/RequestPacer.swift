@@ -14,6 +14,7 @@ public actor RequestPacer {
         self.minimumInterval = minimumInterval; self.sleep = sleep; self.now = now
     }
 
+    /// If the caller is cancelled while it waits, its slot stays reserved and the sleep ends early; the caller checks cancellation.
     /// Returns when at least `minimumInterval` has passed since the previous call returned.
     public func wait() async {
         let current = now()

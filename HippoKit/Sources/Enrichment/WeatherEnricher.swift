@@ -29,7 +29,7 @@ public struct WeatherEnricher: Enricher {
         let forecast = OpenMeteo.request(latitude: lat, longitude: lon, capturedAt: capturedAt, now: now())
         let archive = OpenMeteo.archiveRequest(latitude: lat, longitude: lon, capturedAt: capturedAt)
 
-        var body: Data
+        let body: Data
         do {
             body = try await fetch(forecast)
         } catch EnrichmentError.permanent(code: "http_4xx") where forecast != archive {
