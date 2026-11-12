@@ -31,8 +31,66 @@ export const PAPER = {
   blockLine: 'rgba(90, 84, 70, 0.28)',
   tape: '#e8dcbc',
   tapeEdge: 'rgba(120, 100, 60, 0.18)',
-  map: '#d8cfb6',
-  mapInk: 'rgba(70, 64, 52, 0.75)',
+  /** The tape's outline, so a label still reads where it lies on paper (the map sheet). */
+  tapeOutline: 'rgba(58, 46, 24, 0.62)',
+};
+
+/** The place layout's paper map sheet. */
+export const MAP = {
+  /** The paper, and its back and cut edge. */
+  paper: '#dcd7c8',
+  back: '#d0cabb',
+  edge: '#bfb8a5',
+  /** The paper darkens a little toward its edges, as handled paper does. */
+  age: 'rgba(110, 92, 58, 0.16)',
+  /** What the desaturated tiles are multiplied with: the paper's own tone, so streets read as printed on it. */
+  tint: '#ebe5d6',
+  /** A small share of the tiles' own colour is kept, so water and parks still read. */
+  keepColour: 0.14,
+  /** Fibres speckled over the paper. */
+  fibre: 'rgba(90, 80, 60, 0.05)',
+  fibreLight: 'rgba(255, 255, 255, 0.10)',
+  /** The two fold creases: a shaded side and a lit side. */
+  crease: 'rgba(60, 50, 30, 0.16)',
+  creaseLight: 'rgba(255, 255, 255, 0.30)',
+  /** The neat line round the printed area, the graticule and its figures, the place names, the scale bar. */
+  frame: 'rgba(48, 52, 64, 0.70)',
+  grid: 'rgba(56, 70, 96, 0.30)',
+  gridMinor: 'rgba(56, 70, 96, 0.13)',
+  gridText: 'rgba(56, 66, 86, 0.62)',
+  name: 'rgba(36, 40, 54, 0.80)',
+  nameMinor: 'rgba(52, 58, 76, 0.66)',
+  nameHalo: 'rgba(220, 215, 200, 0.85)',
+  scaleDark: 'rgba(40, 44, 56, 0.85)',
+  scaleLight: '#f4f1e8',
+  attribution: 'rgba(40, 44, 56, 0.78)',
+  /** The soft shadow the sheet lays on the desk. */
+  shadow: 'rgba(0, 3, 10, 0.55)',
+};
+
+/**
+ * The page's controls over the canvas, as CSS custom properties (styles.css reads them; nothing there names a colour).
+ * Dark glass the colour of the desk, ink of the chalk, and the key light's warm tone for the one thing that is active.
+ */
+export const CHROME: Record<string, string> = {
+  '--ui-ground': '#0d1c33',
+  '--ui-ink': '#e4e9f2',
+  '--ui-ink-soft': '#9babc6',
+  '--ui-ink-faint': '#6c7c99',
+  '--ui-glass': 'rgba(8, 17, 33, 0.72)',
+  '--ui-glass-strong': 'rgba(7, 14, 28, 0.92)',
+  '--ui-glass-hover': 'rgba(150, 175, 220, 0.10)',
+  '--ui-line': 'rgba(170, 192, 230, 0.16)',
+  '--ui-line-strong': 'rgba(170, 192, 230, 0.32)',
+  '--ui-paper': '#efe9da',
+  '--ui-paper-ink': '#1f2330',
+  '--ui-lamp': '#ffc978',
+  '--ui-lamp-glow': 'rgba(255, 201, 120, 0.45)',
+  '--ui-focus': 'rgba(255, 214, 150, 0.70)',
+  '--ui-danger': '#ff9d8a',
+  '--ui-shadow': 'rgba(0, 4, 12, 0.45)',
+  '--ui-font': 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+  '--ui-reply-font': '"Iowan Old Style", "Palatino Linotype", Palatino, Charter, Georgia, serif',
 };
 
 export const INK = {
@@ -46,6 +104,7 @@ export const INK = {
   /** On the dark desk: column labels and guides. */
   chalk: '#d7deea',
   chalkGuideOpacity: 0.14,
+  chalkTextOpacity: 0.85,
 };
 
 export const PHONE = { bezel: '#15171c', bezelEdge: '#2c2f37', screen: '#22252c', bar: 'rgba(255, 255, 255, 0.10)', barStrong: 'rgba(255, 255, 255, 0.22)', text: 'rgba(255, 255, 255, 0.75)' };
@@ -89,4 +148,6 @@ export const FONT = {
   sans: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
   /** System fonts only: nothing is fetched (the page's CSP allows no font loads from elsewhere). */
   hand: '"Bradley Hand", "Segoe Print", "Comic Sans MS", cursive',
+  /** Map lettering: a book serif, italic for places. */
+  map: '"Iowan Old Style", "Palatino Linotype", Palatino, Charter, Georgia, serif',
 };

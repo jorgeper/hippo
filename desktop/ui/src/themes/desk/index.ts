@@ -5,6 +5,7 @@ import type { DeskItem } from '../../../../src/server/wire.ts';
 import type { Kind } from '../../../../src/core/types.ts';
 import type { Theme } from '../types.ts';
 import { setupStage } from './surface.ts';
+import { CHROME } from './palette.ts';
 import { buildBadge, buildPileLabel } from './labels.ts';
 import { buildBackdrop, buildThickness } from './backdrop.ts';
 import { motions } from './motions.ts';
@@ -32,4 +33,5 @@ export const theme: Theme = {
   buildThickness,
   buildBackdrop,
   motions,
+  chrome: CHROME,
 };

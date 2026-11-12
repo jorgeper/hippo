@@ -18,12 +18,14 @@ export interface PileInfo { key: string; label: string; count: number; x: number
 /**
  * What is drawn under the items. `columns`: one per time bucket, each with its centre `x` and `width`, spanning `bottom` to
  * `top` in y. `map`: a sheet whose centre is `x`,`y`, at Web Mercator `zoom`, centred on `centerLat`,`centerLon`, drawn at
- * MAP_PX_PER_UNIT world pixels per desk unit (layout/mercator.ts), with place names to show when tiles are off.
+ * MAP_PX_PER_UNIT world pixels per desk unit (layout/mercator.ts), with place names to show when tiles are off (`minor`: a
+ * neighbourhood, written smaller than a town). `avoid`: where the piles and the labels under them lie, so the sheet
+ * writes its place names elsewhere.
  */
 export type Backdrop =
   | { type: 'columns'; columns: { label: string; x: number; width: number }[]; top: number; bottom: number }
   | { type: 'map'; x: number; y: number; width: number; height: number; zoom: number; centerLat: number; centerLon: number;
-      labels: { text: string; x: number; y: number }[] };
+      labels: { text: string; x: number; y: number; minor?: boolean }[]; avoid?: { x0: number; x1: number; y0: number; y1: number }[] };
 /** `empty` is set (and nothing else) when there are no items: the line the desk shows instead. */
 export interface LayoutResult { placements: Placement[]; piles: PileInfo[]; backdrop?: Backdrop; empty?: string }
 export type LayoutFn = (items: DeskItem[], view: View, sizes: SizeTable) => LayoutResult;

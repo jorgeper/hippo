@@ -37,6 +37,11 @@ function drawTape(ctx: CanvasRenderingContext2D, w: number, h: number, seed: num
   ctx.closePath();
   ctx.fillStyle = PAPER.tape;
   ctx.fill();
+  // A fine dark outline: on the dark desk it is barely there, on the paper map it keeps the tape from melting into the sheet.
+  ctx.strokeStyle = PAPER.tapeOutline;
+  ctx.lineWidth = 0.12;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
   ctx.fillStyle = PAPER.tapeEdge;
   ctx.fillRect(0, 0, w, 0.08);
   ctx.fillRect(0, h - 0.08, w, 0.08);

@@ -7,7 +7,7 @@ import { Box3, Vector3 } from 'three';
 import type { Group, Object3D } from 'three';
 import type { DeskItem } from '../../../src/server/wire.ts';
 import type { Backdrop, LayoutResult, Placement, Size } from '../layout/types.ts';
-import type { Edge, Theme } from '../themes/types.ts';
+import type { BackdropMotion, Edge, Theme } from '../themes/types.ts';
 import type { ObjectStore, Pose } from './objects.ts';
 import { spring, step, settled, snap } from './spring.ts';
 
@@ -179,7 +179,7 @@ export interface Arranger {
   apply(items: DeskItem[], layout: LayoutResult, frame: (b: Bounds) => Rect, now: number): void;
   /** The area the placed piles, labels and backdrop (or the empty-state line) take, in desk units, to frame the camera. */
   measure(items: DeskItem[], layout: LayoutResult): Rect;
-  /** Grows labels and thickness blocks in; says whether anything moved, and whether a shadow caster did. */
+  /** Grows labels and thickness blocks in and moves the backdrop; says whether anything moved, and whether a shadow caster did. */
   step(dt: number, now: number): { moving: boolean; shadows: boolean };
   /** The pile key under an object hit by a pick (labels and blocks carry it). */
   pileOf(obj: Object3D): string | undefined;
@@ -211,23 +211,35 @@ function backdropSig(b: Backdrop | undefined): string { return b ? JSON.stringif
 export function createArranger(scene: Group, theme: Theme, objects: ObjectStore): Arranger {
   let phases: Map<string, Phase> = new Map();
   let piles = new Map<string, PileParts>();
-  let backdrop: { obj: Object3D; sig: string; floor: number } | undefined;
+  let backdrop: { obj: Object3D; sig: string; floor: number; type: Backdrop['type'] } | undefined;
+  /** Backdrops on their way out (a map sheet folding away), dropped once their motion says they are gone. */
+  let goingAway: Object3D[] = [];
   let empty: { obj: Object3D; text: string } | undefined;
   let mapTiles = false;
   const pileByObject = new WeakMap<Object3D, string>();
 
   const dispose = (o: Object3D | undefined) => { if (o) { o.removeFromParent(); objects.disposeObject(o); } };
+  const motionOf = (o: Object3D) => o.userData.motion as BackdropMotion | undefined;
 
-  function setBackdrop(b: Backdrop | undefined): number {
+  /**
+   * Puts up the layout's backdrop. One of a new type arrives (the map unfolds) while the old one leaves by its own motion;
+   * one that replaces a backdrop of the same type (the set changed, or map tiles were turned on or off) swaps in place.
+   */
+  function setBackdrop(b: Backdrop | undefined, now: number): number {
     const sig = backdropSig(b) + (b?.type === 'map' ? `|${mapTiles}` : '');
     if (backdrop?.sig === sig) return backdrop.floor;
-    dispose(backdrop?.obj);
+    const sameType = !!b && backdrop?.type === b.type;
+    if (backdrop) {
+      const motion = motionOf(backdrop.obj);
+      if (motion && !sameType) { motion.leave(now); goingAway.push(backdrop.obj); }
+      else dispose(backdrop.obj);
+    }
     backdrop = undefined;
     if (!b) return 0;
-    const obj = theme.buildBackdrop(b, { mapTiles });
+    const obj = theme.buildBackdrop(b, { mapTiles, arrive: !sameType });
     scene.add(obj);
     const floor = Math.max(0, Math.min(0.5, footprint(obj).top));
-    backdrop = { obj, sig, floor };
+    backdrop = { obj, sig, floor, type: b.type };
     return floor;
   }
 
@@ -279,7 +291,7 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
     }
     for (const it of items) objects.update(it);
 
-    const floor = setBackdrop(layout.backdrop);
+    const floor = setBackdrop(layout.backdrop, now);
 
     // Empty-state line.
     if (layout.empty !== undefined) {
@@ -419,6 +431,15 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
 
   function stepLabels(dt: number, now: number): { moving: boolean; shadows: boolean } {
     let moving = false, shadows = false;
+    if (backdrop && motionOf(backdrop.obj)?.step(now)) moving = true;
+    if (goingAway.length) {
+      goingAway = goingAway.filter(o => {
+        if (motionOf(o)?.step(now)) return true;
+        dispose(o);
+        return false;
+      });
+      moving = true;
+    }
     for (const p of piles.values()) {
       if (!p.grow || !p.block) continue;
       if (p.grow.value === 0 && now < p.growAt) {

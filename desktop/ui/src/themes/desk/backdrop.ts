@@ -1,11 +1,9 @@
-// What lies under the items: the thickness block that stands for a pile's hidden sheets, the time layout's column guides and
-// day labels chalked on the desk, and (until the map task) a plain paper sheet with place names for the place layout.
-import { BoxGeometry, BufferAttribute, BufferGeometry, CanvasTexture, ClampToEdgeWrapping, Group, LineBasicMaterial, LineSegments, Mesh,
-  MeshBasicMaterial, MeshStandardMaterial, PlaneGeometry, RepeatWrapping, SRGBColorSpace } from 'three';
+// What lies under the items: the thickness block that stands for a pile's hidden sheets. The backdrops a layout asks for
+// (the place layout's map sheet, the time layout's columns) are in map.ts.
+import { BoxGeometry, CanvasTexture, ClampToEdgeWrapping, Mesh, MeshStandardMaterial, RepeatWrapping, SRGBColorSpace } from 'three';
 import type { Object3D } from 'three';
-import type { Backdrop, Size } from '../../layout/types.ts';
-import { faceTexture, fitLines, makeFace } from '../../scene/textures.ts';
-import { FONT, INK, PAPER } from './palette.ts';
+import type { Size } from '../../layout/types.ts';
+import { PAPER } from './palette.ts';
 
 // ---------------------------------------------------------------- thickness
 
@@ -57,76 +55,5 @@ export function buildThickness(count: number, size: Size): Object3D | undefined 
 
 // ---------------------------------------------------------------- backdrops
 
-const COLUMN_TEXT = 1.7, LABEL_PX = 40;
-
-const plane = new PlaneGeometry(1, 1);
-plane.userData.shared = true;
-
-/** Chalky handwriting straight on the desk, centred at x,y. */
-function chalk(text: string, x: number, y: number, maxW: number): Object3D | undefined {
-  const m = document.createElement('canvas').getContext('2d')!;
-  m.font = `${COLUMN_TEXT}px ${FONT.hand}`;
-  const [line] = fitLines(text, maxW, 1, s => m.measureText(s).width);
-  if (!line) return undefined;
-  const w = m.measureText(line).width + 0.6, h = COLUMN_TEXT * 1.5;
-  const c = document.createElement('canvas');
-  c.width = Math.ceil(w * LABEL_PX); c.height = Math.ceil(h * LABEL_PX);
-  const ctx = c.getContext('2d')!;
-  ctx.scale(c.width / w, c.height / h);
-  ctx.font = `${COLUMN_TEXT}px ${FONT.hand}`;
-  ctx.fillStyle = INK.chalk;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(line, w / 2, h / 2);
-  const mesh = new Mesh(plane, new MeshBasicMaterial({ map: faceTexture(c), transparent: true, depthWrite: false, toneMapped: false, opacity: 0.85 }));
-  mesh.scale.set(w, h, 1);
-  mesh.position.set(x, y, 0.01);
-  mesh.renderOrder = 1;
-  return mesh;
-}
-
-function columns(b: Extract<Backdrop, { type: 'columns' }>): Object3D {
-  const group = new Group();
-  // Guides between neighbouring columns, and at the outer edges.
-  const xs = new Set<number>();
-  for (const c of b.columns) { xs.add(c.x - c.width / 2); xs.add(c.x + c.width / 2); }
-  const verts: number[] = [];
-  for (const x of xs) verts.push(x, b.bottom, 0.01, x, b.top + 3.4, 0.01);
-  const g = new BufferGeometry();
-  g.setAttribute('position', new BufferAttribute(new Float32Array(verts), 3));
-  const lines = new LineSegments(g, new LineBasicMaterial({ color: INK.chalk, transparent: true, opacity: INK.chalkGuideOpacity, depthWrite: false, toneMapped: false }));
-  lines.renderOrder = 1;
-  group.add(lines);
-  for (const c of b.columns) {
-    const label = chalk(c.label, c.x, b.top + 1.7, Math.max(3, c.width - 1));
-    if (label) group.add(label);
-  }
-  return group;
-}
-
-/** The place layout's sheet, plain for now: paper with the place names where they are (the map task adds the tiles). */
-function mapSheet(b: Extract<Backdrop, { type: 'map' }>): Object3D {
-  const face = makeFace(b.width, b.height, 1024);
-  const { ctx } = face;
-  ctx.fillStyle = PAPER.map;
-  ctx.fillRect(0, 0, b.width, b.height);
-  ctx.font = `1.5px ${FONT.hand}`;
-  ctx.fillStyle = PAPER.mapInk;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  for (const l of b.labels) {
-    const [line] = fitLines(l.text, 20, 1, s => ctx.measureText(s).width);
-    if (line) ctx.fillText(line, l.x - b.x + b.width / 2, b.height / 2 - (l.y - b.y));
-  }
-  const g = new BoxGeometry(b.width, b.height, 0.03);
-  g.translate(0, 0, 0.015);
-  const mats = new MeshStandardMaterial({ map: faceTexture(face.canvas), roughness: 0.95, metalness: 0 });
-  const mesh = new Mesh(g, mats);
-  mesh.receiveShadow = true;
-  mesh.position.set(b.x, b.y, 0);
-  return mesh;
-}
-
-export function buildBackdrop(b: Backdrop, _opts: { mapTiles: boolean }): Object3D {
-  return b.type === 'columns' ? columns(b) : mapSheet(b);
-}
+/** The map sheet and the ruled columns are drawn in map.ts. */
+export { buildBackdrop } from './map.ts';

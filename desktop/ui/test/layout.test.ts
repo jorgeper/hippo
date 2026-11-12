@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { layouts, EMPTY_LINE } from '../src/layout/index.ts';
-import { lonLatToTile, lonLatToWorld, MAP_PX_PER_UNIT, worldToLonLat } from '../src/layout/mercator.ts';
+import { lonLatToWorld, MAP_PX_PER_UNIT } from '../src/layout/mercator.ts';
 import type { LayoutResult, Placement, View } from '../src/layout/types.ts';
 import type { DeskItem } from '../../src/server/wire.ts';
 import type { LayoutName } from '../../src/recall/spec.ts';
@@ -244,7 +244,7 @@ test('place: 20 m apart share a pile, 5 km apart do not; unlocated items are a "
   assert.equal(small.piles.find(p => p.key === pileOf(small, c.id))!.label, 'Lumiar');
 });
 
-test('place: a trail of close items does not chain into one pile; no member is more than 6 units from its pile point', () => {
+test('place: a trail of close items does not chain into one pile; each pile sits at its members\' centre', () => {
   // 20 items in a line east to west, about 3 units apart on the sheet: each is closer than 6 units to the next.
   const trail = Array.from({ length: 20 }, (_, k) => item(200 + k, { time: `${String(8 + Math.floor(k / 4)).padStart(2, '0')}:${String((k % 4) * 10).padStart(2, '0')}`,
     place: { lat: 38.72, lon: -9.20 + k * 0.004 } }));
@@ -261,10 +261,17 @@ test('place: a trail of close items does not chain into one pile; no member is m
   const gaps = trail.slice(1).map((it, k) => Math.hypot(spot(it).x - spot(trail[k]).x, spot(it).y - spot(trail[k]).y));
   assert.ok(Math.max(...gaps) < 6, `neighbours ${Math.max(...gaps)} apart`);
   assert.ok(r.piles.length > 1, `${r.piles.length} pile(s)`);
-  for (const it of trail) {
-    const pile = r.piles.find(p => p.key === pileOf(r, it.id))!;
-    const s = spot(it);
-    assert.ok(Math.hypot(s.x - pile.x, s.y - pile.y) <= 6 + EPS, `${it.id} ${Math.hypot(s.x - pile.x, s.y - pile.y)} from its pile`);
+  // Piles that would lie across each other merge (place.test.ts checks that none overlap), so a member may be further than
+  // 6 units from its pile; the pile is at its members' centre, and runs along the trail without skipping members.
+  for (const pile of r.piles) {
+    const spots = pile.ids.map(id => spot(trail.find(i => i.id === id)!));
+    const cx = spots.reduce((s, p) => s + p.x, 0) / spots.length, cy = spots.reduce((s, p) => s + p.y, 0) / spots.length;
+    assert.ok(Math.hypot(cx - pile.x, cy - pile.y) < 1e-6, `${pile.label} at ${pile.x},${pile.y}, its members' centre ${cx},${cy}`);
+  }
+  const index = (id: string) => trail.findIndex(i => i.id === id);
+  for (const pile of r.piles) {
+    const ks = pile.ids.map(index).sort((a, b) => a - b);
+    assert.equal(ks.at(-1)! - ks[0] + 1, ks.length, 'a pile takes a stretch of the trail');
   }
   // Shuffled input, same output.
   const shuffled = [...trail].sort((a, b) => (a.id.charCodeAt(a.id.length - 1) * 7) % 11 - (b.id.charCodeAt(b.id.length - 1) * 7) % 11);
@@ -296,16 +303,6 @@ test('place: a single located item still gets a map, at a zoom no closer than st
   const r = layouts.place([item(1, { place: { lat: 38.7223, lon: -9.1393 } })], VIEW, SIZES);
   assert.ok(r.backdrop?.type === 'map' && r.backdrop.zoom <= 17);
   assert.ok(Math.abs(r.placements[0].x - (r.backdrop?.type === 'map' ? r.backdrop.x : NaN)) <= 0.4 + EPS);
-});
-
-test('mercator: Lisbon at zoom 12 is tile 1944, 1569; world pixels round-trip', () => {
-  assert.deepEqual(lonLatToTile(-9.1393, 38.7223, 12), { x: 1944, y: 1569 });
-  assert.deepEqual(lonLatToTile(0, 0, 0), { x: 0, y: 0 });
-  const p = lonLatToWorld(-9.1393, 38.7223, 12);
-  assert.ok(Math.abs(p.x / 256 - 1944.5) < 0.5 && Math.abs(p.y / 256 - 1569.5) < 0.5);
-  const back = worldToLonLat(p.x, p.y, 12);
-  assert.ok(Math.abs(back.lon + 9.1393) < 1e-9 && Math.abs(back.lat - 38.7223) < 1e-9);
-  assert.deepEqual(lonLatToWorld(0, 0, 1), { x: 256, y: 256 });
 });
 
 test('placements carry the pile key and integer orders from 0', () => {

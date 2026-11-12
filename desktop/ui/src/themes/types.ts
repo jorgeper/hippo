@@ -40,6 +40,13 @@ export interface Motions {
   thinking: { period: number; amplitude: number };
 }
 
+/**
+ * A backdrop's own motion (the map sheet unfolding, the columns fading in), carried as `userData.motion` on the object
+ * `buildBackdrop` returns and driven by the stage: `step(now)` is called every frame (`now` in ms) and answers whether it
+ * changed, so the frame is drawn; `leave(now)` starts it going away, after which `step` answering false means it has gone.
+ */
+export interface BackdropMotion { step(now: number): boolean; leave(now: number): void }
+
 /** What a theme gets to set the stage: the scene to fill, the renderer to configure, the camera, the canvas size in CSS pixels. */
 export interface StageContext { scene: Scene; renderer: WebGLRenderer; camera: PerspectiveCamera; viewSize: { width: number; height: number } }
 
@@ -67,6 +74,12 @@ export interface Theme {
   buildBadge(text: string): Object3D;
   /** The block under a pile that draws only its top sheets; undefined when the pile needs none. */
   buildThickness(count: number, size: Size): Object3D | undefined;
-  buildBackdrop(b: Backdrop, opts: { mapTiles: boolean }): Object3D;
+  /**
+   * What lies under a layout's items. `arrive`: it comes onto a desk that had no backdrop of this type (the map unfolds);
+   * false when it replaces one of the same type (the set changed under the same layout) and should simply be there.
+   */
+  buildBackdrop(b: Backdrop, opts: { mapTiles: boolean; arrive: boolean }): Object3D;
+  /** CSS custom properties for the page's controls over the desk (their colours and fonts); the page sets them on :root. */
+  chrome: Record<string, string>;
   motions: Motions;
 }
