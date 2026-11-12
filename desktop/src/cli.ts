@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { indexPath, loadConfig, resolveFolder } from './core/paths.ts';
 import { MAX_ATTEMPTS } from './enrich/state.ts';
@@ -31,6 +33,9 @@ Commands:
          The vocabulary: kinds, topics, tags, people, sites, localities, circumstances, date range.
   sample --out <dir> [--count 300] [--seed 1] [--end YYYY-MM-DD]
          Writes a new folder of invented captures, already enriched, to try index, search and the desk on.
+  ui     [--folder <path>] [--port 4477] [--no-open] [--provider name] [--dev]
+         Starts the desk: a local server on 127.0.0.1, opened in the browser. Builds the index first when it is empty.
+         --dev: the page comes from the Vite dev server on http://localhost:5173.
 `;
 
 class UsageError extends Error {}
@@ -51,8 +56,10 @@ function parseWithPositionals<T extends Options>(args: string[], options: T) {
 
 function printIndexReport(r: IndexReport): void {
   for (const f of r.thumbFailures) process.stderr.write(`warning: no thumbnail for ${f.id}: ${f.reason}\n`);
+  for (const f of r.failed) process.stderr.write(`warning: could not index ${f.id}: ${f.reason}\n`);
   const parts = [`${r.captures} captures`, `${r.added} added`, `${r.updated} updated`, `${r.removed} removed`, `${r.thumbnails} thumbnails`];
   if (r.thumbFailures.length) parts.push(`${r.thumbFailures.length} thumbnail failures`);
+  if (r.failed.length) parts.push(`${r.failed.length} could not be indexed`);
   process.stdout.write(`Index: ${parts.join(' · ')}\n`);
 }
 
@@ -145,6 +152,10 @@ async function statusCommand(args: string[]): Promise<number> {
   out.push(`Failures: ${s.failures.length}`);
   for (const f of s.failures)
     out.push(`  ${f.id}  ${f.attempts} of ${MAX_ATTEMPTS} attempts${f.attempts >= MAX_ATTEMPTS ? ' (no more retries until it changes)' : ''}  ${f.error}`);
+  if (s.indexFailures.length) {
+    out.push(`Could not be indexed: ${s.indexFailures.length}`);
+    for (const f of s.indexFailures) out.push(`  ${f.id}  ${f.reason}`);
+  }
   out.push(`Last enrich: ${s.lastEnrichAt ?? 'never'}`, `Last index: ${s.lastIndexAt ?? 'never'}`);
   process.stdout.write(out.join('\n') + '\n');
   return 0;
@@ -267,8 +278,65 @@ async function sampleCommand(args: string[]): Promise<number> {
   return 0;
 }
 
+const UI_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../ui/dist');
+const DEV_ORIGIN = 'http://localhost:5173';
+
+/** The default browser, without a shell; a failure is one line, never fatal. */
+function openBrowser(url: string): void {
+  const [command, args] = process.platform === 'darwin' ? ['open', [url]]
+    : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
+  const note = () => process.stderr.write('Could not open a browser: open the address above yourself.\n');
+  try {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore', shell: false, windowsHide: true });
+    child.on('error', note);
+    child.unref();
+  } catch { note(); }
+}
+
+async function uiCommand(args: string[]): Promise<number> {
+  const { makeProvider } = await import('./providers/index.ts');
+  const { buildIndex, status } = await import('./index/build.ts');
+  const { startServer } = await import('./server/server.ts');
+  const values = parse(args, { folder: { type: 'string' }, port: { type: 'string' }, 'no-open': { type: 'boolean' },
+    provider: { type: 'string' }, dev: { type: 'boolean' } });
+  let port: number | undefined;
+  if (values.port !== undefined) {
+    if (!/^\d+$/.test(values.port) || Number(values.port) > 65535) throw new UsageError('--port takes a whole number from 0 to 65535');
+    port = Number(values.port);
+  }
+  const folder = resolveFolder(values.folder);
+  const provider = makeProvider(values.provider ?? loadConfig().provider);
+  if (status(folder).total === 0) {
+    process.stdout.write('The index is empty: building it first.\n');
+    printIndexReport(await buildIndex(folder));
+  }
+  const devOrigin = values.dev ? DEV_ORIGIN : undefined;
+  const server = await startServer({ folder, port, provider, uiDir: UI_DIST, devOrigin });
+  // The only line that ever shows the token.
+  const url = devOrigin ? `${devOrigin}/?t=${server.token}` : server.url;
+  process.stdout.write(`Hippo Desk: ${url}\n`);
+  if (devOrigin) process.stdout.write(`The page comes from the Vite dev server; the API listens on 127.0.0.1:${server.port}.\n`);
+  else if (!fs.existsSync(path.join(UI_DIST, 'index.html'))) process.stdout.write('The desk page has not been built yet: run npm run build in desktop/.\n');
+  if (!values['no-open']) openBrowser(url);
+  process.stdout.write('Press Ctrl-C to stop.\n');
+
+  // First SIGINT or SIGTERM: stop the server (cancelling and waiting for an update in progress). A second one exits at once.
+  await new Promise<void>(resolve => {
+    let stopping = false;
+    const stop = () => {
+      if (stopping) process.exit(130);
+      stopping = true;
+      process.stderr.write('Stopping…\n');
+      server.close().then(resolve, e => { process.stderr.write(`hippo ui: ${(e as Error).message}\n`); resolve(); });
+    };
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+  });
+  return 0;
+}
+
 const commands: Record<string, Command> = { enrich, index, status: statusCommand, search: searchCommand, show: showCommand, facets: facetsCommand,
-  sample: sampleCommand };
+  sample: sampleCommand, ui: uiCommand };
 
 const [name, ...args] = process.argv.slice(2);
 const run = name !== undefined && Object.hasOwn(commands, name) ? commands[name] : undefined;

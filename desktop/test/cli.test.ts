@@ -296,3 +296,27 @@ test('hippo sample writes a folder that hippo index reads in full; --out is requ
   const again = hippo(['sample', '--out', out], env);
   assert.equal(again.status, 1); assert.match(again.stderr, /not empty/);
 });
+
+test('hippo ui builds an empty index, prints one URL with the token, serves the API, and stops on SIGINT', { skip: !posix }, async () => {
+  const folder = copyFixtures();
+  const env = { HIPPO_DESK_HOME: home() };
+  let url = '', bootTotal: number | undefined;
+  const r = await runUntil(['ui', '--folder', folder, '--port', '0', '--no-open', '--provider', 'fake'], env, (child, out) => {
+    const m = /http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{64}/.exec(out);
+    if (m && !url) {
+      url = m[0];
+      const u = new URL(url);
+      fetch(new URL('/api/boot', u), { headers: { 'X-Hippo-Token': u.searchParams.get('t')! } })
+        .then(res => res.json()).then(j => { bootTotal = j.facets.total; })
+        .finally(() => child.kill('SIGINT'));
+    }
+  });
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(url, r.stdout);
+  assert.equal(bootTotal, 7);
+  assert.match(r.stdout, /^Index: 7 captures · 7 added/m, 'an empty index is built first');
+  const token = new URL(url).searchParams.get('t')!;
+  assert.equal((r.stdout + r.stderr).split(token).length - 1, 1, 'the token is printed exactly once');
+  assert.match(hippo([], env).stderr, /^ {2}ui /m, 'usage lists ui');
+  assert.equal(hippo(['ui', '--port', 'x'], env).status, 2);
+});

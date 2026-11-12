@@ -16,9 +16,14 @@ import { getMeta, INDEX_TABLES, openIndex, SCHEMA_VERSION, setMeta } from './db.
 import type { IndexDb } from './db.ts';
 
 export interface IndexReport { captures: number; added: number; updated: number; removed: number; thumbnails: number;
-  thumbFailures: { id: string; reason: string }[] }
+  thumbFailures: { id: string; reason: string }[];
+  /** Captures that could not be indexed this run: skipped, the rest of the pass goes on. One indexed before keeps its earlier rows. */
+  failed: { id: string; reason: string }[] }
 export interface Status { folder: string; total: number; byKind: Record<Kind, number>; enriched: number; pending: number;
-  failures: { id: string; attempts: number; error: string }[]; lastEnrichAt?: string; lastIndexAt?: string }
+  failures: { id: string; attempts: number; error: string }[];
+  /** The captures the last index run could not index. */
+  indexFailures: { id: string; reason: string }[];
+  lastEnrichAt?: string; lastIndexAt?: string }
 
 const KINDS: Kind[] = ['note', 'link', 'photo', 'screenshot', 'recording', 'video', 'file'];
 const RANK: Record<string, number> = { low: 1, medium: 2, high: 3 };
@@ -143,7 +148,8 @@ function insertCapture(db: IndexDb, e: Entry): void {
  *  (the enrichment failures are kept). All changes land in one transaction, so a killed run leaves the previous index intact. */
 export async function buildIndex(folder: string, opts: { rebuild?: boolean } = {}): Promise<IndexReport> {
   const scan = await scanFolder(folder);
-  const report: IndexReport = { captures: scan.captures.length, added: 0, updated: 0, removed: 0, thumbnails: 0, thumbFailures: [] };
+  const report: IndexReport = { captures: scan.captures.length, added: 0, updated: 0, removed: 0, thumbnails: 0, thumbFailures: [], failed: [] };
+  const fail = (id: string, e: unknown) => report.failed.push({ id, reason: e instanceof Error ? e.message : String(e) });
 
   const known = new Map<string, { fingerprint: string; paths: string[] }>();
   let db = openIndex(folder);
@@ -158,33 +164,50 @@ export async function buildIndex(folder: string, opts: { rebuild?: boolean } = {
 
   // Phase 1, without holding the database: records and thumbnails for the captures that changed.
   const entries: { entry: Entry; isNew: boolean }[] = [];
+  // One capture that cannot be prepared is reported and skipped; it never stops the pass.
   for (const c of scan.captures) {
-    const fp = await fingerprint(folder, c);
-    const k = known.get(c.id);
-    // Unchanged inputs and every media file still there (thumbnails can be deleted): nothing to do.
-    if (k && k.fingerprint === fp && k.paths.every(isFile)) continue;
-    entries.push({ entry: await prepare(folder, c, fp, report), isNew: !k });
+    try {
+      const fp = await fingerprint(folder, c);
+      const k = known.get(c.id);
+      // Unchanged inputs and every media file still there (thumbnails can be deleted): nothing to do.
+      if (k && k.fingerprint === fp && k.paths.every(isFile)) continue;
+      entries.push({ entry: await prepare(folder, c, fp, report), isNew: !k });
+    } catch (e) { fail(c.id, e); }
   }
   const present = new Set(scan.captures.map(c => c.id));
   const gone = [...known.keys()].filter(id => !present.has(id));
 
-  // Phase 2: one transaction.
+  // Phase 2: one transaction; each capture in its own savepoint, so one that cannot be written leaves no half rows and stops nothing.
+  const written: { isNew: boolean }[] = [];
   db = openIndex(folder);
   try {
     db.raw.exec('BEGIN IMMEDIATE');
     try {
       if (opts.rebuild) for (const t of INDEX_TABLES) db.raw.exec(`DELETE FROM ${t}`);
       for (const id of gone) deleteCapture(db, id);
-      for (const { entry } of entries) { deleteCapture(db, entry.record.id); insertCapture(db, entry); }
+      for (const { entry, isNew } of entries) {
+        db.raw.exec('SAVEPOINT capture');
+        try {
+          deleteCapture(db, entry.record.id);
+          insertCapture(db, entry);
+          db.raw.exec('RELEASE capture');
+          written.push({ isNew });
+        } catch (e) {
+          db.raw.exec('ROLLBACK TO capture');
+          db.raw.exec('RELEASE capture');
+          fail(entry.record.id, e);
+        }
+      }
       setMeta(db, 'folder', path.resolve(folder));
       setMeta(db, 'pending', String(scan.pending.length));
+      setMeta(db, 'index_failures', JSON.stringify(report.failed));
       setMeta(db, 'last_index_at', new Date().toISOString());
       db.raw.exec('COMMIT');
     } catch (e) { db.raw.exec('ROLLBACK'); throw e; }
   } finally { db.close(); }
 
   report.removed = gone.length;
-  for (const { isNew } of entries) if (isNew) report.added++; else report.updated++;
+  for (const { isNew } of written) if (isNew) report.added++; else report.updated++;
   return report;
 }
 
@@ -194,9 +217,16 @@ export function markEnriched(folder: string, at: Date = new Date()): void {
   try { setMeta(db, 'last_enrich_at', at.toISOString()); } finally { db.close(); }
 }
 
+function indexFailures(json: string | undefined): { id: string; reason: string }[] {
+  let v: unknown;
+  try { v = json === undefined ? [] : JSON.parse(json); } catch { return []; }
+  return Array.isArray(v) ? v.filter((f): f is { id: string; reason: string } => isObject(f) && typeof f.id === 'string' && typeof f.reason === 'string')
+    .map(f => ({ id: f.id, reason: f.reason })) : [];
+}
+
 export function status(folder: string): Status {
   const byKind = Object.fromEntries(KINDS.map(k => [k, 0])) as Record<Kind, number>;
-  const out: Status = { folder: path.resolve(folder), total: 0, byKind, enriched: 0, pending: 0, failures: [] };
+  const out: Status = { folder: path.resolve(folder), total: 0, byKind, enriched: 0, pending: 0, failures: [], indexFailures: [] };
   if (!fs.existsSync(indexPath(folder))) return out;
   const db = openIndex(folder);
   try {
@@ -209,6 +239,7 @@ export function status(folder: string): Status {
     if (Number.isSafeInteger(pending) && pending > 0) out.pending = pending;
     const lastEnrich = getMeta(db, 'last_enrich_at'); if (lastEnrich) out.lastEnrichAt = lastEnrich;
     const lastIndex = getMeta(db, 'last_index_at'); if (lastIndex) out.lastIndexAt = lastIndex;
+    out.indexFailures = indexFailures(getMeta(db, 'index_failures'));
   } finally { db.close(); }
   const store = openFailureStore(folder, { readOnly: true });
   try { out.failures = store.all().map(f => ({ id: f.capture_id, attempts: f.attempts, error: f.last_error })); } finally { store.close(); }

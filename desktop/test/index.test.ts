@@ -235,3 +235,28 @@ test('status on a folder never indexed reports nothing indexed', () => {
   assert.deepEqual(s.byKind, { note: 0, link: 0, photo: 0, video: 0, recording: 0, screenshot: 0, file: 0 });
   assert.equal(s.lastIndexAt, undefined);
 });
+
+test('a capture whose metadata.json is valid JSON of the wrong shape is skipped and reported; the others are indexed', async () => {
+  const folder = copyFixtures();
+  const mdPath = path.join(capDir(folder, 6), 'metadata.json');
+  const good = fs.readFileSync(mdPath);
+  const md = JSON.parse(good.toString('utf8'));
+  md.timezone_identifier = 5; md.utc_offset_seconds = 1e20;     // wrong type, and an offset no date survives
+  replaceInCapture(folder, 6, 'metadata.json', Buffer.from(JSON.stringify(md, null, 2)));
+
+  const r = await buildIndex(folder);
+  assert.equal(r.captures, 7);
+  assert.equal(r.added, 6);
+  assert.deepEqual(r.failed.map(f => f.id), [id(6)]);
+  assert.ok(r.failed[0].reason.length > 0);
+  const rows = dump(folder);
+  assert.deepEqual(rows.captures.map(c => c.id), [1, 2, 3, 4, 5, 7].map(id));
+  assert.ok(rows.media.every(m => m.capture_id !== id(6)) && rows.fts.every(f => f.id !== id(6)), 'nothing half-written');
+  assert.deepEqual(status(folder).indexFailures, r.failed);
+
+  replaceInCapture(folder, 6, 'metadata.json', good);
+  const fixed = await buildIndex(folder);
+  assert.deepEqual(fixed.failed, []);
+  assert.equal(fixed.added, 1);
+  assert.deepEqual(status(folder).indexFailures, []);
+});
