@@ -11,7 +11,7 @@
   },
   "scripts": {
     "test": "node --test \"test/**/*.test.ts\" \"ui/test/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ui",
     "dev": "vite ui",
     "build": "vite build ui"
   },

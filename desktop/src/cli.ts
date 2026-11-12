@@ -35,7 +35,7 @@ Commands:
          Writes a new folder of invented captures, already enriched, to try index, search and the desk on.
   ui     [--folder <path>] [--port 4477] [--no-open] [--provider name] [--dev]
          Starts the desk: a local server on 127.0.0.1, opened in the browser. Builds the index first when it is empty.
-         --dev: the page comes from the Vite dev server on http://localhost:5173.
+         --dev: the page comes from the Vite dev server on http://localhost:5177 (npm run dev in desktop/).
 `;
 
 class UsageError extends Error {}
@@ -279,7 +279,7 @@ async function sampleCommand(args: string[]): Promise<number> {
 }
 
 const UI_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../ui/dist');
-const DEV_ORIGIN = 'http://localhost:5173';
+const DEV_ORIGIN = 'http://localhost:5177';
 
 /** The default browser, without a shell; a failure is one line, never fatal. */
 function openBrowser(url: string): void {
@@ -296,7 +296,7 @@ function openBrowser(url: string): void {
 async function uiCommand(args: string[]): Promise<number> {
   const { makeProvider } = await import('./providers/index.ts');
   const { buildIndex, status } = await import('./index/build.ts');
-  const { startServer } = await import('./server/server.ts');
+  const { startServer, DEFAULT_PORT } = await import('./server/server.ts');
   const values = parse(args, { folder: { type: 'string' }, port: { type: 'string' }, 'no-open': { type: 'boolean' },
     provider: { type: 'string' }, dev: { type: 'boolean' } });
   let port: number | undefined;
@@ -315,7 +315,12 @@ async function uiCommand(args: string[]): Promise<number> {
   // The only line that ever shows the token.
   const url = devOrigin ? `${devOrigin}/?t=${server.token}` : server.url;
   process.stdout.write(`Hippo Desk: ${url}\n`);
-  if (devOrigin) process.stdout.write(`The page comes from the Vite dev server; the API listens on 127.0.0.1:${server.port}.\n`);
+  if (devOrigin) {
+    process.stdout.write(`The page comes from the Vite dev server; the API listens on 127.0.0.1:${server.port}.\n`);
+    // Vite proxies to DEFAULT_PORT unless told otherwise.
+    process.stdout.write(server.port === DEFAULT_PORT ? 'Start the page with npm run dev in desktop/.\n'
+      : `The API is not on ${DEFAULT_PORT}: start the page in desktop/ with\n  HIPPO_PORT=${server.port} npm run dev\n`);
+  }
   else if (!fs.existsSync(path.join(UI_DIST, 'index.html'))) process.stdout.write('The desk page has not been built yet: run npm run build in desktop/.\n');
   if (!values['no-open']) openBrowser(url);
   process.stdout.write('Press Ctrl-C to stop.\n');

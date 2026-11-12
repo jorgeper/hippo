@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { layouts, EMPTY_LINE } from '../src/layout/index.ts';
-import { lonLatToTile, lonLatToWorld, worldToLonLat } from '../src/layout/mercator.ts';
+import { lonLatToTile, lonLatToWorld, MAP_PX_PER_UNIT, worldToLonLat } from '../src/layout/mercator.ts';
 import type { LayoutResult, Placement, View } from '../src/layout/types.ts';
 import type { DeskItem } from '../../src/server/wire.ts';
 import type { LayoutName } from '../../src/recall/spec.ts';
@@ -228,6 +228,37 @@ test('place: 20 m apart share a pile, 5 km apart do not; unlocated items are a "
   const small = layouts.place([a, b, c], VIEW, SIZES);
   assert.equal(small.piles.find(p => p.key === pileOf(small, a.id))!.label, 'Baixa');
   assert.equal(small.piles.find(p => p.key === pileOf(small, c.id))!.label, 'Lumiar');
+});
+
+test('place: a trail of close items does not chain into one pile; no member is more than 6 units from its pile point', () => {
+  // 20 items in a line east to west, about 3 units apart on the sheet: each is closer than 6 units to the next.
+  const trail = Array.from({ length: 20 }, (_, k) => item(200 + k, { time: `${String(8 + Math.floor(k / 4)).padStart(2, '0')}:${String((k % 4) * 10).padStart(2, '0')}`,
+    place: { lat: 38.72, lon: -9.20 + k * 0.004 } }));
+  const r = layouts.place(trail, VIEW, SIZES);
+  assert.ok(r.backdrop?.type === 'map');
+  if (r.backdrop?.type !== 'map') return;
+  const m = r.backdrop;
+  // Each item's own spot on the sheet, from the backdrop's centre, zoom and scale.
+  const c = lonLatToWorld(m.centerLon, m.centerLat, m.zoom);
+  const spot = (it: DeskItem) => {
+    const p = lonLatToWorld(it.place!.lon, it.place!.lat, m.zoom);
+    return { x: m.x + (p.x - c.x) / MAP_PX_PER_UNIT, y: m.y - (p.y - c.y) / MAP_PX_PER_UNIT };
+  };
+  const gaps = trail.slice(1).map((it, k) => Math.hypot(spot(it).x - spot(trail[k]).x, spot(it).y - spot(trail[k]).y));
+  assert.ok(Math.max(...gaps) < 6, `neighbours ${Math.max(...gaps)} apart`);
+  assert.ok(r.piles.length > 1, `${r.piles.length} pile(s)`);
+  for (const it of trail) {
+    const pile = r.piles.find(p => p.key === pileOf(r, it.id))!;
+    const s = spot(it);
+    assert.ok(Math.hypot(s.x - pile.x, s.y - pile.y) <= 6 + EPS, `${it.id} ${Math.hypot(s.x - pile.x, s.y - pile.y)} from its pile`);
+  }
+  // Shuffled input, same output.
+  const shuffled = [...trail].sort((a, b) => (a.id.charCodeAt(a.id.length - 1) * 7) % 11 - (b.id.charCodeAt(b.id.length - 1) * 7) % 11);
+  assert.deepEqual(layouts.place(shuffled, VIEW, SIZES), r);
+  // Two items 20 m apart are still one pile.
+  const a = item(300, { place: { lat: 38.72, lon: -9.20 } }), b = item(301, { place: { lat: 38.72 + 20 / 111_320, lon: -9.20 } });
+  const two = layouts.place([...trail, a, b], VIEW, SIZES);
+  assert.equal(pileOf(two, a.id), pileOf(two, b.id));
 });
 
 test('place: north is away from the viewer and east is to the right', () => {

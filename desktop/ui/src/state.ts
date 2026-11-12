@@ -28,17 +28,20 @@ export interface Store {
   restore(id: string): Promise<void>;
   pin(ids: string[]): Promise<void>;
   unpin(id: string): Promise<void>;
-  /** Steps back to the previous question's spec, layout, items and reply. */
+  /** Steps back to the previous question's spec, layout, items, reply and conversation (and, after start over, its lists). */
   undo(): void;
   canUndo(): boolean;
   /** Clears the spec, pinned, dismissed and the conversation, and fills the desk with everything. */
   startOver(): Promise<void>;
 }
 
-interface Snapshot { spec: SearchSpec; layout: LayoutName; items: DeskItem[]; total: number; reply: string; lists: string }
+/** One undo step. `applied` is the result key its items were fetched for; `lists` is kept only by start over, which clears them. */
+interface Snapshot { spec: SearchSpec; layout: LayoutName; items: DeskItem[]; total: number; reply: string; history: Turn[];
+  applied: string | undefined; lists?: { pinned: string[]; dismissed: string[] } }
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const listsKey = (l: { pinned: string[]; dismissed: string[] }) => JSON.stringify([l.pinned, l.dismissed]);
+/** What a result was fetched for: the spec and both lists. */
+const resultKey = (r: { spec: SearchSpec; pinned: string[]; dismissed: string[] }) => JSON.stringify([r.spec, r.pinned, r.dismissed]);
 const without = (list: string[], ids: string[]) => list.filter(x => !ids.includes(x));
 
 export function createStore(api: Api): Store {
@@ -49,11 +52,14 @@ export function createStore(api: Api): Store {
   let ticket = 0;            // every request takes the next number
   let askTicket = 0;         // the newest question; older answers are dropped
   let searchTicket = 0;      // the newest search; older results are dropped
-  let applied = listsKey(state);   // the pinned and dismissed lists the items on the desk were fetched with
+  let applied: string | undefined;   // the result key of the items on the desk; undefined until a result has landed
 
+  /** The new state, then every subscriber; one that throws is reported and touches neither the state nor the others. */
   const set = (patch: Partial<DeskState>) => {
     state = { ...state, ...patch };
-    for (const fn of listeners) fn(state);
+    for (const fn of [...listeners]) {
+      try { fn(state); } catch (e) { console.error('hippo desk: a state subscriber failed', e); }
+    }
   };
 
   async function runSearch(): Promise<void> {
@@ -63,7 +69,7 @@ export function createStore(api: Api): Store {
       const r = await api.search(sent);
       // A newer search, or a question asked since, brings a fresher set.
       if (t !== searchTicket || askTicket > t) return;
-      applied = listsKey(sent);
+      applied = resultKey(sent);
       set({ items: r.items, total: r.total });
     } catch (e) {
       if (t !== searchTicket || askTicket > t) return;
@@ -71,12 +77,17 @@ export function createStore(api: Api): Store {
     }
   }
 
-  /** After a question settles (or an undo), fetch again if pins or dismissals changed meanwhile. */
-  const settle = () => { if (listsKey(state) !== applied) void runSearch(); };
+  /**
+   * After a question settles (or an undo): search again when the items on the desk were not fetched for the current spec and
+   * lists, because pins or dismissals changed meanwhile, or a first fill was dropped for a question that then failed.
+   */
+  const settle = () => { if (resultKey(state) !== applied) void runSearch(); };
 
-  const snapshot = (): Snapshot =>
-    ({ spec: state.spec, layout: state.layout, items: state.items, total: state.total, reply: state.reply, lists: applied });
-  const pushUndo = () => { undoStack.push(snapshot()); if (undoStack.length > UNDO_DEPTH) undoStack.shift(); };
+  const pushUndo = (withLists = false) => {
+    undoStack.push({ spec: state.spec, layout: state.layout, items: state.items, total: state.total, reply: state.reply,
+      history: state.history, applied, ...(withLists ? { lists: { pinned: state.pinned, dismissed: state.dismissed } } : {}) });
+    if (undoStack.length > UNDO_DEPTH) undoStack.shift();
+  };
 
   return {
     get: () => state,
@@ -96,7 +107,7 @@ export function createStore(api: Api): Store {
         if (t !== askTicket) return;
         pushUndo();
         searchTicket = ++ticket;   // a search sent before this answer would bring back the old set
-        applied = listsKey(sent);
+        applied = resultKey({ spec: r.spec, pinned: sent.pinned, dismissed: sent.dismissed });
         set({ spec: r.spec, layout: r.layout === 'keep' ? state.layout : r.layout, items: r.items, total: r.total, reply: r.reply,
           history: [...state.history, { sentence, reply: r.reply }].slice(-HISTORY_KEPT), thinking: false });
       } catch (e) {
@@ -132,14 +143,15 @@ export function createStore(api: Api): Store {
       if (!s) return;
       askTicket = ++ticket;      // a question still with the model is dropped
       searchTicket = ++ticket;
-      applied = s.lists;
-      set({ spec: s.spec, layout: s.layout, items: s.items, total: s.total, reply: s.reply, thinking: false });
+      applied = s.applied;
+      set({ spec: s.spec, layout: s.layout, items: s.items, total: s.total, reply: s.reply, history: s.history, thinking: false,
+        ...(s.lists ?? {}) });
       settle();
     },
     canUndo: () => undoStack.length > 0,
 
     async startOver() {
-      pushUndo();
+      pushUndo(true);
       askTicket = ++ticket;
       set({ spec: {}, pinned: [], dismissed: [], history: [], reply: '', thinking: false });
       await runSearch();

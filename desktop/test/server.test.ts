@@ -473,21 +473,21 @@ test('no desk page built yet: the server starts and / says how to build it', asy
 });
 
 test('with devOrigin, that origin is allowed and its websocket is in connect-src', async () => {
-  const s = await startServer({ folder, port: 0, provider: fakeProvider(), uiDir, devOrigin: 'http://localhost:5173', log: () => {} });
+  const s = await startServer({ folder, port: 0, provider: fakeProvider(), uiDir, devOrigin: 'http://localhost:5177', log: () => {} });
   try {
-    const r = await request(s.port, 'GET', '/api/boot', { Host: `127.0.0.1:${s.port}`, 'X-Hippo-Token': s.token, Origin: 'http://localhost:5173' });
+    const r = await request(s.port, 'GET', '/api/boot', { Host: `127.0.0.1:${s.port}`, 'X-Hippo-Token': s.token, Origin: 'http://localhost:5177' });
     assert.equal(r.status, 200);
-    assert.match(String(r.headers['content-security-policy']), /connect-src 'self' ws:\/\/localhost:5173/);
+    assert.match(String(r.headers['content-security-policy']), /connect-src 'self' ws:\/\/localhost:5177/);
     assert.equal((await request(s.port, 'GET', '/api/boot', { Host: `127.0.0.1:${s.port}`, 'X-Hippo-Token': s.token,
-      Origin: 'http://localhost:5174' })).status, 403);
+      Origin: 'http://localhost:5178' })).status, 403);
   } finally { await s.close(); }
 });
 
 test('with devOrigin, /api/boot authenticated by the header also sets the cookie, so proxied media requests carry it', async () => {
-  const s = await startServer({ folder, port: 0, provider: fakeProvider(), uiDir, devOrigin: 'http://localhost:5173', log: () => {} });
+  const s = await startServer({ folder, port: 0, provider: fakeProvider(), uiDir, devOrigin: 'http://localhost:5177', log: () => {} });
   try {
     const h = { Host: `127.0.0.1:${s.port}` };
-    const boot = await request(s.port, 'GET', '/api/boot', { ...h, 'X-Hippo-Token': s.token, Origin: 'http://localhost:5173' });
+    const boot = await request(s.port, 'GET', '/api/boot', { ...h, 'X-Hippo-Token': s.token, Origin: 'http://localhost:5177' });
     assert.equal(boot.status, 200);
     assert.equal(String(boot.headers['set-cookie']), `hippo_t=${s.token}; HttpOnly; SameSite=Strict; Path=/`);
     // Only /api/boot, only by the header: a cookie-authenticated boot and other routes set nothing.

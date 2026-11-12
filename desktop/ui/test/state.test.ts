@@ -207,3 +207,80 @@ test('undo keeps at most 30 steps; Up recall keeps the last 50 sentences', async
   for (let k = 0; k < 40; k++) store.undo();
   assert.deepEqual(store.get().spec, { text: ['q29'] }, 'thirty steps back from q59, and no further');
 });
+
+test('undo restores the conversation too: an undone turn is not sent to the model again', async () => {
+  const s = stubApi();
+  const store = createStore(s.api);
+  await store.ask('one');
+  await store.ask('two');
+  store.undo();
+  assert.deepEqual(store.get().history, [{ sentence: 'one', reply: '1 found for one' }]);
+  await store.ask('three');
+  assert.deepEqual(lastBody<AskRequest>(s.calls, 'ask').history, [{ sentence: 'one', reply: '1 found for one' }]);
+});
+
+test('undoing start over brings back the pinned and dismissed lists and the conversation', async () => {
+  const s = stubApi();
+  const store = createStore(s.api);
+  await store.ask('one');
+  await store.pin(['p1']);
+  await store.dismiss('d1');
+  const before = ids(store.get().items);
+  await store.startOver();
+  assert.deepEqual([store.get().pinned, store.get().dismissed], [[], []]);
+  const searches = s.calls.filter(c => c.route === 'search').length;
+  store.undo();
+  const st = store.get();
+  assert.deepEqual([st.pinned, st.dismissed], [['p1'], ['d1']]);
+  assert.deepEqual(st.spec, { kinds: ['link'] });
+  assert.deepEqual(st.history, [{ sentence: 'one', reply: '1 found for one' }]);
+  assert.deepEqual(ids(st.items), before);
+  await new Promise(r => setImmediate(r));
+  assert.equal(s.calls.filter(c => c.route === 'search').length, searches, 'the restored items were fetched for these lists');
+  // The restored lists go with the next question.
+  await store.ask('two');
+  assert.deepEqual([lastBody<AskRequest>(s.calls, 'ask').pinned, lastBody<AskRequest>(s.calls, 'ask').dismissed], [['p1'], ['d1']]);
+});
+
+test('a first fill dropped for a question that then fails is run again: the desk is not left empty', async () => {
+  const s = stubApi();
+  const store = createStore(s.api);
+  const search = s.api.search;
+  let releaseSearch!: () => void;
+  s.api.search = req => new Promise(resolve => { releaseSearch = () => resolve(search(req)); });
+  const refreshing = store.refresh();
+  s.answer = () => Promise.reject(new Error('The model is busy.'));
+  s.api.search = search;            // later searches answer at once
+  await store.ask('bananas');
+  releaseSearch();
+  await refreshing;
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(ids(store.get().items), ids(s.searchItems));
+  assert.equal(store.get().reply, 'The model is busy.');
+});
+
+test('a subscriber that throws breaks neither the store nor the other subscribers', async () => {
+  const s = stubApi();
+  const store = createStore(s.api);
+  const errors: unknown[][] = [];
+  const consoleError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args); };
+  try {
+    const seen: boolean[] = [];
+    // Throws on the first change of the ask (thinking true).
+    const off = store.subscribe(st => { if (st.thinking) throw new Error('render failed'); });
+    store.subscribe(st => seen.push(st.thinking));
+    await store.ask('one');
+    assert.equal(store.get().thinking, false);
+    assert.equal(store.get().reply, '1 found for one');
+    assert.deepEqual(seen, [true, false], 'the other subscriber saw every change');
+    off();
+    // Throws on the success change: the answer still lands, and the error is not the reply.
+    store.subscribe(st => { if (st.reply === '1 found for two') throw new Error('draw failed'); });
+    await store.ask('two');
+    assert.equal(store.get().reply, '1 found for two');
+    assert.deepEqual(store.get().spec, { kinds: ['link'] });
+    assert.equal(store.get().history.length, 2);
+    assert.equal(errors.length, 2);
+  } finally { console.error = consoleError; }
+});

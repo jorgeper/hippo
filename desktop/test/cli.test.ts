@@ -307,7 +307,7 @@ test('hippo ui builds an empty index, prints one URL with the token, serves the 
       url = m[0];
       const u = new URL(url);
       fetch(new URL('/api/boot', u), { headers: { 'X-Hippo-Token': u.searchParams.get('t')! } })
-        .then(res => res.json()).then(j => { bootTotal = j.facets.total; })
+        .then(res => res.json() as Promise<{ facets: { total: number } }>).then(j => { bootTotal = j.facets.total; })
         .finally(() => child.kill('SIGINT'));
     }
   });
@@ -319,4 +319,19 @@ test('hippo ui builds an empty index, prints one URL with the token, serves the 
   assert.equal((r.stdout + r.stderr).split(token).length - 1, 1, 'the token is printed exactly once');
   assert.match(hippo([], env).stderr, /^ {2}ui /m, 'usage lists ui');
   assert.equal(hippo(['ui', '--port', 'x'], env).status, 2);
+});
+
+test('hippo ui --dev prints the Vite page on port 5177 and, off the default API port, the HIPPO_PORT line for npm run dev', { skip: !posix }, async () => {
+  const folder = copyFixtures();
+  const env = { HIPPO_DESK_HOME: home() };
+  let seen = false;
+  const r = await runUntil(['ui', '--folder', folder, '--port', '0', '--no-open', '--provider', 'fake', '--dev'], env, (child, out) => {
+    if (!seen && /Press Ctrl-C/.test(out)) { seen = true; child.kill('SIGINT'); }
+  });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^Hippo Desk: http:\/\/localhost:5177\/\?t=[0-9a-f]{64}$/m);
+  const port = /the API listens on 127\.0\.0\.1:(\d+)/.exec(r.stdout)?.[1];
+  assert.ok(port && port !== '4477', r.stdout);
+  assert.match(r.stdout, new RegExp(`^ {2}HIPPO_PORT=${port} npm run dev$`, 'm'));
+  assert.match(hippo([], env).stderr, /http:\/\/localhost:5177/, 'usage names the dev port');
 });

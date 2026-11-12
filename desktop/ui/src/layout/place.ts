@@ -1,6 +1,6 @@
 // By place: a map sheet over the left 80% of the view, at the Web Mercator integer zoom that fits the located items' bounds
-// (padded 15% on each side) at MAP_PX_PER_UNIT; north is away from the viewer. Items closer than 6 units (linked in a
-// chain) form one pile at their centroid, labelled with the commonest sub-locality or locality. Items with no location form
+// (padded 15% on each side) at MAP_PX_PER_UNIT; north is away from the viewer. Items within 6 units of a pile's centroid
+// join it (leader clustering, in time order), labelled with the commonest sub-locality or locality. Items with no location form
 // one pile, "No location", in the right 20%. With no located item there is no map and everything is in "No location", at
 // the centre. Nothing is ever put at 0,0 for want of a place, and nothing is dropped.
 import type { DeskItem } from '../../../src/server/wire.ts';
@@ -53,19 +53,25 @@ export const placeLayout: LayoutFn = (items, view, sizes) => {
   const points = at0.map(p => ({ it: p.it, x: mapX + (p.x - cx) * scale, y: mapY - (p.y - cy) * scale }))
     .sort((a, b) => byTime(a.it, b.it));
 
-  // Single-linkage clusters: any two items closer than CLUSTER_DISTANCE end up in the same pile.
-  const parent = points.map((_, k) => k);
-  const root = (k: number): number => { while (parent[k] !== k) k = parent[k] = parent[parent[k]]; return k; };
-  for (let a = 0; a < points.length; a++) for (let b = a + 1; b < points.length; b++) {
-    if (Math.hypot(points[a].x - points[b].x, points[a].y - points[b].y) < CLUSTER_DISTANCE) {
-      const ra = root(a), rb = root(b);
-      if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+  // Leader clusters over the points in time-then-id order: each joins the nearest pile whose centroid is within
+  // CLUSTER_DISTANCE, provided every member stays within CLUSTER_DISTANCE of the moved centroid; else it starts a pile.
+  // A dense trail therefore becomes a row of piles, never one pile with members far from its point.
+  type Point = (typeof points)[number];
+  const piles: { members: Point[]; x: number; y: number }[] = [];
+  const near = (m: Point, x: number, y: number) => Math.hypot(m.x - x, m.y - y) <= CLUSTER_DISTANCE;
+  for (const p of points) {
+    const candidates = piles.map(c => ({ c, d: Math.hypot(p.x - c.x, p.y - c.y) })).filter(e => e.d < CLUSTER_DISTANCE)
+      .sort((a, b) => a.d - b.d);
+    let joined = false;
+    for (const { c } of candidates) {
+      const n = c.members.length + 1, x = (c.x * (n - 1) + p.x) / n, y = (c.y * (n - 1) + p.y) / n;
+      if (near(p, x, y) && c.members.every(m => near(m, x, y))) { c.members.push(p); c.x = x; c.y = y; joined = true; break; }
     }
+    if (!joined) piles.push({ members: [p], x: p.x, y: p.y });
   }
-  const clusters = new Map<number, typeof points>();
-  points.forEach((p, k) => { const r = root(k); let c = clusters.get(r); if (!c) clusters.set(r, c = []); c.push(p); });
+  const clusters = piles.map(c => c.members);
 
-  const drafts: PileDraft[] = [...clusters.values()].map(members => {
+  const drafts: PileDraft[] = clusters.map(members => {
     const firstId = members.map(m => m.it.id).sort()[0];
     const label = commonest(members.map(m => m.it.place!.sub_locality ?? m.it.place!.locality ?? m.it.place!.nearby)) ?? '';
     return { key: `place:${firstId}`, label, items: members.map(m => m.it),
