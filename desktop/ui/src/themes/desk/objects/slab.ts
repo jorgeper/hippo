@@ -63,8 +63,10 @@ export function slabGeometry(kind: Kind): BufferGeometry {
 
 function material(finish: Finish): Material {
   switch (finish) {
-    // Base layers are rough so the key light's glare is a moving sheen from the clear coat, not a white-out.
-    case 'gloss': return new MeshPhysicalMaterial({ roughness: 0.62, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.16, specularIntensity: 0.5 });
+    // Base layers are rough so the key light's glare is a moving sheen from the clear coat, not a white-out. A print's coat
+    // is thin and smooth: the light shows as a small bright glint that moves as the print moves, while a full, wider coat
+    // washed the picture out at the desk's tilt and when zoomed in.
+    case 'gloss': return new MeshPhysicalMaterial({ roughness: 0.62, metalness: 0, clearcoat: 0.45, clearcoatRoughness: 0.05, specularIntensity: 0.25, envMapIntensity: 0.8 });
     case 'screen': return new MeshPhysicalMaterial({ roughness: 0.55, metalness: 0, clearcoat: 0.5, clearcoatRoughness: 0.12, specularIntensity: 0.5 });
     case 'plastic': return new MeshPhysicalMaterial({ roughness: 0.6, metalness: 0, clearcoat: 0.18, clearcoatRoughness: 0.35, specularIntensity: 0.3 });
     default: return new MeshStandardMaterial({ roughness: 0.86, metalness: 0 });

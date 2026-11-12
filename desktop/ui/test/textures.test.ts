@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fitLines, isRtl } from '../src/scene/textures.ts';
+import { fitLines, fitWord, isRtl } from '../src/scene/textures.ts';
 
 // A stand-in for canvas measureText: every code point is one unit wide, so widths are easy to check.
 const measure = (s: string) => [...s].length;
@@ -55,4 +55,30 @@ test('empty, whitespace-only and zero-width cases give no lines and do not throw
 
 test('line breaks in the text start new lines', () => {
   assert.deepEqual(fitLines('one\ntwo three', 20, 4, measure), ['one', 'two three']);
+});
+
+// A stand-in for measureText at a font size: every code point is `size` wide.
+const measureAt = (s: string, size: number) => [...s].length * size;
+
+test('fitWord keeps a word that fits at its size, whole', () => {
+  assert.deepEqual(fitWord('meet', 10, 2, 0.8, measureAt), { text: 'meet', size: 2 });
+});
+
+test('fitWord shrinks a heavy word that is too wide before it cuts anything', () => {
+  // "packing" is 7 wide per unit of size: at 1.9 it needs 13.3; the line is 7.6, so it shrinks to fit whole.
+  const f = fitWord('packing', 7.6, 1.9, 0.78, measureAt);
+  assert.equal(f.text, 'packing');
+  assert.ok(f.size < 1.9 && f.size >= 0.78, `${f.size}`);
+  assert.ok(measureAt(f.text, f.size) <= 7.6 + 1e-9);
+  assert.ok(f.size > 1.0, 'only as small as it has to be');
+});
+
+test('fitWord ellipsises only at the smallest size, and never returns anything wider than the line', () => {
+  const f = fitWord('internationalisation', 7.6, 1.9, 0.78, measureAt);
+  assert.equal(f.size, 0.78);
+  assert.ok(f.text.endsWith('…'));
+  assert.ok(measureAt(f.text, f.size) <= 7.6 + 1e-9);
+  // An emoji word is cut by grapheme, never into a lone surrogate.
+  const e = fitWord('🦛'.repeat(30), 7.6, 1.9, 0.78, measureAt);
+  assert.ok(!lone.test(e.text) && measureAt(e.text, e.size) <= 7.6 + 1e-9);
 });

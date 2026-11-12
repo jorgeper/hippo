@@ -86,31 +86,50 @@ export function settle(phases: ReadonlyMap<string, Phase>, id: string): Map<stri
 
 export interface PileBody extends Rect { key: string; weight: number }
 
+/** Where a pile's label lies: its centre, its size as a share of its full size, and whether it lies on top of the pile. */
+export interface LabelSpot { x: number; y: number; scale: number; onPile: boolean }
+
+/** A label with no room beside its pile at full size tries again at these shares of its size. */
+export const LABEL_SHRINK = [0.8, 0.62];
+/** A label on its pile's near edge: this share of its size, inset this far from the edge. */
+const ON_PILE_SCALE = 0.62, ON_PILE_INSET = 0.3;
+
 /**
  * Places each pile's label beside its pile without covering another pile or label and inside `bounds`: below, else above,
- * else right, else left; the heaviest piles choose first. A label that fits nowhere is null (not drawn).
+ * else right, else left; the heaviest piles choose first. A label with no such spot tries the same spots smaller; failing
+ * that it lies on its own pile's near edge, smaller, on top of the pile. Every pile with a size gets a spot.
  */
-export function placeLabels(piles: readonly PileBody[], sizes: Readonly<Record<string, Size>>, bounds: Rect, gap: number): Map<string, { x: number; y: number } | null> {
-  const out = new Map<string, { x: number; y: number } | null>();
+export function placeLabels(piles: readonly PileBody[], sizes: Readonly<Record<string, Size>>, bounds: Rect, gap: number): Map<string, LabelSpot> {
+  const out = new Map<string, LabelSpot>();
   const taken: Rect[] = [];
   const overlaps = (a: Rect, b: Rect) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
   const order = [...piles].sort((a, b) => b.weight - a.weight || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   for (const p of order) {
-    const s = sizes[p.key];
-    if (!s) { out.set(p.key, null); continue; }
+    const full = sizes[p.key];
+    if (!full) continue;
     const cx = (p.x0 + p.x1) / 2, cy = (p.y0 + p.y1) / 2;
-    const spots = [
-      { x: cx, y: p.y0 - gap - s.h / 2 }, { x: cx, y: p.y1 + gap + s.h / 2 },
-      { x: p.x1 + gap + s.w / 2, y: cy }, { x: p.x0 - gap - s.w / 2, y: cy },
-    ];
-    let chosen: { x: number; y: number } | null = null;
-    for (const c of spots) {
-      const r = { x0: c.x - s.w / 2, x1: c.x + s.w / 2, y0: c.y - s.h / 2, y1: c.y + s.h / 2 };
-      if (r.x0 < bounds.x0 || r.x1 > bounds.x1 || r.y0 < bounds.y0 || r.y1 > bounds.y1) continue;
-      if (piles.some(o => o.key !== p.key && overlaps(r, o)) || taken.some(t => overlaps(r, t))) continue;
-      chosen = c;
-      taken.push(r);
-      break;
+    let chosen: LabelSpot | undefined;
+    for (const scale of [1, ...LABEL_SHRINK]) {
+      const w = full.w * scale, h = full.h * scale;
+      const spots = [
+        { x: cx, y: p.y0 - gap - h / 2 }, { x: cx, y: p.y1 + gap + h / 2 },
+        { x: p.x1 + gap + w / 2, y: cy }, { x: p.x0 - gap - w / 2, y: cy },
+      ];
+      for (const c of spots) {
+        const r = { x0: c.x - w / 2, x1: c.x + w / 2, y0: c.y - h / 2, y1: c.y + h / 2 };
+        if (r.x0 < bounds.x0 || r.x1 > bounds.x1 || r.y0 < bounds.y0 || r.y1 > bounds.y1) continue;
+        if (piles.some(o => o.key !== p.key && overlaps(r, o)) || taken.some(t => overlaps(r, t))) continue;
+        chosen = { ...c, scale, onPile: false };
+        taken.push(r);
+        break;
+      }
+      if (chosen) break;
+    }
+    if (!chosen) {
+      const h = full.h * ON_PILE_SCALE, w = full.w * ON_PILE_SCALE;
+      const y = Math.min(cy, p.y0 + ON_PILE_INSET + h / 2);
+      chosen = { x: cx, y, scale: ON_PILE_SCALE, onPile: true };
+      taken.push({ x0: cx - w / 2, x1: cx + w / 2, y0: y - h / 2, y1: y + h / 2 });
     }
     out.set(p.key, chosen);
   }
@@ -130,6 +149,11 @@ const LABEL_GAP = 1.2;
 const SHEET_GAP = 0.025;
 /** How many of a pile's top objects cast shadows. */
 const SHADOW_CASTERS = 3;
+/**
+ * Only objects lying lower than this (desk units) cast shadows: in a tall pile (a dozen cassettes) the casters are the top
+ * three of the part near the desk, so its shadow stays a short one at its foot instead of a box thrown far off by its top.
+ */
+const SHADOW_MAX_Z = 2.5;
 /** Labels grow in after the arrivals have started. */
 const LABEL_DELAY_MS = 220;
 const LABEL_STIFFNESS = 140;
@@ -143,7 +167,7 @@ const BLOCK_LATEST_MS = 900;
 const COLUMN_LABEL_ROOM = 3.6;
 
 interface PileParts { key: string; label?: Object3D; labelSize?: Size; block?: Object3D; blockTop: number; sig: string;
-  scale: ReturnType<typeof spring>; startAt: number; labelPos?: { x: number; y: number };
+  scale: ReturnType<typeof spring>; startAt: number; labelPos?: LabelSpot;
   /** A new block grows up from the desk as its pile's first card comes in, rather than standing there bare. */
   grow?: ReturnType<typeof spring>; growAt: number; dealt?: string[] }
 
@@ -270,10 +294,12 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
 
     // Which ids each pile draws, their targets and stacking.
     const drawn: string[] = [];
-    const targets = new Map<string, Pose & { rank: number; pile: string; badge?: string }>();
+    const targets = new Map<string, Pose & { cast: boolean; pile: string; badge?: string }>();
     const nextPiles = new Map<string, PileParts>();
     const bodies: PileBody[] = [];
     const labelSizes: Record<string, Size> = {};
+    /** How high each pile's top sheet lies, for a label that has to lie on it. */
+    const pileTops = new Map<string, number>();
     for (const pile of layout.piles) {
       const members = (byPile.get(pile.key) ?? []).slice().sort((a, b) => a.order - b.order);
       if (!members.length) continue;
@@ -319,13 +345,16 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
       }
       nextPiles.set(pile.key, parts);
       let z = parts.blockTop;
+      const zs = shown.map(m => { const at = z; z += theme.depths[byId.get(m.id)!.kind] + SHEET_GAP; return at; });
+      // The highest objects that still lie near the desk cast the pile's shadow (shown is bottom first).
+      let lastLow = -1;
+      zs.forEach((at, k) => { if (at < SHADOW_MAX_Z || k === 0) lastLow = k; });
       shown.forEach((m, k) => {
-        const it = byId.get(m.id)!;
-        const rank = shown.length - 1 - k; // 0 is the top of the pile
-        targets.set(m.id, { x: m.x, y: m.y, z, rot: m.rot, rank, pile: pile.key, ...(m.badge ? { badge: m.badge } : {}) });
-        z += theme.depths[it.kind] + SHEET_GAP;
+        const cast = k <= lastLow && k > lastLow - SHADOW_CASTERS;
+        targets.set(m.id, { x: m.x, y: m.y, z: zs[k], rot: m.rot, cast, pile: pile.key, ...(m.badge ? { badge: m.badge } : {}) });
         drawn.push(m.id);
       });
+      pileTops.set(pile.key, z);
       const body = bodyOf(shown, byId);
       bodies.push({ key: pile.key, weight: pile.count, ...body });
       if (parts.labelSize) labelSizes[pile.key] = parts.labelSize;
@@ -333,15 +362,15 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
     for (const old of piles.values()) { dispose(old.label); dispose(old.block); }
     piles = nextPiles;
 
-    // Labels beside their piles, never over another pile or label.
+    // Labels beside their piles, never over another pile or label; smaller, or on the pile itself, when there is no room.
     const view = measure(items, layout);
     const bounds = { x0: view.x0 - 6, x1: view.x1 + 6, y0: view.y0 - 4, y1: view.y1 + 4 };
     const spots = placeLabels(bodies, labelSizes, bounds, LABEL_GAP);
     for (const parts of piles.values()) {
       if (!parts.label) continue;
       const spot = spots.get(parts.key);
-      parts.labelPos = spot ?? undefined;
-      if (spot) { parts.label.position.set(spot.x, spot.y, floor); }
+      parts.labelPos = spot;
+      if (spot) parts.label.position.set(spot.x, spot.y, spot.onPile ? (pileTops.get(parts.key) ?? floor) + SHEET_GAP : floor);
       parts.label.visible = !!spot && parts.label.scale.x > 0.01;
     }
 
@@ -365,11 +394,11 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
       const spec = theme.motions.arrive(k, o.edge);
       firstDeal.set(t.pile, Math.min(firstDeal.get(t.pile) ?? Infinity, spec.delay));
       dealt.set(t.pile, [...(dealt.get(t.pile) ?? []), o.id]);
-      objects.arrive(byId.get(o.id)!, t, o.edge, edges, spec, now, { castShadow: t.rank < SHADOW_CASTERS, pile: t.pile, badge: t.badge });
+      objects.arrive(byId.get(o.id)!, t, o.edge, edges, spec, now, { castShadow: t.cast, pile: t.pile, badge: t.badge });
     });
     move.forEach((id, k) => {
       const t = targets.get(id)!;
-      objects.move(id, t, theme.motions.move(k), now, { castShadow: t.rank < SHADOW_CASTERS, pile: t.pile, badge: t.badge });
+      objects.move(id, t, theme.motions.move(k), now, { castShadow: t.cast, pile: t.pile, badge: t.badge });
     });
     change.tuck.forEach((id, k) => {
       const p = placementOf.get(id)!;
@@ -408,7 +437,7 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
     for (const p of piles.values()) {
       if (!p.label) continue;
       if (now < p.startAt) { moving = true; continue; }
-      p.scale.target = p.labelPos ? 1 : 0;
+      p.scale.target = p.labelPos?.scale ?? 0;
       if (settled(p.scale, 1e-3)) { if (p.scale.value !== p.scale.target) snap(p.scale, p.scale.target); else continue; }
       step(p.scale, dt);
       const s = Math.max(0.001, p.scale.value);
@@ -429,7 +458,8 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
     },
     pickables: () => {
       const out: Object3D[] = [];
-      for (const p of piles.values()) { if (p.label?.visible) out.push(p.label); if (p.block) out.push(p.block); }
+      // Only what is drawn: three's raycaster does not look at `visible`, and a block waiting to grow in is hidden.
+      for (const p of piles.values()) { if (p.label?.visible) out.push(p.label); if (p.block?.visible) out.push(p.block); }
       return out;
     },
     settled: id => { phases = settle(phases, id); },

@@ -2,7 +2,7 @@
 // four key words.
 import type { Object3D } from 'three';
 import type { DeskItem } from '../../../../../src/server/wire.ts';
-import { drawText, ellipsise } from '../../../scene/textures.ts';
+import { drawText, fitWord } from '../../../scene/textures.ts';
 import { FONT, INK, PAPER } from '../palette.ts';
 import { buildSlab } from './slab.ts';
 
@@ -25,7 +25,10 @@ export function buildNote(item: DeskItem, lod: 'small' | 'full'): Object3D {
   });
 }
 
-/** Lays the words out in centred rows, heaviest first, and stops when the slip is full. */
+/**
+ * Lays the words out in centred rows, heaviest first, and stops when the slip is full. A word too wide for the slip is set
+ * smaller until it fits (down to the smallest cloud size) and is cut short only below that.
+ */
 function drawCloud(ctx: CanvasRenderingContext2D, keywords: { word: string; weight: number }[], w: number, h: number): void {
   const sorted = [...keywords].sort((a, b) => b.weight - a.weight).slice(0, 14);
   const hi = sorted[0].weight, lo = sorted[sorted.length - 1].weight;
@@ -36,11 +39,10 @@ function drawCloud(ctx: CanvasRenderingContext2D, keywords: { word: string; weig
   const gap = 0.45;
   sorted.forEach((k, i) => {
     const t = hi === lo ? 0.5 : (k.weight - lo) / (hi - lo);
-    const size = SMALLEST + (LARGEST - SMALLEST) * t;
     const bold = t > 0.55;
-    ctx.font = `${bold ? 700 : 500} ${size}px ${FONT.sans}`;
-    const text = ellipsise(k.word.trim(), maxW, s => ctx.measureText(s).width);
-    const width = Math.min(maxW, ctx.measureText(text).width);
+    const measureAt = (s: string, px: number) => { ctx.font = `${bold ? 700 : 500} ${px}px ${FONT.sans}`; return ctx.measureText(s).width; };
+    const { text, size } = fitWord(k.word.trim(), maxW, SMALLEST + (LARGEST - SMALLEST) * t, SMALLEST, measureAt);
+    const width = Math.min(maxW, measureAt(text, size));
     const placed = { text, size, width, colour: INK.cloud[i % INK.cloud.length], bold };
     if (row.items.length && row.width + gap + width > maxW) { rows.push(row); row = { items: [], width: 0, height: 0 }; }
     row.width += (row.items.length ? gap : 0) + width;

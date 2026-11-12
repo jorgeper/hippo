@@ -54,6 +54,8 @@ const FOV = 32;
 const ZOOM_IN = 6, ZOOM_OUT = 2;
 /** How quickly the camera catches up with where it should be (per second). */
 const CAMERA_RATE = 13;
+/** With prefers-reduced-motion the camera steps there instead: all but 1% of the way in about a tenth of a second. */
+const CAMERA_RATE_REDUCED = 46;
 const DPR_CAP = 2;
 /** Frames between checks of which objects need full-size faces. */
 const LOD_EVERY = 8;
@@ -207,9 +209,11 @@ export function createStage(canvas: HTMLCanvasElement, theme: Theme, opts: { map
     return Number.isFinite(r.x0) ? r : { x0: -100, x1: 100, y0: -60, y1: 60 };
   }
 
-  /** Eases the camera toward the goal; true while it moves. */
+  const reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : undefined;
+
+  /** Eases the camera toward the goal (a short step under reduced motion); true while it moves. */
   function easeCamera(dt: number): boolean {
-    const k = 1 - Math.exp(-dt * CAMERA_RATE);
+    const k = 1 - Math.exp(-dt * (reducedMotion?.matches ? CAMERA_RATE_REDUCED : CAMERA_RATE));
     const dx = goal.tx - cur.tx, dy = goal.ty - cur.ty, dz = Math.log(goal.dist / cur.dist);
     if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3 && Math.abs(dz) < 1e-4) {
       if (cur.tx === goal.tx && cur.ty === goal.ty && cur.dist === goal.dist) return false;

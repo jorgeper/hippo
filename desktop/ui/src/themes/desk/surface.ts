@@ -10,7 +10,8 @@ import { DESK, LIGHT } from './palette.ts';
 /** Where the key light comes from (x left, y far, z up): high on the upper left. */
 const KEY_FROM = { x: -0.55, y: 0.48, z: 1.05 };
 const SHADOW_MAP = 2048;
-const SHADOW_SOFTNESS = 3.5;
+/** Shadow blur in shadow-map texels: wide enough that a pile's shadow reads as soft, not a cut-out box. */
+const SHADOW_SOFTNESS = 6;
 const SURFACE = 8000;
 
 const vertex = /* glsl */ `

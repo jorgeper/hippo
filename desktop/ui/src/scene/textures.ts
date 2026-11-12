@@ -58,6 +58,21 @@ export function ellipsise(s: string, max: number, measure: Measure, always = fal
 }
 
 /**
+ * One word on one line: at `size` when it fits in `max`, else at the size that makes it fit (never below `smallest`), and
+ * only when it does not fit even at `smallest` is it ellipsised (by grapheme) at that size. `measureAt` measures a string
+ * at a font size.
+ */
+export function fitWord(word: string, max: number, size: number, smallest: number, measureAt: (s: string, size: number) => number): { text: string; size: number } {
+  const width = measureAt(word, size);
+  if (width <= max) return { text: word, size };
+  // Text width grows with the font size, so one step gets close; a few small steps absorb rounding in the measure.
+  let s = Math.max(smallest, size * (max / width));
+  for (let k = 0; k < 6 && s > smallest && measureAt(word, s) > max; k++) s = Math.max(smallest, s * 0.97);
+  if (measureAt(word, s) <= max) return { text: word, size: s };
+  return { text: ellipsise(word, max, t => measureAt(t, smallest)), size: smallest };
+}
+
+/**
  * Wraps `text` into at most `maxLines` lines no wider than `maxWidth` (as `measure` says): on spaces, on the text's own line
  * breaks, and inside a word that is wider than a line. When the text does not fit, the last line ends with an ellipsis.
  */
