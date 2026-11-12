@@ -9,6 +9,7 @@ import HippoTestSupport
 // Usage: hippo-fixtures <output-directory>
 //        hippo-fixtures enrichments <root>   (adds enrichment files beside existing packages; never touches captures/)
 //        hippo-fixtures context <root>       (adds format 1.1 package 7 and its device enrichment; never touches 1-6)
+//        hippo-fixtures server <root>        (adds the format 1.2 server enrichment for package 7; never touches captures/)
 
 struct Fixture {
     let name: String
@@ -22,10 +23,12 @@ func fail(_ message: String) -> Never {
 
 let isEnrichments = CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "enrichments"
 let isContext = CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "context"
-guard isEnrichments || isContext || CommandLine.arguments.count == 2 else {
-    fail("usage: hippo-fixtures <output-directory> | hippo-fixtures enrichments <root> | hippo-fixtures context <root>")
+let isServer = CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "server"
+guard isEnrichments || isContext || isServer || CommandLine.arguments.count == 2 else {
+    fail("usage: hippo-fixtures <output-directory> | hippo-fixtures enrichments <root> | hippo-fixtures context <root>"
+         + " | hippo-fixtures server <root>")
 }
-let out = URL(fileURLWithPath: CommandLine.arguments[isEnrichments || isContext ? 2 : 1], isDirectory: true).standardizedFileURL
+let out = URL(fileURLWithPath: CommandLine.arguments[isEnrichments || isContext || isServer ? 2 : 1], isDirectory: true).standardizedFileURL
 let layout = StoreLayout(root: out)
 let fm = FileManager.default
 let scratch = fm.temporaryDirectory.appendingPathComponent("hippo-fixtures-\(UUID().uuidString)", isDirectory: true)
@@ -58,6 +61,15 @@ if isContext {
         exit(0)
     } catch {
         fail("hippo-fixtures context failed: \(error)")
+    }
+}
+
+if isServer {
+    do {
+        try writeServerFixture(root: out)
+        exit(0)
+    } catch {
+        fail("hippo-fixtures server failed: \(error)")
     }
 }
 
@@ -195,7 +207,9 @@ func writeEnrichmentFixtures(root: URL) throws {
 /// Format 1.1 fixture: package 7 carrying every context signal, and its device enrichment document with the six
 /// new facet kinds. Adds files only; packages 1-6 are frozen 1.0 files and are not touched. All inputs are fixed.
 /// The facet payloads are hand-built (the audio is silence and the QR image is drawn here), not detector output.
+/// Written as minor 1, the format it was frozen at, so it stays byte-identical as the format moves on.
 func writeContextFixture(root: URL) async throws {
+    let contextMinor = 1
     let fm = FileManager.default
     let scratch = fm.temporaryDirectory.appendingPathComponent("hippo-fixtures-\(UUID().uuidString)", isDirectory: true)
     try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -244,7 +258,7 @@ func writeContextFixture(root: URL) async throws {
     let writer = PackageWriter(layout: layout, producer: producer, makeID: {
         let m = counter.withLock { value -> Int in value += 1; return value }
         return UUID(uuidString: String(format: "00000000-0000-4000-8000-%04d%08d", 7, m))!
-    })
+    }, schemaMinor: contextMinor)
     let package = try await writer.commit(captureDraft)
     print("context -> \(package.relativeDirectory)")
     rmdir(layout.stagingDir.path) // removes only an empty directory
@@ -287,12 +301,54 @@ func writeContextFixture(root: URL) async throws {
             FacetKind.screenshot.rawValue: try facet("heuristic", ScreenshotData(items: [
                 .init(attachmentID: imageID, reason: "screen_size_match")])),
         ],
-        schemaMinor: FormatVersion.minor)
+        schemaMinor: contextMinor)
     let dir = root.appendingPathComponent(try EnrichmentPaths.remoteDirectory(.device, packageDirectory: directory), isDirectory: true)
     try? fm.removeItem(at: dir)
     try fm.createDirectory(at: dir, withIntermediateDirectories: true)
     try EnrichmentJSON.encode(device).write(to: dir.appendingPathComponent(EnrichmentPaths.documentName))
     print("device -> \(dir.path)")
+}
+
+/// Format 1.2 fixture: the server enrichment for package 7, carrying `summary`, `tags` and the four 1.2 kinds.
+/// Reads only package 7's `complete.json` (for the digest) and writes only its server `enrichment.json`. The
+/// payloads are hand-built examples of the shapes; the person named in `people` is invented.
+func writeServerFixture(root: URL) throws {
+    let fm = FileManager.default
+    let id = captureID(7).uuidString.lowercased()
+    let directory = "captures/2026/11/07/\(id)"
+    let digest = try StreamingHasher.digest(of: root.appendingPathComponent(directory).appendingPathComponent("complete.json")).sha256
+    let generatedAt = Date(timeIntervalSince1970: 1_794_074_400) // 2026-11-07T18:00:00Z
+    let imageID = "00000000-0000-4000-8000-000700000001"
+
+    func facet<T: Encodable>(_ provenance: String, _ payload: T) throws -> Facet {
+        let value = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(payload))
+        return Facet(version: 1, status: .ok, generatedAt: generatedAt, provenance: provenance, data: value)
+    }
+    let server = EnrichmentDocument(
+        schemaVersion: FormatVersion.major, captureID: id, layer: .server, packageDigest: digest,
+        producer: EnrichmentProducer(name: "hippo-fixtures", version: "1", build: "1"), generatedAt: generatedAt,
+        facets: [
+            FacetKind.summary.rawValue: try facet("server_model", SummaryData(text: "A cafe menu with a QR code for the specials.")),
+            FacetKind.tags.rawValue: try facet("server_model", TagsData(values: ["cafe", "menu", "food"])),
+            FacetKind.display.rawValue: try facet("server_model", DisplayData(
+                title: "Cafe menu with specials code", topic: "food",
+                keywords: [.init(word: "menu", weight: 1), .init(word: "cafe", weight: 0.8), .init(word: "specials", weight: 0.6)])),
+            FacetKind.imageDescription.rawValue: try facet("server_model", ImageDescriptionData(items: [
+                .init(attachmentID: imageID,
+                      text: "A printed cafe menu photographed on a table, with a QR code in the lower corner.")])),
+            FacetKind.people.rawValue: try facet("server_model", PeopleData(items: [.init(name: "Ana", source: "user_note")])),
+            FacetKind.circumstance.rawValue: try facet("rules", CircumstanceData(items: [
+                .init(label: "in_car", confidence: "high",
+                      evidence: ["audio route was CarPlay", "motion at capture was automotive", "speed was 11.2 m/s"]),
+                .init(label: "in_a_burst", confidence: "medium", evidence: ["previous capture was 60 s earlier"]),
+                .init(label: "daylight", confidence: "high", evidence: ["weather lookup says daytime"]),
+            ])),
+        ],
+        schemaMinor: 2) // pinned: this fixture is format 1.2 and must stay byte-identical when the format moves on
+    let dir = root.appendingPathComponent(try EnrichmentPaths.remoteDirectory(.server, packageDirectory: directory), isDirectory: true)
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    try EnrichmentJSON.encode(server).write(to: dir.appendingPathComponent(EnrichmentPaths.documentName))
+    print("server -> \(dir.path)")
 }
 
 /// AAC files from `AVAudioFile` record the time they were written in their `mvhd`, `tkhd` and `mdhd` boxes. Sets

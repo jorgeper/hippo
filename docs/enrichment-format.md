@@ -1,4 +1,4 @@
-# Hippo enrichment format, version 1.1
+# Hippo enrichment format, version 1.2
 
 For developers writing or reading enrichment: the desktop reader, and the server that produces gold. Machine-readable definition: `schema/enrichment-v1.schema.json`. Worked examples: `fixtures/packages/enrichments/` in the Hippo repository. The reference reader and writer are `EnrichmentDocument` and `EnrichmentJSON` in `HippoKit/Sources/CaptureCore/Enrichment` in the Hippo repository. The signals added in 1.1 are listed in one table in `context-signals.md`. In a synced Hippo folder these documents are in `format/` and the schemas in `format/schema/`. Read `package-format.md` first (it also defines the versioning rules): this format follows its conventions and sits beside the capture packages it describes.
 
@@ -48,7 +48,7 @@ All fields required except `schema_minor`:
 | Field | Type | Notes |
 |---|---|---|
 | `schema_version` | integer | `1` |
-| `schema_minor` | integer | Optional. Format minor of the writer (1.1 writes `1`). Missing means 0. |
+| `schema_minor` | integer | Optional. Format minor of the writer (1.1 writes `1`, 1.2 writes `2`). Missing means 0. |
 | `capture_id` | UUID string | Lowercase. Matches the directory name. |
 | `layer` | string | `device` or `server`. Matches the directory. |
 | `package_digest` | hex string | SHA-256 of the exact bytes of the capture's `complete.json` that this was derived from. See below. |
@@ -244,6 +244,54 @@ A guess, never a fact. `{items: [{attachment_id, reason}]}` for image attachment
 | `screen_size_match` | The pixel size equals this phone's screen (the size the app last remembered) in either orientation, and the camera make and model are both missing or blank. |
 
 No match: the status is `empty`.
+
+## Facet kinds added in format 1.2
+
+Four kinds, each facet `version` 1, written by a server-layer producer (by convention gold only; the phone does not write them). A reader that does not know them keeps and ignores them. Model-made facets carry a `provenance` naming the model that made them (an open set, for example `server_model` in the fixture); rule-made facets carry `rules`. Like every payload, optional fields are omitted when unknown, never `null` or empty. Example: the server fixture for package 7, `fixtures/packages/enrichments/server/2026/11/07/00000000-0000-4000-8000-000000000007/enrichment.json`.
+
+### `display` (provenance: a model name), gold only by convention
+
+How to show the capture in a list or on a desk: `{title, topic, keywords}`. A single item, matched by kind.
+
+| Field | Required | Notes |
+|---|---|---|
+| `title` | no | A short title, at most 60 characters. |
+| `topic` | no | One broad topic, for example `food`. |
+| `keywords` | no | Array of at most 12 `{word, weight}`. |
+
+Keyword: `word` (required, string) and `weight` (required, number 0 to 1, where 1 is the most important).
+
+### `image_description` (provenance: a model name), gold only by convention
+
+What each picture shows, in plain sentences. `{items: [...]}`, keyed by `attachment_id`.
+
+| Field | Required | Notes |
+|---|---|---|
+| `attachment_id` | yes | The image attachment. |
+| `text` | yes | The description. |
+
+### `people` (provenance: a model name), gold only by convention
+
+People named in the capture. `{items: [...]}`.
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | As written in the source. |
+| `source` | yes | Where the name was found: `user_note`, `shared_text`, `shared_title`, an attachment ID (for example its recognized text or transcript) or a comment ID: the values `data_detection` uses, plus `shared_title`. |
+
+A name is only what the text says. Hippo does not record who was present, so a missing `people` facet, or a person missing from it, says nothing about who was there.
+
+### `circumstance` (provenance `rules`), gold only by convention
+
+Likely circumstances of the capture, concluded from the facts in `metadata.json` and the device enrichment (see `context-signals.md`). A conclusion, never a fact: show it as likely, with its evidence. `{items: [...]}`.
+
+| Field | Required | Notes |
+|---|---|---|
+| `label` | yes | An open set. Known: `in_car`, `walking`, `running`, `cycling`, `on_headphones`, `in_a_burst`, `daylight`, `dark`. A reader shows an unknown `label` as written. |
+| `confidence` | yes | `low`, `medium` or `high`; an open set. |
+| `evidence` | no | Array of short plain sentences that led to the label, for example "audio route was CarPlay". |
+
+A missing label means the producer did not conclude it, not that it was false.
 
 ## Override rule
 

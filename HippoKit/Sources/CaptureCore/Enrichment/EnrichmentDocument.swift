@@ -30,6 +30,11 @@ public struct FacetKind: RawRepresentable, Codable, Hashable, Sendable {
     public static let language = FacetKind(rawValue: "language")
     public static let soundClassification = FacetKind(rawValue: "sound_classification")
     public static let screenshot = FacetKind(rawValue: "screenshot")
+    // Format 1.2: server-layer kinds.
+    public static let display = FacetKind(rawValue: "display")
+    public static let imageDescription = FacetKind(rawValue: "image_description")
+    public static let people = FacetKind(rawValue: "people")
+    public static let circumstance = FacetKind(rawValue: "circumstance")
 }
 
 /// Outcome of producing a facet. Open: readers accept values added by future versions.

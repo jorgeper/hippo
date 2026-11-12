@@ -16,6 +16,8 @@ If you are an agent or a developer reading this folder, the files below tell you
 | `format/` | The documents and JSON Schemas that describe all of the above. |
 | `README.md` | This file. |
 
+`enrichments/server/` has one writer at a time: a server, or a desktop program on the owner's computer (Hippo's own is `hippo-desk`). Besides `summary` and `tags`, a reader will find the kinds added in format 1.2: `display` (a short title, a topic and weighted keywords), `image_description` (what each picture shows), `people` (names mentioned, with where each was found) and `circumstance` (likely circumstances such as "in a car", each with a confidence and its evidence; a conclusion, not a fact). `format/enrichment-format.md` describes each one. Keep and ignore any other kind.
+
 ## What to read, in order
 
 1. `format/package-format.md`: the capture package and the versioning rules.
@@ -27,7 +29,7 @@ If you are an agent or a developer reading this folder, the files below tell you
 
 ## Format version
 
-Format version 1.1. The major part is `schema_version` (1); the minor part is the optional `schema_minor` (missing means 0). Accept any minor, ignore keys you do not know, and reject a major you do not know.
+Format version 1.2. The major part is `schema_version` (1); the minor part is the optional `schema_minor` (missing means 0). Accept any minor, ignore keys you do not know, and reject a major you do not know.
 
 ## Who may write here
 

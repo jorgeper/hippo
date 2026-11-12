@@ -145,4 +145,33 @@ import Foundation
         #expect(try !payload(.soundClassification, as: SoundClassificationData.self).items.isEmpty)
         #expect(try !payload(.screenshot, as: ScreenshotData.self).items.isEmpty)
     }
+
+    // MARK: Format 1.2
+
+    @Test func serverFixtureCarriesEveryNewKind() throws {
+        let marker = Self.packageDirectory(7).appendingPathComponent("complete.json")
+        let digest = try StreamingHasher.digest(of: marker).sha256
+        let url = Self.fixturesRoot.appendingPathComponent(
+            "packages/enrichments/server/2026/11/07/00000000-0000-4000-8000-000000000007/enrichment.json")
+        let doc = try EnrichmentJSON.decode(Data(contentsOf: url))
+        #expect(doc.schemaMinor == 2)
+        #expect(doc.layer == .server)
+        #expect(doc.captureID == "00000000-0000-4000-8000-000000000007")
+        #expect(doc.packageDigest == digest)
+        for kind in [FacetKind.summary, .tags, .display, .imageDescription, .people, .circumstance] {
+            let facet = try #require(doc[kind], "no \(kind.rawValue) facet")
+            #expect(facet.status == .ok, "\(kind.rawValue) status")
+        }
+        #expect(doc[.circumstance]?.provenance == "rules")
+        let display = try #require(doc[.display]?.decodeData(DisplayData.self))
+        #expect(display.title == "Cafe menu with specials code")
+        #expect(display.keywords?.count == 3)
+        let images = try #require(doc[.imageDescription]?.decodeData(ImageDescriptionData.self))
+        #expect(images.items.map(\.attachmentID) == ["00000000-0000-4000-8000-000700000001"])
+        let people = try #require(doc[.people]?.decodeData(PeopleData.self))
+        #expect(people.items == [PersonItem(name: "Ana", source: "user_note")])
+        let circumstance = try #require(doc[.circumstance]?.decodeData(CircumstanceData.self))
+        #expect(circumstance.items.map(\.label) == ["in_car", "in_a_burst", "daylight"])
+        #expect(circumstance.items.map(\.confidence) == ["high", "medium", "high"])
+    }
 }

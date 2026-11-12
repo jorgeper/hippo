@@ -2,5 +2,5 @@
 /// reject an unknown major.
 public enum FormatVersion {
     public static let major = 1
-    public static let minor = 1
+    public static let minor = 2
 }

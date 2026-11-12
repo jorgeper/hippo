@@ -45,9 +45,9 @@ private struct FakeSpace: SpaceChecking {
     private static let commentPath = day + "00000000-0000-4000-8000-000000000004/comments/00000000-0000-4000-8000-00000000c001.json"
     private static let enrichmentPath = "fixtures/packages/enrichments/device/2026/11/07/00000000-0000-4000-8000-000000000002/enrichment.json"
 
-    @Test func constantsAreOnePointOne() {
+    @Test func constantsAreOnePointTwo() {
         #expect(FormatVersion.major == 1)
-        #expect(FormatVersion.minor == 1)
+        #expect(FormatVersion.minor == 2)
     }
 
     @Test func writerStampsMinor() async throws {
@@ -57,21 +57,31 @@ private struct FakeSpace: SpaceChecking {
         let metadata = try HippoJSON.decodeMetadata(metadataData)
         let marker = try HippoJSON.decodeMarker(markerData)
         #expect(metadata.schemaVersion == 1)
-        #expect(metadata.schemaMinor == 1)
+        #expect(metadata.schemaMinor == 2)
         #expect(marker.schemaVersion == 1)
+        #expect(marker.schemaMinor == 2)
+        #expect(String(decoding: metadataData, as: UTF8.self).contains("\"schema_minor\" : 2"))
+        #expect(String(decoding: markerData, as: UTF8.self).contains("\"schema_minor\" : 2"))
+    }
+
+    /// The fixture generator pins package 7 to the minor it was frozen at.
+    @Test func writerCanPinAnOlderMinor() async throws {
+        let draft = CaptureDraft(captureID: UUID(), startedAt: now, timeZone: la, method: .typedNote, userNote: "a capture")
+        let pkg = try await PackageWriter(layout: layout, producer: producer, schemaMinor: 1).commit(draft)
+        let metadata = try HippoJSON.decodeMetadata(Data(contentsOf: pkg.directoryURL.appendingPathComponent("metadata.json")))
+        let marker = try HippoJSON.decodeMarker(Data(contentsOf: pkg.directoryURL.appendingPathComponent("complete.json")))
+        #expect(metadata.schemaMinor == 1)
         #expect(marker.schemaMinor == 1)
-        #expect(String(decoding: metadataData, as: UTF8.self).contains("\"schema_minor\" : 1"))
-        #expect(String(decoding: markerData, as: UTF8.self).contains("\"schema_minor\" : 1"))
     }
 
     @Test func commentWriterStampsMinor() async throws {
         let pkg = try await commit()
         let writer = CommentWriter(layout: layout, producer: producer, space: FakeSpace(bytes: 1 << 40))
         let comment = try writer.add(.text("x"), to: pkg, now: now, timeZone: la)
-        #expect(comment.schemaMinor == 1)
+        #expect(comment.schemaMinor == 2)
         let url = pkg.directoryURL.appendingPathComponent(comment.relativePath)
         let onDisk = try HippoJSON.decodeComment(Data(contentsOf: url))
-        #expect(onDisk.schemaMinor == 1)
+        #expect(onDisk.schemaMinor == 2)
     }
 
     @Test func legacyFilesDecodeWithNilMinor() throws {
