@@ -1,0 +1,439 @@
+// Applying a layout to the desk (spec section 8, "Motion"): which ids each pile draws (at most a dozen, the rest become the
+// pile's thickness), who arrives, who glides, who is swept off, from and to which edge, in what order; then the pile labels,
+// thickness blocks, the backdrop and the empty-state line. The planning functions at the top are pure, and nothing here
+// touches the DOM at import, so `node --test` can check them; `createArranger` below drives the scene with the theme's
+// builders and motions.
+import { Box3, Vector3 } from 'three';
+import type { Group, Object3D } from 'three';
+import type { DeskItem } from '../../../src/server/wire.ts';
+import type { Backdrop, LayoutResult, Placement, Size } from '../layout/types.ts';
+import type { Edge, Theme } from '../themes/types.ts';
+import type { ObjectStore, Pose } from './objects.ts';
+import { spring, step, settled, snap } from './spring.ts';
+
+// ---------------------------------------------------------------- pure planning
+
+export const PILE_CAP = 12;
+
+export interface Rect { x0: number; x1: number; y0: number; y1: number }
+/** A desk area and how high the tallest pile on it stands (desk units), for framing the camera. */
+export interface Bounds extends Rect { top: number }
+
+/** Which of a pile's ids are drawn (the top `cap`, `ids` being top first) and how many are left to the thickness block. */
+export function planPile(ids: readonly string[], cap = PILE_CAP): { drawn: string[]; hidden: number } {
+  return { drawn: ids.slice(0, cap), hidden: Math.max(0, ids.length - cap) };
+}
+
+/** The side of `r` closest to x,y and how far it is (0 when outside). Ties prefer the near edge, then left, right, far. */
+export function nearestEdge(x: number, y: number, r: Rect): { edge: Edge; distance: number } {
+  const options: [Edge, number][] = [['near', y - r.y0], ['left', x - r.x0], ['right', r.x1 - x], ['far', r.y1 - y]];
+  let best = options[0];
+  for (const o of options) if (o[1] < best[1]) best = o;
+  return { edge: best[0], distance: Math.max(0, best[1]) };
+}
+
+/** Arrivals in dealing order: each from the edge nearest its place, the ones closest to their edge first; ties by id. */
+export function dealOrder(targets: readonly { id: string; x: number; y: number }[], r: Rect): { id: string; edge: Edge; distance: number }[] {
+  return targets.map(t => ({ id: t.id, ...nearestEdge(t.x, t.y, r) }))
+    .sort((a, b) => a.distance - b.distance || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/**
+ * Where each object stands in the animation. `shown`: on the desk or on its way there. `leaving`: being swept off.
+ * `tucking`: still in the set but under its pile's cap, gliding into the pile before it hides. Hidden ids are absent.
+ */
+export type Phase = 'shown' | 'leaving' | 'tucking';
+
+export interface ChangePlan {
+  /** Dealt in from an edge (not on the desk, or nowhere yet), in the order of `drawn`. */
+  arrive: string[];
+  /** Already visible (shown, or partway in or out): glide from where they are to their new place. */
+  move: string[];
+  /** Visible, still in the set, but no longer drawn: glide into the pile, then hide. */
+  tuck: string[];
+  /** Newly swept off. Ids already leaving keep going and are not listed again. */
+  leave: string[];
+  phases: Map<string, Phase>;
+}
+
+/**
+ * The bookkeeping for one change of the set. `prev` is where everything stood when the change came (possibly mid-flight),
+ * `drawn` the ids to draw now, `present` every id in the new set (drawn or under a pile's cap).
+ */
+export function planChange(prev: ReadonlyMap<string, Phase>, drawn: readonly string[], present: ReadonlySet<string>): ChangePlan {
+  const plan: ChangePlan = { arrive: [], move: [], tuck: [], leave: [], phases: new Map() };
+  const drawnSet = new Set(drawn);
+  for (const id of drawn) {
+    if (plan.phases.has(id)) continue;
+    (prev.has(id) ? plan.move : plan.arrive).push(id);
+    plan.phases.set(id, 'shown');
+  }
+  for (const [id, phase] of prev) {
+    if (drawnSet.has(id)) continue;
+    if (phase === 'leaving') { plan.phases.set(id, 'leaving'); continue; }
+    if (present.has(id)) { plan.tuck.push(id); plan.phases.set(id, 'tucking'); }
+    else { plan.leave.push(id); plan.phases.set(id, 'leaving'); }
+  }
+  return plan;
+}
+
+/** An object finished leaving or tucking: it is hidden and no longer tracked. A shown object stays shown. */
+export function settle(phases: ReadonlyMap<string, Phase>, id: string): Map<string, Phase> {
+  const next = new Map(phases);
+  if (next.get(id) !== 'shown') next.delete(id);
+  return next;
+}
+
+export interface PileBody extends Rect { key: string; weight: number }
+
+/**
+ * Places each pile's label beside its pile without covering another pile or label and inside `bounds`: below, else above,
+ * else right, else left; the heaviest piles choose first. A label that fits nowhere is null (not drawn).
+ */
+export function placeLabels(piles: readonly PileBody[], sizes: Readonly<Record<string, Size>>, bounds: Rect, gap: number): Map<string, { x: number; y: number } | null> {
+  const out = new Map<string, { x: number; y: number } | null>();
+  const taken: Rect[] = [];
+  const overlaps = (a: Rect, b: Rect) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+  const order = [...piles].sort((a, b) => b.weight - a.weight || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  for (const p of order) {
+    const s = sizes[p.key];
+    if (!s) { out.set(p.key, null); continue; }
+    const cx = (p.x0 + p.x1) / 2, cy = (p.y0 + p.y1) / 2;
+    const spots = [
+      { x: cx, y: p.y0 - gap - s.h / 2 }, { x: cx, y: p.y1 + gap + s.h / 2 },
+      { x: p.x1 + gap + s.w / 2, y: cy }, { x: p.x0 - gap - s.w / 2, y: cy },
+    ];
+    let chosen: { x: number; y: number } | null = null;
+    for (const c of spots) {
+      const r = { x0: c.x - s.w / 2, x1: c.x + s.w / 2, y0: c.y - s.h / 2, y1: c.y + s.h / 2 };
+      if (r.x0 < bounds.x0 || r.x1 > bounds.x1 || r.y0 < bounds.y0 || r.y1 > bounds.y1) continue;
+      if (piles.some(o => o.key !== p.key && overlaps(r, o)) || taken.some(t => overlaps(r, t))) continue;
+      chosen = c;
+      taken.push(r);
+      break;
+    }
+    out.set(p.key, chosen);
+  }
+  return out;
+}
+
+/** The axis-aligned half extents of a `size` object turned by `rot` about the vertical. */
+export function halfExtents(size: Size, rot: number): { hw: number; hh: number } {
+  const c = Math.abs(Math.cos(rot)), s = Math.abs(Math.sin(rot));
+  return { hw: (size.w * c + size.h * s) / 2, hh: (size.w * s + size.h * c) / 2 };
+}
+
+// ---------------------------------------------------------------- applying a layout to the scene
+
+/** Room between a pile and its label, and between stacked sheets (so nothing shares a depth). */
+const LABEL_GAP = 1.2;
+const SHEET_GAP = 0.025;
+/** How many of a pile's top objects cast shadows. */
+const SHADOW_CASTERS = 3;
+/** Labels grow in after the arrivals have started. */
+const LABEL_DELAY_MS = 220;
+const LABEL_STIFFNESS = 140;
+/** Blocks grow a little slower than labels, about as long as a card takes to land. */
+const BLOCK_STIFFNESS = 110;
+/** A block starts growing when its pile's first card comes within this distance (desk units), so it rises as that card lands. */
+const BLOCK_NEAR = 14;
+/** ... or this long after that card was dealt, whichever is first. */
+const BLOCK_LATEST_MS = 900;
+/** Room above a time layout's columns for their labels, in desk units. */
+const COLUMN_LABEL_ROOM = 3.6;
+
+interface PileParts { key: string; label?: Object3D; labelSize?: Size; block?: Object3D; blockTop: number; sig: string;
+  scale: ReturnType<typeof spring>; startAt: number; labelPos?: { x: number; y: number };
+  /** A new block grows up from the desk as its pile's first card comes in, rather than standing there bare. */
+  grow?: ReturnType<typeof spring>; growAt: number; dealt?: string[] }
+
+export interface Arranger {
+  /**
+   * Applies a layout. `frame` is called once the piles are built, with the area they (and their labels, backdrop or the
+   * empty-state line) take; it answers with the desk area the camera will show, for dealing in and sweeping off.
+   */
+  apply(items: DeskItem[], layout: LayoutResult, frame: (b: Bounds) => Rect, now: number): void;
+  /** The area the placed piles, labels and backdrop (or the empty-state line) take, in desk units, to frame the camera. */
+  measure(items: DeskItem[], layout: LayoutResult): Rect;
+  /** Grows labels and thickness blocks in; says whether anything moved, and whether a shadow caster did. */
+  step(dt: number, now: number): { moving: boolean; shadows: boolean };
+  /** The pile key under an object hit by a pick (labels and blocks carry it). */
+  pileOf(obj: Object3D): string | undefined;
+  pickables(): Object3D[];
+  /** Called by the object store when an object finished leaving or tucking. */
+  settled(id: string): void;
+  phases(): ReadonlyMap<string, Phase>;
+  setMapTiles(on: boolean): void;
+}
+
+const tmpBox = new Box3();
+const tmpSize = new Vector3();
+
+/** The size of a built object's footprint and its height, in its own (unrotated) frame. */
+function footprint(obj: Object3D): { w: number; h: number; top: number } {
+  const r = obj.rotation.z;
+  obj.rotation.z = 0;
+  obj.updateMatrixWorld(true);
+  tmpBox.setFromObject(obj, true);
+  obj.rotation.z = r;
+  obj.updateMatrixWorld(true);
+  if (tmpBox.isEmpty()) return { w: 0, h: 0, top: 0 };
+  tmpBox.getSize(tmpSize);
+  return { w: tmpSize.x, h: tmpSize.y, top: tmpBox.max.z };
+}
+
+function backdropSig(b: Backdrop | undefined): string { return b ? JSON.stringify(b) : ''; }
+
+export function createArranger(scene: Group, theme: Theme, objects: ObjectStore): Arranger {
+  let phases: Map<string, Phase> = new Map();
+  let piles = new Map<string, PileParts>();
+  let backdrop: { obj: Object3D; sig: string; floor: number } | undefined;
+  let empty: { obj: Object3D; text: string } | undefined;
+  let mapTiles = false;
+  const pileByObject = new WeakMap<Object3D, string>();
+
+  const dispose = (o: Object3D | undefined) => { if (o) { o.removeFromParent(); objects.disposeObject(o); } };
+
+  function setBackdrop(b: Backdrop | undefined): number {
+    const sig = backdropSig(b) + (b?.type === 'map' ? `|${mapTiles}` : '');
+    if (backdrop?.sig === sig) return backdrop.floor;
+    dispose(backdrop?.obj);
+    backdrop = undefined;
+    if (!b) return 0;
+    const obj = theme.buildBackdrop(b, { mapTiles });
+    scene.add(obj);
+    const floor = Math.max(0, Math.min(0.5, footprint(obj).top));
+    backdrop = { obj, sig, floor };
+    return floor;
+  }
+
+  /** The rectangle the members of each pile cover, from their placements and sizes. */
+  function bodyOf(ps: Placement[], items: Map<string, DeskItem>): Rect {
+    const r = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+    for (const p of ps) {
+      const it = items.get(p.id);
+      if (!it) continue;
+      const { hw, hh } = halfExtents(theme.sizes[it.kind], p.rot);
+      r.x0 = Math.min(r.x0, p.x - hw); r.x1 = Math.max(r.x1, p.x + hw);
+      r.y0 = Math.min(r.y0, p.y - hh); r.y1 = Math.max(r.y1, p.y + hh);
+    }
+    return r;
+  }
+
+  function measure(items: DeskItem[], layout: LayoutResult): Rect {
+    if (layout.empty !== undefined) {
+      const f = empty ? footprint(empty.obj) : { w: 40, h: 4 };
+      return { x0: -f.w / 2 - 4, x1: f.w / 2 + 4, y0: -f.h / 2 - 4, y1: f.h / 2 + 4 };
+    }
+    const byId = new Map(items.map(i => [i.id, i]));
+    const r = bodyOf(layout.placements, byId);
+    if (layout.backdrop?.type === 'columns') {
+      const b = layout.backdrop;
+      for (const c of b.columns) { r.x0 = Math.min(r.x0, c.x - c.width / 2); r.x1 = Math.max(r.x1, c.x + c.width / 2); }
+      // The day labels are written just above the columns.
+      r.y0 = Math.min(r.y0, b.bottom); r.y1 = Math.max(r.y1, b.top + COLUMN_LABEL_ROOM);
+    } else if (layout.backdrop?.type === 'map') {
+      const b = layout.backdrop;
+      r.x0 = Math.min(r.x0, b.x - b.width / 2); r.x1 = Math.max(r.x1, b.x + b.width / 2);
+      r.y0 = Math.min(r.y0, b.y - b.height / 2); r.y1 = Math.max(r.y1, b.y + b.height / 2);
+    }
+    // Room for the labels under the lowest piles.
+    if (Number.isFinite(r.y0)) r.y0 -= 4;
+    return r;
+  }
+
+  function apply(items: DeskItem[], layout: LayoutResult, frame: (b: Bounds) => Rect, now: number): void {
+    const byId = new Map(items.map(i => [i.id, i]));
+    const byPile = new Map<string, Placement[]>();
+    const placementOf = new Map<string, Placement>();
+    for (const p of layout.placements) {
+      if (!byId.has(p.id)) continue;
+      placementOf.set(p.id, p);
+      let list = byPile.get(p.pile);
+      if (!list) byPile.set(p.pile, list = []);
+      list.push(p);
+    }
+    for (const it of items) objects.update(it);
+
+    const floor = setBackdrop(layout.backdrop);
+
+    // Empty-state line.
+    if (layout.empty !== undefined) {
+      if (empty?.text !== layout.empty) {
+        dispose(empty?.obj);
+        const obj = theme.buildPileLabel(layout.empty, 0);
+        obj.position.set(0, 0, 0);
+        scene.add(obj);
+        empty = { obj, text: layout.empty };
+      }
+    } else if (empty) { dispose(empty.obj); empty = undefined; }
+
+    // Which ids each pile draws, their targets and stacking.
+    const drawn: string[] = [];
+    const targets = new Map<string, Pose & { rank: number; pile: string; badge?: string }>();
+    const nextPiles = new Map<string, PileParts>();
+    const bodies: PileBody[] = [];
+    const labelSizes: Record<string, Size> = {};
+    for (const pile of layout.piles) {
+      const members = (byPile.get(pile.key) ?? []).slice().sort((a, b) => a.order - b.order);
+      if (!members.length) continue;
+      const plan = planPile(pile.ids);
+      const drawnIds = new Set(plan.drawn);
+      const shown = members.filter(m => drawnIds.has(m.id));
+      // The block under the pile has the middle footprint of the drawn sheets, so it reads as more of the same underneath.
+      const median = (xs: number[]) => xs.sort((a, b) => a - b)[xs.length >> 1] ?? 0;
+      const blockSize = { w: median(shown.map(m => theme.sizes[byId.get(m.id)!.kind].w)), h: median(shown.map(m => theme.sizes[byId.get(m.id)!.kind].h)) };
+      const sig = `${pile.label}|${pile.count}|${plan.hidden}|${blockSize.w}x${blockSize.h}|${pile.x}|${pile.y}|${floor}`;
+      const old = piles.get(pile.key);
+      let parts: PileParts;
+      if (old && old.sig === sig) { parts = old; piles.delete(pile.key); }
+      else {
+        // A block that only changes height where it stands swaps in place; anywhere else it grows in.
+        const standing = !!old?.block && old.block.position.x === pile.x && old.block.position.y === pile.y && !old.grow;
+        if (old) { dispose(old.label); dispose(old.block); piles.delete(pile.key); }
+        parts = { key: pile.key, sig, scale: spring(0, { stiffness: LABEL_STIFFNESS, damping: 0.8 }), startAt: now + LABEL_DELAY_MS, blockTop: floor, growAt: now };
+        if (plan.hidden > 0) {
+          const block = theme.buildThickness(plan.hidden, blockSize);
+          if (block) {
+            block.position.set(pile.x, pile.y, floor);
+            scene.add(block);
+            parts.block = block;
+            parts.blockTop = footprint(block).top;
+            block.traverse(o => pileByObject.set(o, pile.key));
+            if (!standing) {
+              parts.grow = spring(0, { stiffness: BLOCK_STIFFNESS, damping: 1 });
+              parts.grow.target = 1;
+              block.scale.z = 0.001;
+              block.visible = false;
+            }
+          }
+        }
+        const label = theme.buildPileLabel(pile.label, pile.count);
+        const f = footprint(label);
+        parts.labelSize = { w: f.w, h: f.h };
+        label.scale.setScalar(0.001);
+        label.visible = false;
+        scene.add(label);
+        label.traverse(o => pileByObject.set(o, pile.key));
+        parts.label = label;
+      }
+      nextPiles.set(pile.key, parts);
+      let z = parts.blockTop;
+      shown.forEach((m, k) => {
+        const it = byId.get(m.id)!;
+        const rank = shown.length - 1 - k; // 0 is the top of the pile
+        targets.set(m.id, { x: m.x, y: m.y, z, rot: m.rot, rank, pile: pile.key, ...(m.badge ? { badge: m.badge } : {}) });
+        z += theme.depths[it.kind] + SHEET_GAP;
+        drawn.push(m.id);
+      });
+      const body = bodyOf(shown, byId);
+      bodies.push({ key: pile.key, weight: pile.count, ...body });
+      if (parts.labelSize) labelSizes[pile.key] = parts.labelSize;
+    }
+    for (const old of piles.values()) { dispose(old.label); dispose(old.block); }
+    piles = nextPiles;
+
+    // Labels beside their piles, never over another pile or label.
+    const view = measure(items, layout);
+    const bounds = { x0: view.x0 - 6, x1: view.x1 + 6, y0: view.y0 - 4, y1: view.y1 + 4 };
+    const spots = placeLabels(bodies, labelSizes, bounds, LABEL_GAP);
+    for (const parts of piles.values()) {
+      if (!parts.label) continue;
+      const spot = spots.get(parts.key);
+      parts.labelPos = spot ?? undefined;
+      if (spot) { parts.label.position.set(spot.x, spot.y, floor); }
+      parts.label.visible = !!spot && parts.label.scale.x > 0.01;
+    }
+
+    // Who arrives, glides, tucks and leaves.
+    const present = new Set(placementOf.keys());
+    const change = planChange(phases, drawn, present);
+    phases = change.phases;
+    let top = 0;
+    for (const [id, t] of targets) top = Math.max(top, t.z + theme.depths[byId.get(id)!.kind]);
+    const edges = frame({ ...measure(items, layout), top });
+
+    // An object still waiting for its turn to be dealt in is not on the desk yet: it is dealt in again, not glided.
+    const move: string[] = [], arrive: string[] = [...change.arrive];
+    for (const id of change.move) (objects.onDesk(id) ? move : arrive).push(id);
+    const arriveSet = new Set(arrive);
+    const order = dealOrder(drawn.filter(id => arriveSet.has(id)).map(id => ({ id, x: targets.get(id)!.x, y: targets.get(id)!.y })), edges);
+
+    const firstDeal = new Map<string, number>(), dealt = new Map<string, string[]>();
+    order.forEach((o, k) => {
+      const t = targets.get(o.id)!;
+      const spec = theme.motions.arrive(k, o.edge);
+      firstDeal.set(t.pile, Math.min(firstDeal.get(t.pile) ?? Infinity, spec.delay));
+      dealt.set(t.pile, [...(dealt.get(t.pile) ?? []), o.id]);
+      objects.arrive(byId.get(o.id)!, t, o.edge, edges, spec, now, { castShadow: t.rank < SHADOW_CASTERS, pile: t.pile, badge: t.badge });
+    });
+    move.forEach((id, k) => {
+      const t = targets.get(id)!;
+      objects.move(id, t, theme.motions.move(k), now, { castShadow: t.rank < SHADOW_CASTERS, pile: t.pile, badge: t.badge });
+    });
+    change.tuck.forEach((id, k) => {
+      const p = placementOf.get(id)!;
+      const pile = layout.piles.find(x => x.key === p.pile);
+      objects.tuck(id, { x: pile?.x ?? p.x, y: pile?.y ?? p.y, z: floor, rot: p.rot }, theme.motions.move(k), now, p.pile);
+    });
+    const leaving = change.leave.map(id => ({ id, at: objects.positionOf(id) }))
+      .map(l => ({ ...l, ...(l.at ? nearestEdge(l.at.x, l.at.y, edges) : { edge: 'near' as Edge, distance: 0 }) }))
+      .sort((a, b) => a.distance - b.distance);
+    leaving.forEach((l, k) => objects.leave(l.id, l.edge, edges, theme.motions.leave(k, l.edge), now));
+    for (const p of piles.values()) {
+      if (!p.grow || p.grow.value !== 0) continue;
+      p.dealt = dealt.get(p.key);
+      p.growAt = now + (firstDeal.has(p.key) ? firstDeal.get(p.key)! + BLOCK_LATEST_MS : 0);
+    }
+    objects.prune(present);
+  }
+
+  function stepLabels(dt: number, now: number): { moving: boolean; shadows: boolean } {
+    let moving = false, shadows = false;
+    for (const p of piles.values()) {
+      if (!p.grow || !p.block) continue;
+      if (p.grow.value === 0 && now < p.growAt) {
+        const { x, y } = p.block.position;
+        const near = p.dealt?.some(id => { const at = objects.positionOf(id); return !!at && Math.hypot(at.x - x, at.y - y) < BLOCK_NEAR; });
+        if (!near) { moving = true; continue; }
+        p.growAt = now;
+      }
+      step(p.grow, dt);
+      if (settled(p.grow, 1e-3)) { snap(p.grow, 1); p.grow = undefined; }
+      const s = Math.max(0.001, p.grow?.value ?? 1);
+      p.block.scale.z = s;
+      p.block.visible = s > 0.01;
+      moving = shadows = true;
+    }
+    for (const p of piles.values()) {
+      if (!p.label) continue;
+      if (now < p.startAt) { moving = true; continue; }
+      p.scale.target = p.labelPos ? 1 : 0;
+      if (settled(p.scale, 1e-3)) { if (p.scale.value !== p.scale.target) snap(p.scale, p.scale.target); else continue; }
+      step(p.scale, dt);
+      const s = Math.max(0.001, p.scale.value);
+      p.label.scale.setScalar(s);
+      p.label.visible = !!p.labelPos && s > 0.01;
+      moving = true;
+    }
+    return { moving, shadows };
+  }
+
+  return {
+    apply,
+    measure,
+    step: stepLabels,
+    pileOf: obj => {
+      for (let o: Object3D | null = obj; o; o = o.parent) { const k = pileByObject.get(o); if (k) return k; }
+      return undefined;
+    },
+    pickables: () => {
+      const out: Object3D[] = [];
+      for (const p of piles.values()) { if (p.label?.visible) out.push(p.label); if (p.block) out.push(p.block); }
+      return out;
+    },
+    settled: id => { phases = settle(phases, id); },
+    phases: () => phases,
+    setMapTiles: on => { mapTiles = on; },
+  };
+}

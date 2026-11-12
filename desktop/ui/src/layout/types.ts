@@ -8,8 +8,11 @@ export interface Size { w: number; h: number }
 export type SizeTable = Record<Kind, Size>;
 /** The usable desk area in desk units, centred on 0,0 (the caller has already taken out the room the controls need). */
 export interface View { width: number; height: number }
-/** Where one item lies. `order` 0 is the bottom of its pile; `rot` is in radians about the vertical; `pile` is a PileInfo key. */
-export interface Placement { id: string; x: number; y: number; order: number; rot: number; pile: string }
+/**
+ * Where one item lies. `order` 0 is the bottom of its pile; `rot` is in radians about the vertical; `pile` is a PileInfo key.
+ * `badge`: a short mark this arrangement puts on the item (the person layout: "+1" when it names one more person).
+ */
+export interface Placement { id: string; x: number; y: number; order: number; rot: number; pile: string; badge?: string }
 /** One pile: its point, label and members, `ids` top first. */
 export interface PileInfo { key: string; label: string; count: number; x: number; y: number; ids: string[] }
 /**

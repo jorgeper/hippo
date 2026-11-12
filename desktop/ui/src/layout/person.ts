@@ -26,5 +26,17 @@ export const personLayout: LayoutFn = (items, view, sizes) => {
   const piles = nobody ? [...named, nobody] : named;
   const points = gridPoints(piles.length, view, sizes);
   const drafts: PileDraft[] = piles.map((g, k) => ({ ...g, ...points[k] }));
-  return collect(drafts, sizes, viewRect(view));
+  const result = collect(drafts, sizes, viewRect(view));
+  const byId = new Map(items.map(i => [i.id, i]));
+  for (const p of result.placements) {
+    const others = othersNamed(byId.get(p.id)!);
+    if (others > 0) p.badge = `+${others}`;
+  }
+  return result;
 };
+
+/** How many different people (by name, ignoring case) an item names besides the first. */
+function othersNamed(it: { people: { name: string }[] }): number {
+  const names = new Set(it.people.map(p => p.name.trim().toLowerCase()).filter(Boolean));
+  return Math.max(0, names.size - 1);
+}

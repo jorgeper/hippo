@@ -4,6 +4,5 @@ import type { Theme } from './types.ts';
 export type { Edge, Motions, MotionSpec, StageContext, Theme } from './types.ts';
 
 export const themes: Record<string, () => Promise<Theme>> = {
-  // Task C2 builds ui/src/themes/desk/ and replaces this with `() => import('./desk/index.ts').then(m => m.theme)`.
-  desk: () => Promise.reject(new Error('The desk theme is not built yet.')),
+  desk: () => import('./desk/index.ts').then(m => m.theme),
 };

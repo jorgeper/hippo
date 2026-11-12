@@ -180,6 +180,20 @@ test('person: an item naming Ana then Rui is in pile Ana; nobody mentioned comes
   assert.deepEqual(r.piles.map(p => p.label).sort(), ['Ana', 'Marta', 'Nobody mentioned']);
 });
 
+test('person: an item naming more than one person carries a "+N" badge for the others; no other layout badges anything', () => {
+  const items = [item(1, { people: [{ name: 'Ana', source: 'text' }, { name: 'Rui', source: 'text' }, { name: 'ana', source: 'comment' }] }),
+    item(2, { people: [{ name: 'Ana', source: 'text' }, { name: 'Rui', source: 'text' }, { name: 'Eva', source: 'text' }] }),
+    item(3, { people: [{ name: 'Marta', source: 'text' }] }), item(4)];
+  const r = layouts.person(items, VIEW, SIZES);
+  const badge = (n: number) => r.placements.find(p => p.id === idOf(n))!.badge;
+  assert.equal(badge(1), '+1', 'the same name twice counts once');
+  assert.equal(badge(2), '+2');
+  assert.equal(badge(3), undefined);
+  assert.equal(badge(4), undefined);
+  for (const name of NAMES.filter(n => n !== 'person'))
+    assert.ok(layouts[name](items, VIEW, SIZES).placements.every(p => p.badge === undefined), name);
+});
+
 test('person: more piles than fit merge the smallest named piles into "Others" and keep "Nobody mentioned"', () => {
   const items: DeskItem[] = [];
   let n = 0;
