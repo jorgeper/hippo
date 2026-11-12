@@ -372,7 +372,11 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     const candidates = [...(typeof header === 'string' ? [header] : []), ...cookieValues(req.headers.cookie, 'hippo_t'),
       ...(fromQuery !== null ? [fromQuery] : [])];
     if (!candidates.some(t => sameToken(t, token))) return forbid();
-    if (fromQuery !== null && sameToken(fromQuery, token)) res.setHeader('Set-Cookie', `hippo_t=${token}; HttpOnly; SameSite=Strict; Path=/`);
+    const cookie = `hippo_t=${token}; HttpOnly; SameSite=Strict; Path=/`;
+    if (fromQuery !== null && sameToken(fromQuery, token)) res.setHeader('Set-Cookie', cookie);
+    // In dev the page comes from Vite and never loads `/?t=`: its header-authenticated boot sets the cookie instead, so the
+    // <img> and <video> requests it later sends through the proxy (which cannot carry a header) are let in.
+    else if (devOrigin && pathname === '/api/boot' && typeof header === 'string' && sameToken(header, token)) res.setHeader('Set-Cookie', cookie);
 
     const method = req.method ?? '';
     if (method !== 'GET' && method !== 'POST') return empty(req, res, 405, { Allow: 'GET, POST' });

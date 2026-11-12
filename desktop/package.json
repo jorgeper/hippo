@@ -10,16 +10,21 @@
     "hippo": "bin/hippo.mjs"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "test": "node --test \"test/**/*.test.ts\" \"ui/test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "dev": "vite ui",
+    "build": "vite build ui"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "@types/three": "^0.187.0",
     "ajv": "^8.20.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
   },
   "dependencies": {
     "heic-decode": "^2.1.0",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "three": "^0.187.0"
   }
 }

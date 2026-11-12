@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "target": "es2023",
+    "lib": ["es2023", "DOM"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "noEmit": true,
@@ -10,5 +11,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src", "test", "bin"]
+  "include": ["src", "test", "bin", "ui/src", "ui/test", "ui/vite.config.ts"]
 }

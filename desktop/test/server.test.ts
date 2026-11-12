@@ -483,6 +483,33 @@ test('with devOrigin, that origin is allowed and its websocket is in connect-src
   } finally { await s.close(); }
 });
 
+test('with devOrigin, /api/boot authenticated by the header also sets the cookie, so proxied media requests carry it', async () => {
+  const s = await startServer({ folder, port: 0, provider: fakeProvider(), uiDir, devOrigin: 'http://localhost:5173', log: () => {} });
+  try {
+    const h = { Host: `127.0.0.1:${s.port}` };
+    const boot = await request(s.port, 'GET', '/api/boot', { ...h, 'X-Hippo-Token': s.token, Origin: 'http://localhost:5173' });
+    assert.equal(boot.status, 200);
+    assert.equal(String(boot.headers['set-cookie']), `hippo_t=${s.token}; HttpOnly; SameSite=Strict; Path=/`);
+    // Only /api/boot, only by the header: a cookie-authenticated boot and other routes set nothing.
+    const byCookie = await request(s.port, 'GET', '/api/boot', { ...h, Cookie: `hippo_t=${s.token}` });
+    assert.equal(byCookie.status, 200);
+    assert.equal(byCookie.headers['set-cookie'], undefined);
+    const search = await request(s.port, 'POST', '/api/search', { ...h, 'X-Hippo-Token': s.token, 'Content-Type': 'application/json' }, '{}');
+    assert.equal(search.status, 200);
+    assert.equal(search.headers['set-cookie'], undefined);
+    const thumb = (search.json.items as DeskItem[]).find(i => i.thumb)!.thumb!;
+    const media = await request(s.port, 'GET', thumb, { ...h, Cookie: `hippo_t=${s.token}` });
+    assert.equal(media.status, 200);
+    assert.equal(media.headers['content-type'], 'image/jpeg');
+  } finally { await s.close(); }
+});
+
+test('without devOrigin, /api/boot sets no cookie', async () => {
+  const boot = await get('/api/boot');
+  assert.equal(boot.status, 200);
+  assert.equal(boot.headers['set-cookie'], undefined);
+});
+
 test('a taken port moves to the next free one', async () => {
   const blocker = net.createServer();
   await new Promise<void>(r => blocker.listen(0, '127.0.0.1', r));
