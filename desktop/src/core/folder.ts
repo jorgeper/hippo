@@ -50,7 +50,8 @@ export async function readCapture(folder: string, datePath: string, id: string):
   if (complete.schema_version !== 1) return { pending: 'unsupported version' };
   if (!Array.isArray(complete.files)) return { pending: 'incomplete' };
   for (const f of complete.files) {
-    const m = await matches(dir, f);
+    if (!isObject(f)) return { pending: 'unreadable manifest' };
+    const m = await matches(dir, f as { relative_path: string; byte_count: number; sha256: string });
     if (m.result === 'missing') return { pending: 'incomplete' };
     if (m.result === 'changed') return { pending: 'changed' };
   }
@@ -126,7 +127,9 @@ export async function scanFolder(folder: string): Promise<FolderScan> {
     for (const m of (await dirs(path.join(root, y))).filter(n => /^\d{2}$/.test(n)))
       for (const d of (await dirs(path.join(root, y, m))).filter(n => /^\d{2}$/.test(n)))
         for (const id of await dirs(path.join(root, y, m, d))) {
-          const r = await readCapture(folder, `${y}/${m}/${d}`, id);
+          let r: RawCapture | { pending: string };
+          // One corrupt capture never aborts the pass.
+          try { r = await readCapture(folder, `${y}/${m}/${d}`, id); } catch { r = { pending: 'unreadable manifest' }; }
           if ('pending' in r) pending.push({ id, reason: r.pending }); else captures.push(r);
         }
   const key = (c: RawCapture) => String(c.metadata.captured_at ?? '');

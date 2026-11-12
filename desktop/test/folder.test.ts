@@ -112,3 +112,12 @@ test('indexPath differs per folder and sits under HIPPO_DESK_HOME', () => {
   assert.equal(path.dirname(a), process.env.HIPPO_DESK_HOME);
   assert.match(path.basename(a), /^index-[0-9a-f]{12}\.sqlite$/);
 });
+
+test('a null entry in complete.json files is pending as unreadable manifest and the scan continues', async () => {
+  const f = copyFixtures();
+  const p = path.join(cap(f, 3), 'complete.json');
+  const j = JSON.parse(fs.readFileSync(p, 'utf8')); j.files = [null]; fs.writeFileSync(p, JSON.stringify(j));
+  const s = await scanFolder(f);
+  assert.equal(s.captures.length, 6);
+  assert.deepEqual(s.pending, [{ id: '00000000-0000-4000-8000-000000000003', reason: 'unreadable manifest' }]);
+});

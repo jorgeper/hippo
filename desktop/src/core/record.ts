@@ -70,7 +70,7 @@ function screenshotIds(c: RawCapture): Set<string> {
   return new Set(Array.isArray(items) ? items.filter(isObject).map(i => i.attachment_id).filter(nonBlank) : []);
 }
 
-function urlList(c: RawCapture): string[] {
+export function urlList(c: RawCapture): string[] {
   const urls = Array.isArray(c.metadata.urls) ? c.metadata.urls : [];
   return [...new Set(urls.map((u: unknown) => (isObject(u) && nonBlank(u.url) ? u.url.trim() : undefined)).filter(nonBlank))];
 }
@@ -164,15 +164,8 @@ function safePath(dir: string, rel: string): string | undefined {
   return r === '' || r.startsWith('..') || path.isAbsolute(r) ? undefined : full;
 }
 
-export async function buildRecord(c: RawCapture): Promise<CaptureRecord> {
-  const md = c.metadata;
-  const res = resolved(c);
-  const kind = deriveKind(c);
-  const lt = localTime(c);
-  const local_date = `${lt.y}-${pad(lt.mo)}-${pad(lt.d)}`;
-  const urls = urlList(c);
-
-  // Attachments, in metadata order. Audio beside a picture is a spoken comment on it.
+/** Attachments, in metadata order, with paths inside the capture directory. Audio beside a picture is a spoken comment on it. */
+export function attachmentRefs(c: RawCapture): AttachmentRef[] {
   const attachments: AttachmentRef[] = [];
   for (const a of rawAttachments(c)) {
     const full = safePath(c.dir, a.relative_path);
@@ -185,6 +178,23 @@ export async function buildRecord(c: RawCapture): Promise<CaptureRecord> {
   }
   if (attachments.some(a => a.type === 'picture'))
     for (const a of attachments) if (a.type === 'audio') a.isSpokenComment = true;
+  return attachments;
+}
+
+/** The capture's own local date and time ("2026-11-07", "09:07"), never the machine's zone. */
+export function localDateTime(c: RawCapture): { local_date: string; local_time: string } {
+  const lt = localTime(c);
+  return { local_date: `${lt.y}-${pad(lt.mo)}-${pad(lt.d)}`, local_time: `${pad(lt.h)}:${pad(lt.mi)}` };
+}
+
+export async function buildRecord(c: RawCapture): Promise<CaptureRecord> {
+  const md = c.metadata;
+  const res = resolved(c);
+  const kind = deriveKind(c);
+  const lt = localTime(c);
+  const local_date = `${lt.y}-${pad(lt.mo)}-${pad(lt.d)}`;
+  const urls = urlList(c);
+  const attachments = attachmentRefs(c);
 
   const transcriptOf = (id: string) => {
     const t = res.transcripts.get(id)?.text;

@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import type { EnrichmentDoc, Facet, RawCapture } from '../src/core/types.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -38,4 +40,28 @@ export function enrichmentDoc(layer: 'device' | 'server', facets: Record<string,
     out[k] = { version: 1, status: 'ok', generated_at: '2026-11-07T18:00:00.000Z', provenance: 'test', ...f };
   return { schema_version: 1, capture_id: '00000000-0000-4000-8000-0000000000aa', layer, package_digest: '0'.repeat(64),
     producer: { name: producer, version: '1', build: '1' }, generated_at: '2026-11-07T18:00:00.000Z', facets: out };
+}
+
+/** Relative path (forward slashes) -> sha256 of every file under `folder`. */
+export function snapshot(folder: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else out[path.relative(folder, full).split(path.sep).join('/')] = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+    }
+  };
+  walk(folder);
+  return out;
+}
+
+const ajv = new Ajv2020({ allErrors: true, strictTypes: false });
+// The format's timestamps: RFC 3339 UTC with milliseconds and Z.
+ajv.addFormat('date-time', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+const enrichmentSchema = ajv.compile(JSON.parse(fs.readFileSync(path.resolve(here, '../../schema/enrichment-v1.schema.json'), 'utf8')));
+
+/** Validates against schema/enrichment-v1.schema.json; returns the error list (empty when valid). */
+export function enrichmentErrors(doc: unknown): string[] {
+  return enrichmentSchema(doc) ? [] : (enrichmentSchema.errors ?? []).map(e => `${e.instancePath} ${e.message}`);
 }
