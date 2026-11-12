@@ -118,7 +118,7 @@ test('a failed write removes its temp file and the directories it made', async (
   fresh.serverPath = path.join(path.dirname(fresh.serverPath), '..', '..', '..', '..', '2030', '01', '02', fresh.id, 'enrichment.json');
   const serverRoot = path.resolve(fresh.serverPath, '../../../../..');
   const before = fs.readdirSync(serverRoot).sort();
-  t.mock.method(fsp, 'writeFile', async () => { throw new Error('disk full'); });
+  t.mock.method(fsp, 'open', async () => { throw new Error('disk full'); });
   await assert.rejects(writeServerDoc(fresh, doc), /disk full/);
   assert.deepEqual(fs.readdirSync(serverRoot).sort(), before);
 });

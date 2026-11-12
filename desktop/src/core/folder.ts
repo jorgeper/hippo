@@ -102,6 +102,7 @@ export async function readCapture(folder: string, datePath: string, id: string):
   if (sj.exists) {
     if (sj.error || !isObject(sj.value)) result.serverUnreadable = 'not valid JSON';
     else if (sj.value.schema_version !== 1) result.serverUnreadable = 'unsupported version';
+    else if (!isObject(sj.value.facets)) result.serverUnreadable = 'facets is not an object';
     else result.server = sj.value as EnrichmentDoc;
   }
   return result;

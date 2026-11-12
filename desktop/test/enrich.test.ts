@@ -9,6 +9,8 @@ import { enrichFolder } from '../src/enrich/enrich.ts';
 import { openFailureStore } from '../src/enrich/state.ts';
 import { fakeEnrichment, fakeProvider } from '../src/providers/fake.ts';
 import { ProviderError } from '../src/providers/types.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { indexPath } from '../src/core/paths.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 
 const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
@@ -189,16 +191,18 @@ test('a bad answer is a failure, not a write', async () => {
 
 test('usage_limit on the third call stops new calls and records no failure', async () => {
   const folder = copyFixtures();
+  const concurrency = 2;
   let calls = 0;
   const provider = fakeProvider(async req => {
     const n = ++calls;
-    await delay(10);
-    if (n === 3) throw new ProviderError('usage_limit', 'limit reached');
+    if (n === 3) { await delay(10); throw new ProviderError('usage_limit', 'limit reached'); }
+    if (n > 3) await delay(40);               // still in flight when the third call fails
     return fakeEnrichment(req);
   });
-  const r = await enrichFolder({ folder, provider, concurrency: 3, now });
+  const r = await enrichFolder({ folder, provider, concurrency, now });
   assert.equal(r.stoppedBy, 'usage_limit');
-  assert.ok(calls >= 3 && calls <= 3 + 3, `calls ${calls}`);
+  assert.ok(calls <= 3 + (concurrency - 1), `calls ${calls}`);
+  assert.ok(r.deferred >= 1, `deferred ${r.deferred}`);
   assert.equal(r.failed.length, 0);
   const store = openFailureStore(folder);
   assert.deepEqual(store.all(), []);
@@ -247,4 +251,98 @@ test('a document over 1 MiB is a failure, not a write', async () => {
   const r = await enrichFolder({ folder, now, provider: fakeProvider(req => ({ ...(fakeEnrichment(req) as object), summary: 'x'.repeat(1_100_000) })) });
   assert.equal(r.written, 0); assert.equal(r.failed.length, 5);
   assert.match(r.failed[0].reason, /1 MiB/);
+});
+
+test('a non-numeric concurrency falls back to 3 and still makes every call', async () => {
+  const folder = copyFixtures();
+  const r = await enrichFolder({ folder, provider: fakeProvider(), concurrency: NaN as number, now });
+  assert.equal(r.modelCalls, 5); assert.equal(r.written, 5);
+});
+
+const TEMP = '.enrichment.json.12345.0a1b2c3d.tmp';
+const age = (p: string, seconds: number) => { const t = new Date(Date.now() - seconds * 1000); fs.utimesSync(p, t, t); };
+
+test('a stale temp file is swept; enrichment.json beside it stays byte-identical', async () => {
+  const folder = copyFixtures();
+  const dir = path.dirname(serverDoc(folder, 2));
+  const before = fs.readFileSync(serverDoc(folder, 2));
+  fs.writeFileSync(path.join(dir, TEMP), '{"half":'); age(path.join(dir, TEMP), 120);
+  const r = await enrichFolder({ folder, noModel: true, now });
+  assert.equal(r.tempFilesRemoved, 1);
+  assert.deepEqual(fs.readdirSync(dir), ['enrichment.json']);
+  assert.deepEqual(fs.readFileSync(serverDoc(folder, 2)), before);
+});
+
+test('a fresh temp file and files that do not match the pattern are never touched', async () => {
+  const folder = copyFixtures();
+  const dir = path.dirname(serverDoc(folder, 2));
+  const others = ['enrichment.json.bak', '.enrichment.json.tmp', '.enrichment.json.777.ABCDEF01.tmp', 'x.enrichment.json.1.0a1b2c3d.tmp'];
+  for (const n of others) { fs.writeFileSync(path.join(dir, n), 'keep'); age(path.join(dir, n), 3600); }
+  fs.writeFileSync(path.join(dir, TEMP), 'in progress elsewhere');
+  const r = await enrichFolder({ folder, provider: fakeProvider(), now });
+  assert.equal(r.tempFilesRemoved, 0);
+  assert.deepEqual(fs.readdirSync(dir).sort(), [...others, TEMP, 'enrichment.json'].sort());
+});
+
+test('dryRun removes no temp file and lists it', async () => {
+  const folder = copyFixtures();
+  const dir = path.dirname(serverDoc(folder, 7));
+  fs.writeFileSync(path.join(dir, TEMP), ''); age(path.join(dir, TEMP), 120);
+  const before = snapshot(folder);
+  const r = await enrichFolder({ folder, dryRun: true, now });
+  assert.equal(r.tempFilesRemoved, 0);
+  assert.deepEqual(r.wouldRemove, [path.join(dir, TEMP)]);
+  assert.deepEqual(snapshot(folder), before);
+});
+
+test('an abort stops new calls and writes, lets the call in flight finish, records no failure', async () => {
+  const folder = copyFixtures();
+  const ac = new AbortController();
+  let calls = 0;
+  const provider = fakeProvider(req => { if (++calls === 2) ac.abort(); return fakeEnrichment(req); });
+  const r = await enrichFolder({ folder, provider, concurrency: 1, signal: ac.signal, now });
+  assert.equal(r.modelCalls, 2); assert.equal(calls, 2);
+  assert.equal(r.stoppedBy, 'interrupted');
+  assert.ok(r.deferred >= 1, `deferred ${r.deferred}`);
+  assert.equal(r.failed.length, 0);
+  assert.ok(Object.keys(snapshot(folder)).every(p => !p.endsWith('.tmp')));
+  const store = openFailureStore(folder);
+  assert.deepEqual(store.all(), []);
+  store.close();
+});
+
+test('an abort during the pass over captures that need no model stops further writes', async () => {
+  const folder = copyFixtures();
+  const ac = new AbortController(); ac.abort();
+  fs.rmSync(serverDoc(folder, 7));
+  const r = await enrichFolder({ folder, noModel: true, signal: ac.signal, now });
+  assert.equal(r.stoppedBy, 'interrupted'); assert.equal(r.written, 0);
+  assert.equal(fs.existsSync(serverDoc(folder, 7)), false);
+});
+
+test('a failures-table error is reported for that capture and never rejects the run', async () => {
+  const folder = copyFixtures();
+  let calls = 0;
+  const provider = fakeProvider(req => {
+    if (++calls === 1) {
+      const db = new DatabaseSync(indexPath(folder)); db.exec('DROP TABLE enrich_failures'); db.close();
+      throw new ProviderError('failed', 'boom');
+    }
+    return fakeEnrichment(req);
+  });
+  const r = await enrichFolder({ folder, provider, concurrency: 1, now });
+  assert.equal(r.modelCalls, 5); assert.equal(r.written, 4);
+  assert.equal(r.failed.length, 1);
+  assert.match(r.failed[0].reason, /boom/);
+  assert.match(r.failed[0].reason, /could not record/);
+  assert.ok(r.warnings.length >= 1 && r.warnings.every(w => /failures table/.test(w)), JSON.stringify(r.warnings));
+});
+
+test('a server document whose facets is not an object is reported and keeps its bytes', async () => {
+  const folder = copyFixtures();
+  const text = '{"schema_version":1,"layer":"server","facets":[]}';
+  fs.writeFileSync(serverDoc(folder, 2), text);
+  const r = await enrichFolder({ folder, provider: fakeProvider(), now });
+  assert.deepEqual(r.failed, [{ id: id(2), reason: 'existing server document is unreadable' }]);
+  assert.equal(fs.readFileSync(serverDoc(folder, 2), 'utf8'), text);
 });

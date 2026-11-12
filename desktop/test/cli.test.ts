@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { copyFixtures } from './helpers.ts';
+import { copyFixtures, snapshot } from './helpers.ts';
 
 const bin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../bin/hippo.mjs');
 const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hippo-home-'));
@@ -52,4 +52,51 @@ test('hippo enrich exits 3 and says how far it got when the provider is unavaila
   assert.match(r.stderr, /Stopped early \(unavailable\): the claude command was not found on PATH/);
   assert.match(r.stderr, /Got through \d+ of 7 captures/);
   assert.equal(fs.existsSync(path.join(folder, 'enrichments/server/2026/11/07/00000000-0000-4000-8000-000000000001')), false);
+});
+
+const posix = process.platform !== 'win32';
+
+/** A PATH holding a `claude` stub that answers after `seconds` with a valid enrichment. */
+function slowClaude(seconds: number): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hippo-slow-claude-'));
+  const answer = JSON.stringify({ type: 'result', is_error: false, structured_output: { title: 'Slow answer', summary: 'Slow.',
+    image_descriptions: [], tags: ['slow'], topic: 'slow', people: [], keywords: [] } });
+  fs.writeFileSync(path.join(dir, 'claude'), `#!/bin/sh\ncat > /dev/null\nsleep ${seconds}\nprintf '%s' '${answer}'\n`, { mode: 0o755 });
+  return dir + path.delimiter + (process.env.PATH ?? '');
+}
+
+function runUntil(args: string[], env: Record<string, string>, onOut: (child: ReturnType<typeof spawn>, out: string) => void):
+  Promise<{ code: number | null; stdout: string; stderr: string; ms: number }> {
+  return new Promise(resolve => {
+    const t0 = Date.now();
+    const child = spawn(process.execPath, [bin, ...args], { env: { ...process.env, ...env } });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', d => { stdout += d; onOut(child, stdout); });
+    child.stderr.on('data', d => { stderr += d; onOut(child, stdout); });
+    child.on('close', code => resolve({ code, stdout, stderr, ms: Date.now() - t0 }));
+  });
+}
+
+test('SIGINT stops after the calls in flight, prints the summary and exits 130', { skip: !posix }, async () => {
+  const folder = copyFixtures();
+  const h = home();
+  let sent = false;
+  const r = await runUntil(['enrich', '--folder', folder, '--provider', 'claude-cli'], { HIPPO_DESK_HOME: h, PATH: slowClaude(1) },
+    (child, out) => { if (!sent && / written$/m.test(out)) { sent = true; child.kill('SIGINT'); } });
+  assert.equal(r.code, 130, r.stderr);
+  assert.match(r.stderr, /stopping after the calls in flight/);
+  assert.match(r.stdout, /^7 captures · \d model calls · \d written · \d unchanged · 0 failed · \d left for the next run$/m);
+  assert.ok(Object.keys(snapshot(folder)).every(p => !p.endsWith('.tmp')));
+  const env = { ...process.env, HIPPO_DESK_HOME: h };
+  const rows = spawnSync(process.execPath, ['-e', `const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync(process.argv[1]);console.log(d.prepare('SELECT COUNT(*) AS n FROM enrich_failures').get().n)`, path.join(h, fs.readdirSync(h).find(n => n.endsWith('.sqlite'))!)], { encoding: 'utf8', env });
+  assert.equal(rows.stdout.trim(), '0');
+});
+
+test('a second signal exits at once', { skip: !posix }, async () => {
+  const folder = copyFixtures();
+  let sent = 0;
+  const r = await runUntil(['enrich', '--folder', folder, '--provider', 'claude-cli'], { HIPPO_DESK_HOME: home(), PATH: slowClaude(5) },
+    child => { if (sent++ === 0) setTimeout(() => { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGTERM'), 200); }, 1000); });
+  assert.equal(r.code, 130, r.stderr);
+  assert.ok(r.ms < 4000, `took ${r.ms} ms`);
 });

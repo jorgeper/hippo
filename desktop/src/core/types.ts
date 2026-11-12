@@ -14,6 +14,6 @@ export interface RawCapture {
   comments: CommentFile[];               // sorted by added_at
   device?: EnrichmentDoc; deviceDir?: string;   // deviceDir holds verified assets
   server?: EnrichmentDoc; serverPath: string;   // where the server document is or would be
-  serverUnreadable?: string;             // set when a server file exists and cannot be parsed or is not schema_version 1
+  serverUnreadable?: string;             // set when a server file exists and cannot be parsed, is not schema_version 1, or has no facets object
 }
 export interface FolderScan { captures: RawCapture[]; pending: { id: string; reason: string }[] }

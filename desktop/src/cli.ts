@@ -33,10 +33,28 @@ async function enrich(args: string[]): Promise<number> {
   const provider = noModel ? undefined : makeProvider(values.provider ?? config.provider);
   const model = values.model ?? config.enrichModel;
 
-  const started = Date.now();
-  const r = await enrichFolder({ folder, provider, model, noModel, dryRun, limit, concurrency: config.concurrency,
-    onProgress: e => { if (e.what !== 'unchanged') process.stdout.write(`${e.id}  ${e.what}\n`); } });
+  // First SIGINT or SIGTERM: finish the calls in flight, then stop. A second one exits at once.
+  const ac = new AbortController();
+  const onSignal = () => {
+    if (ac.signal.aborted) process.exit(130);
+    process.stderr.write('Interrupted: stopping after the calls in flight… (again to quit now)\n');
+    ac.abort();
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
 
+  const started = Date.now();
+  let r;
+  try {
+    r = await enrichFolder({ folder, provider, model, noModel, dryRun, limit, concurrency: config.concurrency, signal: ac.signal,
+      onProgress: e => { if (e.what !== 'unchanged') process.stdout.write(`${e.id}  ${e.what}\n`); } });
+  } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+  }
+
+  for (const p of r.wouldRemove) process.stdout.write(`would remove leftover temp file ${p}\n`);
+  for (const w of r.warnings) process.stderr.write(`warning: ${w}\n`);
   if (dryRun) {
     process.stdout.write(`Dry run: would call the model for ${r.wouldCall.length} captures and write ${r.wouldWrite.length} documents. Nothing was written.\n`);
   }
@@ -44,12 +62,13 @@ async function enrich(args: string[]): Promise<number> {
   if (r.pending) parts.push(`${r.pending} pending`);
   if (r.skippedAfterRetries) parts.push(`${r.skippedAfterRetries} skipped after ${MAX_ATTEMPTS} failures`);
   if (r.deferred) parts.push(`${r.deferred} left for the next run`);
+  if (r.tempFilesRemoved) parts.push(`${r.tempFilesRemoved} leftover temp files removed`);
   process.stdout.write(parts.join(' · ') + '\n');
   process.stdout.write(`Took ${((Date.now() - started) / 1000).toFixed(1)} s.\n`);
   if (r.stoppedBy) {
     process.stderr.write(`Stopped early (${r.stoppedBy}): ${r.stopReason ?? ''}\n`
       + `Got through ${r.written + r.unchanged + r.failed.length} of ${r.captures} captures; run hippo enrich again later to continue.\n`);
-    return 3;
+    return r.stoppedBy === 'interrupted' ? 130 : 3;
   }
   return 0;
 }
@@ -58,14 +77,16 @@ const commands: Record<string, Command> = { enrich };
 
 const [name, ...args] = process.argv.slice(2);
 const run = name !== undefined && Object.hasOwn(commands, name) ? commands[name] : undefined;
+// Exit codes are set, not forced, so piped output is never cut off.
 if (!run) {
   process.stderr.write(usage);
-  process.exit(2);
-}
-try {
-  process.exit((await run(args)) ?? 0);
-} catch (e) {
-  process.stderr.write(`hippo ${name}: ${(e as Error).message}\n`);
-  if (e instanceof UsageError) process.stderr.write(usage);
-  process.exit(e instanceof UsageError ? 2 : 1);
+  process.exitCode = 2;
+} else {
+  try {
+    process.exitCode = (await run(args)) ?? 0;
+  } catch (e) {
+    process.stderr.write(`hippo ${name}: ${(e as Error).message}\n`);
+    if (e instanceof UsageError) process.stderr.write(usage);
+    process.exitCode = e instanceof UsageError ? 2 : 1;
+  }
 }

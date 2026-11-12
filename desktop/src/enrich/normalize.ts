@@ -49,7 +49,7 @@ export function normalize(raw: unknown, c: RawCapture, knownTopics: string[]): M
 
   const atts = attachmentRefs(c);
   const pictureIds = new Set(atts.filter(a => a.type === 'picture' && UUID.test(a.id)).map(a => a.id));
-  const sources = new Set([...TEXT_SOURCES, ...atts.map(a => a.id), ...c.comments.map(k => k.id)]);
+  const sources = new Set([...TEXT_SOURCES, ...atts.map(a => a.id), ...c.comments.map(k => k.id)].filter(id => id.trim() !== ''));
 
   const tags: string[] = [];
   for (const v of list(raw.tags)) {

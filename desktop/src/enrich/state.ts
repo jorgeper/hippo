@@ -31,12 +31,12 @@ export function openFailureStore(folder: string, opts: { readOnly?: boolean } = 
   let db: DatabaseSync;
   if (opts.readOnly) {
     if (!fs.existsSync(file)) return emptyStore();
-    db = new DatabaseSync(file, { readOnly: true });
+    db = new DatabaseSync(file, { readOnly: true, timeout: 5000 });
     const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'enrich_failures'`).get();
     if (!has) { db.close(); return emptyStore(); }
   } else {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    db = new DatabaseSync(file);
+    db = new DatabaseSync(file, { timeout: 5000 });
     db.exec(SCHEMA);
   }
   const row = (r: unknown): FailureRow | undefined => (r ? { ...(r as FailureRow) } : undefined);

@@ -82,3 +82,10 @@ test('a non-object answer returns undefined', () => {
 test('a blank summary is omitted', () => {
   assert.equal(run({ ...base, summary: ' ' }, cap(7)).summary, undefined);
 });
+
+test('a blank comment id is never an allowed source', () => {
+  const c = structuredClone(cap(7));
+  c.comments = [{ id: '', added_at: '2026-11-07T18:00:00.000Z', text: 'Ana said hi.' }];
+  const v = run({ ...base, people: [{ name: 'Ana', source: '' }] }, c);
+  assert.deepEqual(v.people, []);
+});

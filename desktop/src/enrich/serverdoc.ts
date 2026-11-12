@@ -100,7 +100,8 @@ export async function writeServerDoc(c: RawCapture, doc: EnrichmentDoc): Promise
   const created = await fs.mkdir(dir, { recursive: true });       // the first directory this call made, if any
   const tmp = path.join(dir, `.enrichment.json.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
   try {
-    await fs.writeFile(tmp, bytes, { flag: 'wx' });
+    const fh = await fs.open(tmp, 'wx');
+    try { await fh.writeFile(bytes); await fh.sync(); } finally { await fh.close(); }
     await fs.rename(tmp, c.serverPath);
   } catch (e) {
     await fs.rm(tmp, { force: true });
@@ -113,4 +114,29 @@ export async function writeServerDoc(c: RawCapture, doc: EnrichmentDoc): Promise
     }
     throw e;
   }
+}
+
+/** Exactly the temp names `writeServerDoc` makes: `.enrichment.json.<pid>.<8 hex>.tmp`. */
+export const TEMP_NAME = /^\.enrichment\.json\.\d+\.[0-9a-f]{8}\.tmp$/;
+/** A temp file younger than this may belong to another `hippo enrich` running right now. */
+export const TEMP_MIN_AGE_MS = 60_000;
+
+/** Temp files a killed run left in the capture's server directory: older than a minute and named exactly like ours.
+ *  Removes them unless `dryRun`; returns their paths. Nothing else is ever deleted. */
+export async function sweepTempFiles(c: RawCapture, opts: { dryRun?: boolean; nowMs?: number } = {}): Promise<string[]> {
+  const dir = path.dirname(c.serverPath);
+  let names: string[];
+  try { names = await fs.readdir(dir); } catch { return []; }
+  const nowMs = opts.nowMs ?? Date.now();
+  const found: string[] = [];
+  for (const n of names.filter(n => TEMP_NAME.test(n))) {
+    const p = path.join(dir, n);
+    try {
+      const st = await fs.lstat(p);
+      if (!st.isFile() || nowMs - st.mtimeMs <= TEMP_MIN_AGE_MS) continue;
+      if (!opts.dryRun) await fs.rm(p);
+      found.push(p);
+    } catch { /* gone already, or not removable: leave it */ }
+  }
+  return found;
 }

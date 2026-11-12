@@ -121,3 +121,14 @@ test('a null entry in complete.json files is pending as unreadable manifest and 
   assert.equal(s.captures.length, 6);
   assert.deepEqual(s.pending, [{ id: '00000000-0000-4000-8000-000000000003', reason: 'unreadable manifest' }]);
 });
+
+test('a server document whose facets is not an object is unreadable', async () => {
+  const f = copyFixtures();
+  for (const facets of ['[]', 'null', '"x"', undefined]) {
+    const doc = facets === undefined ? '{"schema_version":1,"layer":"server"}' : `{"schema_version":1,"layer":"server","facets":${facets}}`;
+    fs.writeFileSync(path.join(f, 'enrichments/server/2026/11/07/00000000-0000-4000-8000-000000000002/enrichment.json'), doc);
+    const c2 = (await scanFolder(f)).captures[1];
+    assert.equal(c2.serverUnreadable, 'facets is not an object', doc);
+    assert.equal(c2.server, undefined);
+  }
+});
