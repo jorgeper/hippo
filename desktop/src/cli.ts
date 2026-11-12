@@ -1,10 +1,15 @@
+import fs from 'node:fs';
 import { parseArgs } from 'node:util';
-import { loadConfig, resolveFolder } from './core/paths.ts';
-import { makeProvider } from './providers/index.ts';
-import { enrichFolder } from './enrich/enrich.ts';
+import { indexPath, loadConfig, resolveFolder } from './core/paths.ts';
 import { MAX_ATTEMPTS } from './enrich/state.ts';
-import { buildIndex, markEnriched, status } from './index/build.ts';
 import type { IndexReport } from './index/build.ts';
+import { openIndex } from './index/db.ts';
+import type { IndexDb } from './index/db.ts';
+import { facets, matchIds, mediaOf, search, show } from './recall/engine.ts';
+import { formatFacets, formatRecord, formatSearch } from './recall/format.ts';
+import { validateSpec } from './recall/spec.ts';
+// The enricher, the providers and the index builder (with its image libraries) are loaded only by the commands that use them,
+// so search, show and facets never load a provider.
 
 const usage = `Usage: hippo <command> [options]
 
@@ -15,14 +20,29 @@ Commands:
          Builds or updates the local index and thumbnails. No model, nothing written to the folder.
   status [--folder <path>]
          Counts by kind, how many are enriched, pending captures, failures, last runs.
+  search [--folder <path>] [--json] [filters] | --spec '<json>'
+         Filters (each repeatable or comma-separated): --kind --tag --topic --person --site --locality --circumstance --has
+         --weekday --part-of-day; and --text "<words>" --phrase "<exact phrase>" --from YYYY-MM-DD --to YYYY-MM-DD
+         --near lat,lon,radius_m --min-confidence low|medium|high --sort newest|oldest|relevance --limit n
+  show   <id or id prefix of 8+ characters> [--folder <path>] [--json]
+         Everything about one capture, with every file path.
+  facets [--folder <path>] [--json]
+         The vocabulary: kinds, topics, tags, people, sites, localities, circumstances, date range.
 `;
 
 class UsageError extends Error {}
 
 type Command = (args: string[]) => Promise<number | void> | number | void;
 
-function parse<T extends Record<string, { type: 'string' | 'boolean' }>>(args: string[], options: T) {
+type Options = Record<string, { type: 'string' | 'boolean'; multiple?: boolean }>;
+
+function parse<T extends Options>(args: string[], options: T) {
   try { return parseArgs({ args, strict: true, allowPositionals: false, options }).values; }
+  catch (e) { throw new UsageError((e as Error).message); }
+}
+
+function parseWithPositionals<T extends Options>(args: string[], options: T) {
+  try { return parseArgs({ args, strict: true, allowPositionals: true, options }); }
   catch (e) { throw new UsageError((e as Error).message); }
 }
 
@@ -34,6 +54,9 @@ function printIndexReport(r: IndexReport): void {
 }
 
 async function enrich(args: string[]): Promise<number> {
+  const { makeProvider } = await import('./providers/index.ts');
+  const { enrichFolder } = await import('./enrich/enrich.ts');
+  const { buildIndex, markEnriched } = await import('./index/build.ts');
   const values = parse(args, {
     folder: { type: 'string' }, 'no-model': { type: 'boolean' }, 'dry-run': { type: 'boolean' },
     limit: { type: 'string' }, provider: { type: 'string' }, model: { type: 'string' } });
@@ -99,6 +122,7 @@ async function enrich(args: string[]): Promise<number> {
 }
 
 async function index(args: string[]): Promise<number> {
+  const { buildIndex } = await import('./index/build.ts');
   const values = parse(args, { folder: { type: 'string' }, rebuild: { type: 'boolean' } });
   const folder = resolveFolder(values.folder);
   const r = await buildIndex(folder, { rebuild: values.rebuild === true });
@@ -106,7 +130,8 @@ async function index(args: string[]): Promise<number> {
   return 0;
 }
 
-function statusCommand(args: string[]): number {
+async function statusCommand(args: string[]): Promise<number> {
+  const { status } = await import('./index/build.ts');
   const values = parse(args, { folder: { type: 'string' } });
   const s = status(resolveFolder(values.folder));
   const out = [`Folder: ${s.folder}`];
@@ -122,7 +147,105 @@ function statusCommand(args: string[]): number {
   return 0;
 }
 
-const commands: Record<string, Command> = { enrich, index, status: statusCommand };
+// ---- recall: search, show, facets. Read the index only; no model, no network, nothing written to the folder. ----
+
+/** The folder's index, which must exist already: these commands never build one. */
+function openExistingIndex(flag: string | undefined): IndexDb {
+  const folder = resolveFolder(flag);
+  if (!fs.existsSync(indexPath(folder))) throw new Error(`no index for ${folder} yet: run hippo index first.`);
+  return openIndex(folder);
+}
+
+/** Repeatable flags that also take comma-separated values. */
+const listOf = (v: string[] | undefined) => v?.flatMap(x => x.split(',')).map(x => x.trim()).filter(x => x !== '');
+
+const FILTER_FLAGS = ['kind', 'tag', 'topic', 'person', 'site', 'locality', 'circumstance', 'has', 'text', 'phrase', 'from', 'to',
+  'weekday', 'part-of-day', 'near', 'min-confidence', 'sort', 'limit'] as const;
+
+function searchCommand(args: string[]): number {
+  const many = { type: 'string', multiple: true } as const, one = { type: 'string' } as const;
+  const values = parse(args, {
+    folder: one, json: { type: 'boolean' }, spec: one,
+    kind: many, tag: many, topic: many, person: many, site: many, locality: many, circumstance: many, has: many,
+    text: many, phrase: many, from: one, to: one, weekday: many, 'part-of-day': many, near: one, 'min-confidence': one, sort: one, limit: one });
+
+  let raw: Record<string, unknown> = {};
+  if (values.spec !== undefined) {
+    const mixed = FILTER_FLAGS.filter(f => values[f] !== undefined);
+    if (mixed.length) throw new UsageError(`--spec cannot be combined with ${mixed.map(f => `--${f}`).join(', ')}; put everything in the spec`);
+    try { raw = JSON.parse(values.spec); } catch (e) { throw new UsageError(`--spec is not valid JSON: ${(e as Error).message}`); }
+  } else {
+    const put = (key: string, v: unknown) => { if (v !== undefined) raw[key] = v; };
+    put('kinds', listOf(values.kind)); put('tags', listOf(values.tag)); put('topics', listOf(values.topic));
+    put('people', listOf(values.person)); put('sites', listOf(values.site)); put('has', listOf(values.has));
+    const text = [...(values.text ?? []).flatMap(t => t.split(/\s+/)).filter(w => w !== ''), ...(values.phrase ?? [])];
+    if (text.length) raw.text = text;
+    const time: Record<string, unknown> = {};
+    if (values.from !== undefined) time.from = values.from;
+    if (values.to !== undefined) time.to = values.to;
+    if (values.weekday) time.weekdays = listOf(values.weekday);
+    if (values['part-of-day']) time.parts_of_day = listOf(values['part-of-day']);
+    if (Object.keys(time).length) raw.time = time;
+    const place: Record<string, unknown> = {};
+    if (values.locality) place.localities = listOf(values.locality);
+    if (values.near !== undefined) {
+      const parts = values.near.split(',').map(x => x.trim());
+      const nums = parts.map(Number);
+      if (parts.length !== 3 || parts.some(x => x === '') || nums.some(n => !Number.isFinite(n)))
+        throw new UsageError('place.near: --near takes lat,lon,radius_m (for example 38.7223,-9.1393,500)');
+      place.near = { lat: nums[0], lon: nums[1], radius_m: nums[2] };
+    }
+    if (Object.keys(place).length) raw.place = place;
+    if (values['min-confidence'] !== undefined && !values.circumstance) throw new UsageError('--min-confidence needs --circumstance');
+    if (values.circumstance) {
+      raw.circumstances = { labels: listOf(values.circumstance),
+        ...(values['min-confidence'] !== undefined ? { min_confidence: values['min-confidence'] } : {}) };
+    }
+    put('sort', values.sort);
+    if (values.limit !== undefined) raw.limit = /^\d+$/.test(values.limit) ? Number(values.limit) : values.limit;
+  }
+  const checked = validateSpec(raw);
+  if (!checked.ok) throw new UsageError(checked.errors.join('\n'));
+
+  const db = openExistingIndex(values.folder);
+  try {
+    const result = search(db, checked.spec);
+    process.stdout.write(values.json ? JSON.stringify(result, null, 2) + '\n' : formatSearch(result));
+  } finally { db.close(); }
+  return 0;
+}
+
+function showCommand(args: string[]): number {
+  const { values, positionals } = parseWithPositionals(args, { folder: { type: 'string' }, json: { type: 'boolean' } });
+  if (positionals.length !== 1) throw new UsageError('show takes exactly one capture id');
+  const db = openExistingIndex(values.folder);
+  try {
+    const ids = matchIds(db, positionals[0]);
+    if (ids.length > 1) {
+      process.stderr.write(`hippo show: ${positionals[0]} matches ${ids.length >= 10 ? '10 or more' : ids.length} captures; give more of the id.\n`);
+      return 1;
+    }
+    const record = ids.length === 1 ? show(db, ids[0]) : undefined;
+    if (!record) {
+      process.stderr.write(`hippo show: no capture with id ${positionals[0]} (a prefix needs at least 8 characters).\n`);
+      return 1;
+    }
+    process.stdout.write(values.json ? JSON.stringify(record, null, 2) + '\n' : formatRecord(record, mediaOf(db, record.id)));
+  } finally { db.close(); }
+  return 0;
+}
+
+function facetsCommand(args: string[]): number {
+  const values = parse(args, { folder: { type: 'string' }, json: { type: 'boolean' } });
+  const db = openExistingIndex(values.folder);
+  try {
+    const f = facets(db);
+    process.stdout.write(values.json ? JSON.stringify(f, null, 2) + '\n' : formatFacets(f));
+  } finally { db.close(); }
+  return 0;
+}
+
+const commands: Record<string, Command> = { enrich, index, status: statusCommand, search: searchCommand, show: showCommand, facets: facetsCommand };
 
 const [name, ...args] = process.argv.slice(2);
 const run = name !== undefined && Object.hasOwn(commands, name) ? commands[name] : undefined;
