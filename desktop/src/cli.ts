@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { indexPath, loadConfig, resolveFolder } from './core/paths.ts';
 import { MAX_ATTEMPTS } from './enrich/state.ts';
@@ -28,6 +29,8 @@ Commands:
          Everything about one capture, with every file path.
   facets [--folder <path>] [--json]
          The vocabulary: kinds, topics, tags, people, sites, localities, circumstances, date range.
+  sample --out <dir> [--count 300] [--seed 1] [--end YYYY-MM-DD]
+         Writes a new folder of invented captures, already enriched, to try index, search and the desk on.
 `;
 
 class UsageError extends Error {}
@@ -245,7 +248,27 @@ function facetsCommand(args: string[]): number {
   return 0;
 }
 
-const commands: Record<string, Command> = { enrich, index, status: statusCommand, search: searchCommand, show: showCommand, facets: facetsCommand };
+async function sampleCommand(args: string[]): Promise<number> {
+  const { writeSample } = await import('./index/sample.ts');
+  const values = parse(args, { out: { type: 'string' }, count: { type: 'string' }, seed: { type: 'string' }, end: { type: 'string' } });
+  if (values.out === undefined) throw new UsageError('sample needs --out <dir> (a new or empty directory)');
+  const whole = (flag: string, v: string | undefined) => {
+    if (v === undefined) return undefined;
+    if (!/^\d+$/.test(v) || !Number.isSafeInteger(Number(v))) throw new UsageError(`--${flag} takes a whole number`);
+    return Number(v);
+  };
+  const count = whole('count', values.count), seed = whole('seed', values.seed);
+  if (values.end !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(values.end)) throw new UsageError('--end takes a date YYYY-MM-DD');
+  const started = Date.now();
+  const out = path.resolve(values.out);
+  const r = await writeSample({ out, count, seed, end: values.end });
+  process.stdout.write(`Wrote ${r.captures} invented capture${r.captures === 1 ? '' : 's'} to ${out} in ${((Date.now() - started) / 1000).toFixed(1)} s.\n`
+    + `Next: hippo index --folder ${JSON.stringify(out)}, then hippo search or hippo facets.\n`);
+  return 0;
+}
+
+const commands: Record<string, Command> = { enrich, index, status: statusCommand, search: searchCommand, show: showCommand, facets: facetsCommand,
+  sample: sampleCommand };
 
 const [name, ...args] = process.argv.slice(2);
 const run = name !== undefined && Object.hasOwn(commands, name) ? commands[name] : undefined;

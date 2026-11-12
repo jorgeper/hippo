@@ -39,8 +39,9 @@ hippo search --text "banana" --kind link
 | `hippo search [filters] [--json]` | Finds captures. See [Search](#search). |
 | `hippo show <id> [--json]` | Everything about one capture: every field, the evidence behind each circumstance, and the absolute path of every file (originals, comment audio, thumbnails). Takes a whole id or a unique prefix of 8 or more characters. |
 | `hippo facets [--json]` | The vocabulary: kinds with counts, every topic, tag, person, site, locality and circumstance label with counts, and the date range. |
+| `hippo sample --out <dir> [--count 300] [--seed 1] [--end YYYY-MM-DD]` | Writes a new folder of invented captures, already enriched. See [The sample folder](#the-sample-folder). |
 
-Every command takes `--folder <path>`; without it the remembered folder is used. Exit code 2 means a usage error (an unknown flag or a bad value, named in the message).
+Every command except `sample` takes `--folder <path>`; without it the remembered folder is used. Exit code 2 means a usage error (an unknown flag or a bad value, named in the message).
 
 `search`, `show` and `facets` read the index only. They call no model, need no network and write nothing. They need an index: run `hippo index` (or `hippo enrich`) first.
 
@@ -62,6 +63,20 @@ A search is a spec: fields combine with AND, values within a field with OR, exce
 | `limit` | `--limit` | 1 to 5000, default 500 |
 
 List flags are repeatable or comma-separated (`--kind link,video`). The same search as JSON: `hippo search --spec '{"kinds":["link"],"sites":["youtube.com"],"time":{"from":"2026-11-02","to":"2026-11-08"}}'`; `--spec` is not mixed with filter flags. `--json` prints `{"total": n, "items": [...]}`, where `total` counts every match before the limit and each item is the full capture record.
+
+## The sample folder
+
+`hippo sample` writes a complete Hippo folder of invented captures, so you can try `hippo index`, `hippo search`, `hippo facets` and later the desk without a phone or a real folder. Everything in it is made up: the notes, transcripts, titles and channels, six first names, the neighbourhood names. Links use real well-known sites (YouTube, news, recipe, shop and map sites) with invented paths and ids; locations are public places in Lisbon (squares, gardens, viewpoints).
+
+```sh
+hippo sample --out ~/hippo-sample              # 300 captures over the 42 days ending today
+hippo index --folder ~/hippo-sample
+hippo search --site youtube.com --circumstance in_car
+```
+
+What it makes: links (a third of them YouTube, some shorts), photos and screenshots drawn from simple shapes, typed notes, short voice recordings with transcripts, videos and files, in `Europe/Lisbon` time, with the phone's context signals (audio route, motion, speed, weather) and comments. It writes the device enrichment and the server enrichment `hippo enrich` would write (display, summary, tags, picture descriptions, people, circumstances and `hippo_desk_state`), so `hippo enrich` on it calls no model and writes nothing. The same `--seed`, `--count` and `--end` give a byte-identical folder.
+
+`--out` must be a new or empty directory. It refuses a directory inside a Hippo folder (one with `captures/`) and inside this repository's `fixtures/`.
 
 ## Recall from a coding agent
 

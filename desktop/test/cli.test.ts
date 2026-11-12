@@ -280,3 +280,19 @@ registerHooks({ resolve(s, c, next) { const r = next(s, c); if (r.url.includes('
   }
   assert.deepEqual(snapshot(folder), before);
 });
+
+test('hippo sample writes a folder that hippo index reads in full; --out is required; a non-empty --out is refused', () => {
+  const env = { HIPPO_DESK_HOME: home() };
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'hippo-sample-cli-')), 'sample');
+  const r = hippo(['sample', '--out', out, '--count', '12', '--seed', '3', '--end', '2026-11-12'], env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^Wrote 12 invented captures to /m);
+  const idx = hippo(['index', '--folder', out], env);
+  assert.equal(idx.status, 0, idx.stderr);
+  assert.match(idx.stdout, /^Index: 12 captures · 12 added/m);
+  assert.match(hippo(['status'], env).stdout, /^Enriched: 12 of 12$/m);
+  const missing = hippo(['sample', '--count', '5'], env);
+  assert.equal(missing.status, 2); assert.match(missing.stderr, /--out/);
+  const again = hippo(['sample', '--out', out], env);
+  assert.equal(again.status, 1); assert.match(again.stderr, /not empty/);
+});
