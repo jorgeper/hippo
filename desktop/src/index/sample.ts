@@ -14,7 +14,7 @@ import type { Kind } from '../core/types.ts';
 import { inputDigest } from '../enrich/digest.ts';
 import { normalize } from '../enrich/normalize.ts';
 import { picturesToSend } from '../enrich/prompt.ts';
-import { composeServerDoc, writeServerDoc } from '../enrich/serverdoc.ts';
+import { composeServerDoc, stableJson, writeServerDoc } from '../enrich/serverdoc.ts';
 import { CLIPS, FILES, LINK_NOTES, LOCALITY, NAMES, NOTES, ONE_NAME, PAGES, PHOTOS, PLACES, SCREENS, STOPWORDS, TEXT_COMMENTS,
   TOPIC_COLORS, TRANSCRIPTS, TWO_NAMES, VOICE_COMMENTS, YOUTUBE_SHORTS, YOUTUBE_VIDEOS, ZONE } from './sample-data.ts';
 import type { ClipItem, FileItem, PageItem, PhotoItem, ScreenItem, TextItem, VideoItem } from './sample-data.ts';
@@ -112,14 +112,8 @@ function todayLocal(): string {
 
 // ---- stable files ----
 
-function isObject(v: unknown): v is Record<string, unknown> { return typeof v === 'object' && v !== null && !Array.isArray(v); }
-function sortKeys(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(sortKeys);
-  if (isObject(v)) return Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])]));
-  return v;
-}
-/** Keys sorted, two-space indent, trailing newline: the same bytes every time. */
-const json = (v: unknown) => Buffer.from(JSON.stringify(sortKeys(v), null, 2) + '\n', 'utf8');
+/** The server writer's stable JSON (sorted keys, two-space indent), for every JSON file in the sample. */
+const json = (v: unknown) => Buffer.from(stableJson(v), 'utf8');
 const sha256 = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
 
 // ---- the plan ----
@@ -528,7 +522,7 @@ function scene(name: PhotoItem['scene'], r: Rng): string {
 
 const SW = 1170, SH = 2532;
 
-function screen(item: ScreenItem, name: string | undefined, time: string, dark: boolean, r: Rng): { svg: string; lines: string[] } {
+export function screen(item: ScreenItem, name: string | undefined, time: string, dark: boolean, r: Rng): { svg: string; lines: string[] } {
   const fill = (s: string) => s.replace('{a}', name ?? NAMES[0]);
   const bg = dark ? '#121214' : '#f2f2f7', fg = dark ? '#f2f2f2' : '#1c1c1e', card = dark ? '#1f1f23' : '#ffffff', soft = dark ? '#2c2c2e' : '#e5e5ea';
   const heading = fill(item.heading), rows = item.rows.map(fill);
@@ -555,7 +549,7 @@ function screen(item: ScreenItem, name: string | undefined, time: string, dark: 
     const sx = int(r, 150, 400), sy = int(r, 1700, 1900), px = int(r, 750, 1000), py = int(r, 900, 1150);
     body += `<polyline points="${sx},${sy} ${sx},${py + 300} ${px},${py + 300} ${px},${py + 60}" fill="none" stroke="#1e88e5" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>`
       + `<circle cx="${sx}" cy="${sy}" r="30" fill="#ffffff" stroke="#1e88e5" stroke-width="12"/>`
-      + `<path d="M ${px} ${py + 70} L ${px - 50} ${py - 10} A 58 58 0 1 1 ${px + 50} ${py - 10} Z" fill="#e53935"/><circle cx="${px}" cy="${py - 40}" r="22" fill="#ffffff"/>`;
+      + `<path d="M ${px} ${py + 70} L ${px - 50} ${py - 10} A 58 58 0 1 1 ${px + 50} ${py - 10} Z" fill="${item.color}"/><circle cx="${px}" cy="${py - 40}" r="22" fill="#ffffff"/>`;
     rows.forEach((row, i) => { body += `<rect x="50" y="${2050 + i * 140}" width="1070" height="120" rx="30" fill="${card}"/>` + text(110, 2128 + i * 140, 56, fg, row); });
   } else {
     rows.forEach((row, i) => {
@@ -576,7 +570,9 @@ function screen(item: ScreenItem, name: string | undefined, time: string, dark: 
 
 const TW = 480, TH = 270;
 
-function linkThumb(c: Extract<Content, { kind: 'link' }>, r: Rng): string {
+export type LinkContent = Extract<Content, { kind: 'link' }>;
+
+export function linkThumb(c: LinkContent, r: Rng): string {
   const topic = c.video?.topic ?? c.page!.topic;
   const color = TOPIC_COLORS[topic];
   const title = c.video?.title ?? c.page!.title;
@@ -584,7 +580,7 @@ function linkThumb(c: Extract<Content, { kind: 'link' }>, r: Rng): string {
     const lines = wrap(title, 11, 4);
     let body = `<rect width="${TW}" height="${TH}" fill="#111"/><rect x="160" y="0" width="160" height="${TH}" fill="url(#g)"/>`;
     lines.forEach((l, i) => { body += text(240, 60 + i * 30, 24, '#ffffff', l, { weight: 700, anchor: 'middle' }); });
-    body += `<polygon points="225,190 225,240 265,215" fill="#ffffff"/>`;
+    body += `<circle cx="240" cy="215" r="30" fill="${hsl(0, 0, 8)}" opacity="0.45"/><polygon points="230,200 230,230 256,215" fill="#ffffff" opacity="0.9"/>`;
     return svg(TW, TH, body, grad('g', [[0, color], [1, hsl(between(r, 0, 360), 40, 20)]]));
   }
   if (c.video) {
@@ -593,7 +589,8 @@ function linkThumb(c: Extract<Content, { kind: 'link' }>, r: Rng): string {
     const lines = wrap(title, 24, 2);
     body += `<rect x="0" y="${TH - 30 - lines.length * 34}" width="${TW}" height="${30 + lines.length * 34}" fill="#000" opacity="0.55"/>`;
     lines.forEach((l, i) => { body += text(18, TH - 20 - (lines.length - 1 - i) * 34, 28, '#ffffff', l, { weight: 700 }); });
-    body += `<rect x="190" y="62" width="100" height="70" rx="18" fill="#e62117"/><polygon points="228,80 228,114 258,97" fill="#ffffff"/>`;
+    // A neutral play mark in the thumbnail's own palette (never a site's logo or button).
+    body += `<circle cx="240" cy="97" r="42" fill="${hsl(0, 0, 8)}" opacity="0.45"/><polygon points="226,76 226,118 262,97" fill="#ffffff" opacity="0.9"/>`;
     return svg(TW, TH, body, grad('g', [[0, color], [1, hsl(between(r, 0, 360), 45, 18)]], true));
   }
   const p = c.page!;
@@ -607,7 +604,7 @@ function linkThumb(c: Extract<Content, { kind: 'link' }>, r: Rng): string {
     }
     case 'recipe': {
       let body = `<rect width="${TW}" height="${TH}" fill="${hsl(32, 60, 90)}"/><circle cx="240" cy="118" r="102" fill="#ffffff" stroke="#dddddd" stroke-width="4"/>`;
-      for (let i = 0; i < 7; i++) body += `<circle cx="${n1(240 + between(r, -55, 55))}" cy="${n1(118 + between(r, -55, 55))}" r="${n1(between(r, 16, 32))}" fill="${hsl(between(r, 0, 60) + (i % 3 === 0 ? 90 : 0), 70, 50)}"/>`;
+      for (let i = 0; i < 7; i++) body += `<circle cx="${n1(240 + between(r, -55, 55))}" cy="${n1(118 + between(r, -55, 55))}" r="${n1(between(r, 16, 32))}" fill="${hsl(between(r, 15, 60) + (i % 3 === 0 ? 75 : 0), 70, 50)}"/>`;
       body += `<rect y="${TH - 52}" width="${TW}" height="52" fill="#ffffff" opacity="0.9"/>` + text(240, TH - 17, 26, '#222', wrap(p.title, 30, 1)[0], { weight: 700, anchor: 'middle' });
       return svg(TW, TH, body);
     }
@@ -629,12 +626,12 @@ function linkThumb(c: Extract<Content, { kind: 'link' }>, r: Rng): string {
         + `<rect x="${int(r, 40, 300)}" y="30" width="120" height="80" rx="10" fill="#c5e1a5"/>`;
       for (let i = 0; i < 5; i++) body += `<line x1="${int(r, 0, TW)}" y1="0" x2="${int(r, 0, TW)}" y2="${TH}" stroke="#ffffff" stroke-width="10"/>`;
       for (let i = 0; i < 3; i++) body += `<line x1="0" y1="${int(r, 0, TH)}" x2="${TW}" y2="${int(r, 0, TH)}" stroke="#ffffff" stroke-width="10"/>`;
-      body += `<path d="M 240 150 L 214 112 A 32 32 0 1 1 266 112 Z" fill="#e53935"/><circle cx="240" cy="96" r="12" fill="#ffffff"/>`;
+      body += `<path d="M 240 150 L 214 112 A 32 32 0 1 1 266 112 Z" fill="${color}"/><circle cx="240" cy="96" r="12" fill="#ffffff"/>`;
       return svg(TW, TH, body);
     }
     default: {
-      const dark = host === 'github.com';
-      const bgc = dark ? '#24292e' : host === 'medium.com' ? '#ffffff' : '#f4f1ea', fg = dark ? '#ffffff' : '#222222';
+      // One plain style for every host, coloured by topic, so no page imitates its site.
+      const bgc = hsl(0, 0, 97), fg = '#222222';
       let body = `<rect width="${TW}" height="${TH}" fill="${bgc}"/><circle cx="40" cy="40" r="20" fill="${color}"/>` + text(70, 47, 20, fg, host, { opacity: 0.7 });
       wrap(p.title, 20, 3).forEach((l, i) => { body += text(24, 120 + i * 44, 36, fg, l, { weight: 700 }); });
       return svg(TW, TH, body);
@@ -999,13 +996,23 @@ function realish(p: string): string {
 }
 const within = (base: string, p: string) => { const rel = path.relative(base, p); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
 
+const isDir = (p: string) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+
+/** A Hippo folder has `captures/` holding a four-digit year directory, or `captures/` beside `enrichments/`.
+ *  A `captures` folder of some other kind (holiday photos, say) is not one. */
+function looksLikeHippoFolder(d: string): boolean {
+  const captures = path.join(d, 'captures');
+  if (!isDir(captures)) return false;
+  if (isDir(path.join(d, 'enrichments'))) return true;
+  try { return fs.readdirSync(captures).some(n => /^\d{4}$/.test(n) && isDir(path.join(captures, n))); } catch { return false; }
+}
+
 function checkOut(out: string): void {
   const real = realish(out);
   if (fs.existsSync(REPO_FIXTURES) && within(fs.realpathSync(REPO_FIXTURES), real))
     throw new Error(`${out} is inside the repository's fixtures/ directory; write the sample somewhere else`);
-  const isDir = (p: string) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
   for (let d = path.dirname(real); ; d = path.dirname(d)) {
-    if (isDir(path.join(d, 'captures'))) throw new Error(`${out} is inside a Hippo folder (${d} has captures/); write the sample somewhere else`);
+    if (looksLikeHippoFolder(d)) throw new Error(`${out} is inside a Hippo folder (${d}); write the sample somewhere else`);
     if (path.dirname(d) === d) break;
   }
   if (fs.existsSync(out)) {

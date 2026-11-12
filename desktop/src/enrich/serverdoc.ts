@@ -87,9 +87,14 @@ function sortKeys(v: unknown): unknown {
   return v;
 }
 
+/** Any JSON value with keys sorted at every level, two-space indent, trailing newline: the same bytes every time. */
+export function stableJson(v: unknown): string {
+  return JSON.stringify(sortKeys(v), null, 2) + '\n';
+}
+
 /** Keys sorted, two-space indent, trailing newline. */
 export function serializeDoc(doc: EnrichmentDoc): string {
-  return JSON.stringify(sortKeys(doc), null, 2) + '\n';
+  return stableJson(doc);
 }
 
 /** Writes the document to a temp file beside `enrichment.json`, then renames it over; the temp file never outlives a failure. */

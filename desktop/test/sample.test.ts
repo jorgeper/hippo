@@ -11,7 +11,8 @@ import { fakeProvider } from '../src/providers/fake.ts';
 import { buildIndex } from '../src/index/build.ts';
 import { openIndex } from '../src/index/db.ts';
 import { facets, search } from '../src/recall/engine.ts';
-import { writeSample } from '../src/index/sample.ts';
+import { linkThumb, mulberry32, screen, writeSample } from '../src/index/sample.ts';
+import { PAGES, SCREENS, YOUTUBE_SHORTS, YOUTUBE_VIDEOS } from '../src/index/sample-data.ts';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const schemaDir = path.resolve(here, '../../schema');
@@ -154,9 +155,48 @@ test('refuses a non-empty out, an out inside fixtures/, and an out inside a Hipp
   assert.equal(fs.existsSync(path.join(fixturesDir, 'sample-out')), false);
   await assert.rejects(writeSample({ out: path.join(folder, 'enrichments', 'more'), count: 10 }), /Hippo folder/);
   assert.equal(fs.existsSync(path.join(folder, 'enrichments', 'more')), false);
+  // Only a real Hippo-shaped ancestor refuses: captures/ with a year directory, or captures/ beside enrichments/.
+  const home = tmp('hippo-unrelated-');
+  fs.mkdirSync(path.join(home, 'captures', 'holiday-photos'), { recursive: true });
+  const r1 = await writeSample({ out: path.join(home, 'projects', 'sample'), count: 8, end: '2026-11-12' });
+  assert.equal(r1.captures, 8, 'an unrelated captures/ folder higher up does not refuse');
+  const yearShaped = tmp('hippo-year-');
+  fs.mkdirSync(path.join(yearShaped, 'captures', '2026'), { recursive: true });
+  await assert.rejects(writeSample({ out: path.join(yearShaped, 'sub', 'sample'), count: 8 }), /Hippo folder/);
+  const layered = tmp('hippo-layered-');
+  fs.mkdirSync(path.join(layered, 'captures'));
+  fs.mkdirSync(path.join(layered, 'enrichments'));
+  await assert.rejects(writeSample({ out: path.join(layered, 'sample'), count: 8 }), /Hippo folder/);
+  assert.equal(fs.existsSync(path.join(layered, 'sample')), false);
   const empty = tmp('hippo-empty-');
   const r = await writeSample({ out: empty, count: 10, end: '2026-11-12' });
   assert.equal(r.captures, 10, 'an existing empty directory is fine');
+});
+
+/** Saturated red fills (R >= 0xc0, G and B <= 0x40), and named or short red. */
+function redFills(svg: string): string[] {
+  const out: string[] = [];
+  for (const m of svg.matchAll(/(?:fill|stroke|stop-color)="([^"]+)"/gi)) {
+    const v = m[1].toLowerCase();
+    if (v === 'red' || v === '#f00') { out.push(v); continue; }
+    const h = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/.exec(v);
+    if (h && parseInt(h[1], 16) >= 0xc0 && parseInt(h[2], 16) <= 0x40 && parseInt(h[3], 16) <= 0x40) out.push(v);
+  }
+  return out;
+}
+
+test('drawn link thumbnails and screenshots imitate no brand: no red play button, no brand background colours', () => {
+  const r = mulberry32(7);
+  const thumbs = [
+    ...YOUTUBE_VIDEOS.map(video => ({ what: `video ${video.title}`, svg: linkThumb({ kind: 'link', video, short: false }, r) })),
+    ...YOUTUBE_SHORTS.map(video => ({ what: `short ${video.title}`, svg: linkThumb({ kind: 'link', video, short: true }, r) })),
+    ...PAGES.map(page => ({ what: `page ${page.host}`, svg: linkThumb({ kind: 'link', page }, r) })),
+    ...SCREENS.map(item => ({ what: `screen ${item.style}`, svg: screen(item, 'Marta', '9:41', false, r).svg })),
+  ];
+  for (const t of thumbs) {
+    assert.deepEqual(redFills(t.svg), [], `${t.what} has a saturated red fill`);
+    for (const brand of ['#e62117', '#ff0000', '#24292e', '#f4f1ea']) assert.ok(!t.svg.toLowerCase().includes(brand), `${t.what} uses ${brand}`);
+  }
 });
 
 test('the folder names no real person and holds no email address', () => {
