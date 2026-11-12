@@ -522,7 +522,10 @@ function mapSheet(b: MapBackdrop, opts: { mapTiles: boolean; arrive: boolean }):
 
   let phase: 'in' | 'still' | 'out' | 'gone' = opts.arrive ? 'in' : 'still';
   let since = -1;
+  // An arriving sheet starts folded and unseen, so no frame drawn before its first step can show it lying open.
   if (phase === 'still') pose(1, 1, 1);
+  else if (reducedMotion?.matches) pose(1, 1, 0);
+  else pose(0, 0, 0);
   const motion: BackdropMotion = {
     step(now) {
       if (since < 0) since = now;

@@ -10,10 +10,11 @@ import type { Backdrop, LayoutResult, Placement, Size } from '../layout/types.ts
 import type { BackdropMotion, Edge, Theme } from '../themes/types.ts';
 import type { ObjectStore, Pose } from './objects.ts';
 import { spring, step, settled, snap } from './spring.ts';
+import { blockSizeOf, PILE_CAP } from '../layout/pile.ts';
 
 // ---------------------------------------------------------------- pure planning
 
-export const PILE_CAP = 12;
+export { PILE_CAP };
 
 export interface Rect { x0: number; x1: number; y0: number; y1: number }
 /** A desk area and how high the tallest pile on it stands (desk units), for framing the camera. */
@@ -319,8 +320,7 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
       const drawnIds = new Set(plan.drawn);
       const shown = members.filter(m => drawnIds.has(m.id));
       // The block under the pile has the middle footprint of the drawn sheets, so it reads as more of the same underneath.
-      const median = (xs: number[]) => xs.sort((a, b) => a - b)[xs.length >> 1] ?? 0;
-      const blockSize = { w: median(shown.map(m => theme.sizes[byId.get(m.id)!.kind].w)), h: median(shown.map(m => theme.sizes[byId.get(m.id)!.kind].h)) };
+      const blockSize = blockSizeOf(shown.map(m => theme.sizes[byId.get(m.id)!.kind]));
       const sig = `${pile.label}|${pile.count}|${plan.hidden}|${blockSize.w}x${blockSize.h}|${pile.x}|${pile.y}|${floor}`;
       const old = piles.get(pile.key);
       let parts: PileParts;

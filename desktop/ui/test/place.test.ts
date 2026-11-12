@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { layouts } from '../src/layout/index.ts';
-import { NO_LOCATION } from '../src/layout/place.ts';
-import type { LayoutResult, View } from '../src/layout/types.ts';
+import { NO_LOCATION, PILE_GAP, placeStages, SPLIT_MAX } from '../src/layout/place.ts';
+import type { PlacePoint } from '../src/layout/place.ts';
+import { byTime, clampPoint, halfExtents, jitterOf, marginOf, PILE_CAP } from '../src/layout/pile.ts';
+import type { LayoutResult, Size, View } from '../src/layout/types.ts';
 import type { DeskItem } from '../../src/server/wire.ts';
 import type { Kind } from '../../src/core/types.ts';
 import { SIZES, item } from './items.ts';
@@ -46,20 +48,77 @@ function randomItems(n: number, spreadKm: number, seed: number): DeskItem[] {
 }
 
 type Box = { x0: number; x1: number; y0: number; y1: number };
-/** Each pile's extent on the desk: every member as placed, turned and jittered, from the sizes alone. */
+const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[xs.length >> 1];
+
+/**
+ * What is drawn of a pile standing at x,y with `members`: its newest PILE_CAP sheets, each turned and jittered as the
+ * stacking does it, and (when more are under them) the thickness block, the drawn sheets' middle size, at the pile's point.
+ */
+function drawnBox(members: DeskItem[], x: number, y: number): Box {
+  const top = [...members].sort(byTime).slice(-PILE_CAP);
+  const f = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+  const add = (cx: number, cy: number, hw: number, hh: number) => {
+    f.x0 = Math.min(f.x0, cx - hw); f.x1 = Math.max(f.x1, cx + hw); f.y0 = Math.min(f.y0, cy - hh); f.y1 = Math.max(f.y1, cy + hh);
+  };
+  for (const it of top) {
+    const j = jitterOf(it.id), { w, h }: Size = SIZES[it.kind];
+    const c = Math.abs(Math.cos(j.rot)), s = Math.abs(Math.sin(j.rot));
+    add(x + j.dx, y + j.dy, (w * c + h * s) / 2, (w * s + h * c) / 2);
+  }
+  if (members.length > PILE_CAP) add(x, y, median(top.map(i => SIZES[i.kind].w)) / 2, median(top.map(i => SIZES[i.kind].h)) / 2);
+  return f;
+}
+
+/** Each pile's drawn footprint on the desk, from the layout's piles and the sizes alone. */
 function footprints(items: DeskItem[], r: LayoutResult): Map<string, Box> {
-  const kind = new Map(items.map(i => [i.id, i.kind]));
+  const byId = new Map(items.map(i => [i.id, i]));
+  const at = new Map(r.placements.map(p => [p.id, p]));
   const out = new Map<string, Box>();
-  for (const p of r.placements) {
-    const { w, h } = SIZES[kind.get(p.id)!];
-    const c = Math.abs(Math.cos(p.rot)), s = Math.abs(Math.sin(p.rot));
-    const hw = (w * c + h * s) / 2, hh = (w * s + h * c) / 2;
-    const f = out.get(p.pile) ?? { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
-    f.x0 = Math.min(f.x0, p.x - hw); f.x1 = Math.max(f.x1, p.x + hw);
-    f.y0 = Math.min(f.y0, p.y - hh); f.y1 = Math.max(f.y1, p.y + hh);
-    out.set(p.pile, f);
+  for (const pile of r.piles) {
+    const members = pile.ids.map(id => byId.get(id)!);
+    // The placements must be the stacking's own: each member at the pile's point plus its jitter.
+    for (const id of pile.ids) {
+      const p = at.get(id)!, j = jitterOf(id);
+      assert.ok(Math.abs(p.x - pile.x - j.dx) < EPS && Math.abs(p.y - pile.y - j.dy) < EPS && p.pile === pile.key, `${id} stacked on its pile`);
+    }
+    out.set(pile.key, drawnBox(members, pile.x, pile.y));
   }
   return out;
+}
+
+const gapOverlap = (p: Box, q: Box) => p.x0 < q.x1 + PILE_GAP - EPS && q.x0 < p.x1 + PILE_GAP - EPS && p.y0 < q.y1 + PILE_GAP - EPS && q.y0 < p.y1 + PILE_GAP - EPS;
+
+/**
+ * Minimal merging: no located pile made of several leader clusters (the clustering stage before merging) can be split into
+ * two piles of whole clusters, each at its members' centre, that come within PILE_GAP of neither each other nor any other
+ * pile. Piles of more than SPLIT_MAX clusters are not checked (the layout does not try them either). Returns how many piles
+ * were checked.
+ */
+function assertMinimal(items: DeskItem[], view: View, r: LayoutResult, what: string): number {
+  const stages = placeStages(items, view);
+  if (!stages) return 0;
+  const f = footprints(items, r);
+  const pileOf = new Map(r.placements.map(p => [p.id, p.pile]));
+  let checked = 0;
+  for (const pile of r.piles) {
+    if (pile.label === NO_LOCATION) continue;
+    const parts: PlacePoint[][] = stages.leaders.filter(l => pileOf.get(l[0].it.id) === pile.key);
+    for (const l of parts) assert.ok(l.every(m => pileOf.get(m.it.id) === pile.key), `${what}: a leader cluster is never torn apart`);
+    if (parts.length < 2 || parts.length > SPLIT_MAX) continue;
+    checked++;
+    const others = r.piles.filter(p => p.key !== pile.key).map(p => f.get(p.key)!);
+    const box = (ls: PlacePoint[][]): Box => {
+      const ms = ls.flat();
+      const at = clampPoint(ms.reduce((s, m) => s + m.x, 0) / ms.length, ms.reduce((s, m) => s + m.y, 0) / ms.length, marginOf(ms.map(m => m.it), SIZES), stages.map);
+      return drawnBox(ms.map(m => m.it), at.x, at.y);
+    };
+    for (let mask = 1; mask < 2 ** (parts.length - 1); mask++) {
+      const a = box(parts.filter((_, i) => mask & (1 << i))), b = box(parts.filter((_, i) => !(mask & (1 << i))));
+      const fits: boolean = !gapOverlap(a, b) && !others.some(o => gapOverlap(a, o) || gapOverlap(b, o));
+      assert.ok(!fits, `${what}: ${pile.label} (${pile.count} items, ${parts.length} clusters) splits into two piles that overlap nothing`);
+    }
+  }
+  return checked;
 }
 
 /** The commonest name among a pile's members (sub-locality, else locality), ties by code-unit order. */
@@ -72,6 +131,7 @@ function commonest(names: (string | undefined)[]): string | undefined {
 function assertNoOverlap(items: DeskItem[], view: View, what: string): LayoutResult {
   const r = layouts.place(items, view, SIZES);
   assert.equal(r.placements.length, items.length, what);
+  assert.equal(new Set(r.placements.map(p => p.id)).size, items.length, `${what}: every item once`);
   const f = footprints(items, r);
   for (let a = 0; a < r.piles.length; a++) {
     for (let b = a + 1; b < r.piles.length; b++) {
@@ -117,6 +177,35 @@ test('place: no two pile footprints overlap, for many random item sets and view 
     runs++;
   }
   assert.ok(runs >= 160);
+});
+
+test('place: piles merge only as far as they must; no merged pile could be split in two without an overlap', () => {
+  let seed = 1, checked = 0;
+  for (const n of [7, 40, 300]) {
+    for (const km of SPREADS_KM) {
+      for (const view of VIEWS) {
+        const items = randomItems(n, km, seed + 100_000);
+        seed++;
+        const r = layouts.place(items, view, SIZES);
+        checked += assertMinimal(items, view, r, `${n} items over ${km} km, view ${view.width}x${view.height}, seed ${seed - 1 + 100_000}`);
+      }
+    }
+  }
+  // The same sets the no-overlap test uses at 1440 x 900.
+  for (let k = 0; k < COUNTS.length * SPREADS_KM.length; k++) {
+    const n = COUNTS[Math.floor(k / SPREADS_KM.length)], km = SPREADS_KM[k % SPREADS_KM.length];
+    const s = 1 + k * VIEWS.length + 1, items = randomItems(n, km, s);
+    checked += assertMinimal(items, VIEWS[1], layouts.place(items, VIEWS[1], SIZES), `${n} items over ${km} km at 1440 x 900, seed ${s}`);
+  }
+  assert.ok(checked >= 20, `${checked} merged piles checked`);
+});
+
+test('place: 300 items over 3 km at 1440 x 900 (seed 87) lie in three located piles, not two', () => {
+  const items = randomItems(300, 3, 87);
+  const r = assertNoOverlap(items, VIEWS[1], 'seed 87');
+  const located = r.piles.filter(p => p.label !== NO_LOCATION);
+  assert.equal(located.length, 3, located.map(p => `${p.label} ${p.count}`).join(', '));
+  assert.equal(assertMinimal(items, VIEWS[1], r, 'seed 87') >= 1, true);
 });
 
 test('place: two close spots whose piles would overlap become one pile at their members\' centre', () => {

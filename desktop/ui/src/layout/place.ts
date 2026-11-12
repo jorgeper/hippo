@@ -1,15 +1,19 @@
 // By place: a map sheet over the left 80% of the view, at the Web Mercator integer zoom that fits the located items' bounds
 // (padded 15% on each side) at MAP_PX_PER_UNIT; north is away from the viewer. Items within 6 units of a pile's centroid
-// join it (leader clustering, in time order). Then no two piles may lie across each other: while any two piles' footprints
-// (every member as stacked, turned and jittered, plus PILE_GAP) overlap, the closest such pairs merge, and a merged pile sits
-// at its members' centre (so a member can end up more than 6 units from its pile). A pile is labelled with the sub-locality
-// or locality most of its members share. Items with no location form one pile, "No location", in the right 20%. With no
-// located item there is no map and everything is in "No location", at the centre. Nothing is ever put at 0,0 for want of a
-// place, and nothing is dropped.
+// join it (leader clustering, in time order). Then no two piles may lie across each other. A pile's footprint is what is
+// drawn of it: its top PILE_CAP sheets as stacked, turned and jittered, and the thickness block under them; two piles
+// overlap when their footprints come within PILE_GAP. While any two overlap, the closest overlapping pair merges (one pair
+// at a time, everything re-checked after each), and a merged pile sits at its members' centre (so a member can end up more
+// than 6 units from its pile). Then each merged pile is split again into two whenever that can be done without an overlap,
+// so a pile holds several places only when no split of it would fit. A pile is labelled with the sub-locality or locality
+// most of its members share. Items with no location form one pile, "No location", in the right 20%. With no located item
+// there is no map and everything is in "No location", at the centre. Nothing is ever put at 0,0 for want of a place, and
+// nothing is dropped.
 import type { DeskItem } from '../../../src/server/wire.ts';
 import type { Backdrop, LayoutFn, SizeTable } from './types.ts';
-import { byTime, collect, emptyResult, halfExtents, stackPile, viewRect } from './pile.ts';
+import { blockSizeOf, byTime, clampPoint, collect, emptyResult, halfExtents, jitterOf, marginOf, PILE_CAP, viewRect } from './pile.ts';
 import type { PileDraft, Rect } from './pile.ts';
+import type { PileInfo, Placement, View } from './types.ts';
 import { lonLatToWorld, MAP_PX_PER_UNIT, MAX_LAT, worldToLonLat } from './mercator.ts';
 
 export const NO_LOCATION = 'No location';
@@ -24,6 +28,8 @@ export const PILE_GAP = 1;
 export const LABEL_ROOM = 4;
 /** At most this many sub-locality names on the sheet. */
 export const MINOR_NAMES = 16;
+/** A merged pile is tried for a split only while it holds at most this many leader clusters (2^(n-1) - 1 ways to split). */
+export const SPLIT_MAX = 10;
 
 const located = (it: DeskItem): boolean => !!it.place && Number.isFinite(it.place.lat) && Number.isFinite(it.place.lon)
   && Math.abs(it.place.lat) <= 90 && Math.abs(it.place.lon) <= 180;
@@ -37,12 +43,19 @@ function commonest(values: (string | undefined)[]): string | undefined {
   return best;
 }
 
-export const placeLayout: LayoutFn = (items, view, sizes) => {
-  if (!items.length) return emptyResult();
-  const whole = viewRect(view);
-  const here = items.filter(located), nowhere = items.filter(i => !located(i));
-  if (!here.length) return collect([{ key: 'nowhere', label: NO_LOCATION, items, x: 0, y: 0 }], sizes, whole);
+/** A located item's point on the map area, and its place in time order (0 the oldest). */
+export interface PlacePoint { it: DeskItem; x: number; y: number; order: number }
 
+/**
+ * The stages before piles merge, exported so the tests can check the merging against them: the map area, the zoom and the
+ * centre of the sheet, every located item's point (in time order), and the leader clusters (points, in time order).
+ * Undefined when no item is located.
+ */
+export function placeStages(items: DeskItem[], view: View): { map: Rect; zoom: number; center: { lon: number; lat: number };
+  points: PlacePoint[]; leaders: PlacePoint[][] } | undefined {
+  const here = items.filter(located);
+  if (!here.length) return undefined;
+  const whole = viewRect(view);
   const map: Rect = { x0: whole.x0, x1: whole.x0 + MAP_SHARE * view.width, y0: whole.y0, y1: whole.y1 };
   const mapW = map.x1 - map.x0, mapH = map.y1 - map.y0, mapX = (map.x0 + map.x1) / 2, mapY = (map.y0 + map.y1) / 2;
 
@@ -59,15 +72,15 @@ export const placeLayout: LayoutFn = (items, view, sizes) => {
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   const center = worldToLonLat(cx, cy, 0);
   const scale = 2 ** zoom / MAP_PX_PER_UNIT;
-  const points = at0.map(p => ({ it: p.it, x: mapX + (p.x - cx) * scale, y: mapY - (p.y - cy) * scale }))
+  const points: PlacePoint[] = at0.map(p => ({ it: p.it, x: mapX + (p.x - cx) * scale, y: mapY - (p.y - cy) * scale, order: 0 }))
     .sort((a, b) => byTime(a.it, b.it));
+  points.forEach((p, k) => { p.order = k; });
 
   // Leader clusters over the points in time-then-id order: each joins the nearest pile whose centroid is within
   // CLUSTER_DISTANCE, provided every member stays within CLUSTER_DISTANCE of the moved centroid; else it starts a pile.
   // A dense trail therefore becomes a row of piles, never one pile with members far from its point.
-  type Point = (typeof points)[number];
-  const piles: { members: Point[]; x: number; y: number }[] = [];
-  const near = (m: Point, x: number, y: number) => Math.hypot(m.x - x, m.y - y) <= CLUSTER_DISTANCE;
+  const piles: { members: PlacePoint[]; x: number; y: number }[] = [];
+  const near = (m: PlacePoint, x: number, y: number) => Math.hypot(m.x - x, m.y - y) <= CLUSTER_DISTANCE;
   for (const p of points) {
     const candidates = piles.map(c => ({ c, d: Math.hypot(p.x - c.x, p.y - c.y) })).filter(e => e.d < CLUSTER_DISTANCE)
       .sort((a, b) => a.d - b.d);
@@ -78,7 +91,19 @@ export const placeLayout: LayoutFn = (items, view, sizes) => {
     }
     if (!joined) piles.push({ members: [p], x: p.x, y: p.y });
   }
-  const clusters = mergeOverlapping(piles.map(c => c.members), sizes, map);
+  return { map, zoom, center, points, leaders: piles.map(c => c.members) };
+}
+
+export const placeLayout: LayoutFn = (items, view, sizes) => {
+  if (!items.length) return emptyResult();
+  const whole = viewRect(view);
+  const nowhere = items.filter(i => !located(i));
+  const stages = placeStages(items, view);
+  if (!stages) return collect([{ key: 'nowhere', label: NO_LOCATION, items, x: 0, y: 0 }], sizes, whole);
+  const { map, zoom, center, points } = stages;
+  const mapW = map.x1 - map.x0, mapH = map.y1 - map.y0, mapX = (map.x0 + map.x1) / 2, mapY = (map.y0 + map.y1) / 2;
+  type Point = PlacePoint;
+  const clusters = settlePiles(stages.leaders, sizes, map);
   const centre = (ms: Point[]) => ({ x: ms.reduce((s, m) => s + m.x, 0) / ms.length, y: ms.reduce((s, m) => s + m.y, 0) / ms.length });
 
   const drafts: PileDraft[] = clusters.map(members => {
@@ -112,8 +137,8 @@ export const placeLayout: LayoutFn = (items, view, sizes) => {
   if (nowhere.length) drafts.push({ key: 'nowhere', label: NO_LOCATION, items: nowhere, x: (side.x0 + side.x1) / 2, y: 0 });
   const result = collect(drafts, sizes, d => (d.key === 'nowhere' ? side : map));
   // Where the piles and their labels lie, so the sheet writes its place names elsewhere.
-  const avoid = drafts.filter(d => d.key !== 'nowhere').map(d => {
-    const f = footprintOf(result.placements.filter(p => p.pile === d.key), d.items, sizes);
+  const avoid = result.piles.filter(p => p.key !== 'nowhere').map(p => {
+    const f = drawnFootprint(p, result.placements, items, sizes);
     return { x0: f.x0, x1: f.x1, y0: f.y0 - LABEL_ROOM, y1: f.y1 };
   });
   const backdrop: Backdrop = { type: 'map', x: mapX, y: mapY, width: mapW, height: mapH, zoom,
@@ -121,50 +146,123 @@ export const placeLayout: LayoutFn = (items, view, sizes) => {
   return { ...result, backdrop };
 };
 
-/** The box around a pile's members as placed: each turned by its rotation, from its kind's size. */
-function footprintOf(placements: { id: string; x: number; y: number; rot: number }[], items: DeskItem[], sizes: SizeTable): Rect {
+/** The footprint of what is drawn of `pile` as laid out: its top PILE_CAP sheets, and the block under them at its point. */
+function drawnFootprint(pile: PileInfo, placements: Placement[], items: DeskItem[], sizes: SizeTable): Rect {
   const kind = new Map(items.map(i => [i.id, i.kind]));
+  const at = new Map(placements.map(p => [p.id, p]));
+  const top = pile.ids.slice(0, PILE_CAP).map(id => at.get(id)!);
   const r = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
-  for (const p of placements) {
+  for (const p of top) {
     const { hw, hh } = halfExtents(sizes[kind.get(p.id)!], p.rot);
     r.x0 = Math.min(r.x0, p.x - hw); r.x1 = Math.max(r.x1, p.x + hw);
     r.y0 = Math.min(r.y0, p.y - hh); r.y1 = Math.max(r.y1, p.y + hh);
   }
+  if (pile.ids.length > PILE_CAP) {
+    const b = blockSizeOf(top.map(p => sizes[kind.get(p.id)!]));
+    r.x0 = Math.min(r.x0, pile.x - b.w / 2); r.x1 = Math.max(r.x1, pile.x + b.w / 2);
+    r.y0 = Math.min(r.y0, pile.y - b.h / 2); r.y1 = Math.max(r.y1, pile.y + b.h / 2);
+  }
   return r;
 }
 
+/** A leader cluster, summed up once: what the footprint of any union of clusters needs. */
+interface Part<P> { members: P[]; n: number; sx: number; sy: number; mx: number; my: number; top: P[]; first: string }
+/** A pile in the making: its leader clusters, where it stands and the footprint of what is drawn of it. */
+interface Heap<P> extends Rect { parts: Part<P>[]; cx: number; cy: number; first: string }
+
+function partOf<P extends PlacePoint>(members: P[], sizes: SizeTable): Part<P> {
+  const { mx, my } = marginOf(members.map(m => m.it), sizes);
+  const top = [...members].sort((a, b) => b.order - a.order).slice(0, PILE_CAP);
+  return { members, n: members.length, sx: members.reduce((s, m) => s + m.x, 0), sy: members.reduce((s, m) => s + m.y, 0),
+    mx, my, top, first: members.map(m => m.it.id).sort()[0] };
+}
+
+/** The pile the union of `parts` makes: at its members' centre kept inside `map` (as stackPile keeps it), with its footprint. */
+function heapOf<P extends PlacePoint>(parts: Part<P>[], sizes: SizeTable, map: Rect): Heap<P> {
+  let n = 0, sx = 0, sy = 0, mx = 0, my = 0, count = 0;
+  for (const p of parts) { n += p.n; sx += p.sx; sy += p.sy; mx = Math.max(mx, p.mx); my = Math.max(my, p.my); }
+  const { x, y } = clampPoint(sx / n, sy / n, { mx, my }, map);
+  const top = parts.flatMap(p => p.top).sort((a, b) => b.order - a.order).slice(0, PILE_CAP);
+  const r = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+  for (const m of top) {
+    const j = jitterOf(m.it.id);
+    const { hw, hh } = halfExtents(sizes[m.it.kind], j.rot);
+    r.x0 = Math.min(r.x0, x + j.dx - hw); r.x1 = Math.max(r.x1, x + j.dx + hw);
+    r.y0 = Math.min(r.y0, y + j.dy - hh); r.y1 = Math.max(r.y1, y + j.dy + hh);
+    count++;
+  }
+  if (n > count) {
+    const b = blockSizeOf(top.map(m => sizes[m.it.kind]));
+    r.x0 = Math.min(r.x0, x - b.w / 2); r.x1 = Math.max(r.x1, x + b.w / 2);
+    r.y0 = Math.min(r.y0, y - b.h / 2); r.y1 = Math.max(r.y1, y + b.h / 2);
+  }
+  return { ...r, parts, cx: x, cy: y, first: parts.map(p => p.first).sort()[0] };
+}
+
+/** Whether two piles' footprints come within PILE_GAP of each other. */
+const clash = (p: Rect, q: Rect) => p.x0 < q.x1 + PILE_GAP && q.x0 < p.x1 + PILE_GAP && p.y0 < q.y1 + PILE_GAP && q.y0 < p.y1 + PILE_GAP;
+const byFirst = (a: { first: string }, b: { first: string }) => (a.first < b.first ? -1 : a.first > b.first ? 1 : 0);
+
 /**
- * Merges clusters until no two piles' footprints (as `stackPile` would place them in `map`, PILE_GAP apart) overlap. Each round
- * merges the overlapping pairs closest first, each cluster at most once a round, so a dense trail halves round by round
- * into a row of piles instead of chaining into one. Every merge lowers the count, so it ends (at worst in one pile).
+ * The piles: the leader clusters, merged only as far as needed for no two to overlap. First, while any two overlap, the
+ * closest overlapping pair (by their points) merges, and only the new pile is checked again. Greedy merging can still merge
+ * more than it must (a merged pile lands between others and takes them in), so then every pile of 2 to SPLIT_MAX clusters
+ * is tried for a split into two that overlap nothing (the most even such split, by item count), until none splits.
  */
-function mergeOverlapping<P extends { it: DeskItem; x: number; y: number }>(clusters: P[][], sizes: SizeTable, map: Rect): P[][] {
-  let list = clusters;
+function settlePiles<P extends PlacePoint>(leaders: P[][], sizes: SizeTable, map: Rect): P[][] {
+  let heaps = leaders.map(ms => heapOf([partOf(ms, sizes)], sizes, map)).sort(byFirst);
+  const alive = new Set(heaps);
+  const pairs = new Map<Heap<P>, Set<Heap<P>>>();
+  const link = (a: Heap<P>, b: Heap<P>) => { pairs.get(a)!.add(b); pairs.get(b)!.add(a); };
+  for (const h of heaps) pairs.set(h, new Set());
+  for (let a = 0; a < heaps.length; a++) for (let b = a + 1; b < heaps.length; b++) if (clash(heaps[a], heaps[b])) link(heaps[a], heaps[b]);
   for (;;) {
-    const boxes = list.map(ms => {
-      const x = ms.reduce((s, m) => s + m.x, 0) / ms.length, y = ms.reduce((s, m) => s + m.y, 0) / ms.length;
-      const items = ms.map(m => m.it);
-      const { placements, pile } = stackPile({ key: '', label: '', items, x, y }, sizes, map);
-      return { ...footprintOf(placements, items, sizes), cx: pile.x, cy: pile.y };
-    });
-    const pairs: { a: number; b: number; d: number }[] = [];
-    for (let a = 0; a < boxes.length; a++) {
-      const p = boxes[a];
-      for (let b = a + 1; b < boxes.length; b++) {
-        const q = boxes[b];
-        if (p.x0 < q.x1 + PILE_GAP && q.x0 < p.x1 + PILE_GAP && p.y0 < q.y1 + PILE_GAP && q.y0 < p.y1 + PILE_GAP)
-          pairs.push({ a, b, d: Math.hypot(p.cx - q.cx, p.cy - q.cy) });
+    let best: { a: Heap<P>; b: Heap<P>; d: number } | undefined;
+    for (const a of alive) {
+      for (const b of pairs.get(a)!) {
+        if (byFirst(a, b) >= 0) continue;
+        const d = Math.hypot(a.cx - b.cx, a.cy - b.cy);
+        if (!best || d < best.d || (d === best.d && (byFirst(a, best.a) || byFirst(b, best.b)) < 0)) best = { a, b, d };
       }
     }
-    if (!pairs.length) return list;
-    pairs.sort((p, q) => p.d - q.d || p.a - q.a || p.b - q.b);
-    const used = new Set<number>(), gone = new Set<number>();
-    const next = list.map(ms => [...ms]);
-    for (const { a, b } of pairs) {
-      if (used.has(a) || used.has(b)) continue;
-      used.add(a); used.add(b); gone.add(b);
-      next[a].push(...next[b]);
+    if (!best) break;
+    const merged = heapOf([...best.a.parts, ...best.b.parts], sizes, map);
+    for (const old of [best.a, best.b]) {
+      alive.delete(old);
+      for (const o of pairs.get(old)!) pairs.get(o)!.delete(old);
+      pairs.delete(old);
     }
-    list = next.filter((_, k) => !gone.has(k));
+    pairs.set(merged, new Set());
+    for (const o of alive) if (clash(merged, o)) link(merged, o);
+    alive.add(merged);
   }
+
+  heaps = [...alive].sort(byFirst);
+  for (let k = 0; k < heaps.length;) {
+    const h = heaps[k];
+    const split = h.parts.length >= 2 && h.parts.length <= SPLIT_MAX ? splitOf(h, heaps, sizes, map) : undefined;
+    if (!split) { k++; continue; }
+    // A split changes what the others stand beside: start the round again.
+    heaps = [...heaps.slice(0, k), ...split, ...heaps.slice(k + 1)].sort(byFirst);
+    k = 0;
+  }
+  return heaps.map(h => h.parts.flatMap(p => p.members));
+}
+
+/** The most even split of `h` into two piles that overlap neither each other nor any other pile; undefined when none does. */
+function splitOf<P extends PlacePoint>(h: Heap<P>, all: Heap<P>[], sizes: SizeTable, map: Rect): [Heap<P>, Heap<P>] | undefined {
+  const others = all.filter(o => o !== h);
+  const k = h.parts.length, total = h.parts.reduce((s, p) => s + p.n, 0);
+  let best: { pair: [Heap<P>, Heap<P>]; uneven: number } | undefined;
+  // The last part always stays in the second half, so each split is tried once.
+  for (let mask = 1; mask < 2 ** (k - 1); mask++) {
+    const one = h.parts.filter((_, i) => mask & (1 << i)), two = h.parts.filter((_, i) => !(mask & (1 << i)));
+    const n1 = one.reduce((s, p) => s + p.n, 0);
+    const uneven = Math.abs(total - 2 * n1);
+    if (best && uneven >= best.uneven) continue;
+    const a = heapOf(one, sizes, map), b = heapOf(two, sizes, map);
+    if (clash(a, b) || others.some(o => clash(a, o) || clash(b, o))) continue;
+    best = { pair: [a, b], uneven };
+  }
+  return best?.pair;
 }

@@ -8,6 +8,8 @@ export const EMPTY_LINE = 'Nothing matches. Try fewer words, or say "start over"
 export const JITTER = 0.4;
 /** Largest rotation of an item in a pile, in radians (4°). */
 export const MAX_ROT = (4 * Math.PI) / 180;
+/** At most this many of a pile's top sheets are drawn; the rest are the block of thickness under them. */
+export const PILE_CAP = 12;
 /** Room between neighbouring piles of the grid, for their labels. */
 export const GRID_GAP = 6;
 
@@ -60,6 +62,12 @@ export function marginOf(items: DeskItem[], sizes: SizeTable): { mx: number; my:
     mx = Math.max(mx, hw + JITTER); my = Math.max(my, hh + JITTER);
   }
   return { mx, my };
+}
+
+/** The thickness block's size: the middle width and the middle height of the drawn sheets' sizes. */
+export function blockSizeOf(drawn: Size[]): Size {
+  const median = (xs: number[]) => xs.sort((a, b) => a - b)[xs.length >> 1] ?? 0;
+  return { w: median(drawn.map(s => s.w)), h: median(drawn.map(s => s.h)) };
 }
 
 /** Moves a point into `r` shrunk by the margins; centred on an axis where the area is narrower than that. */

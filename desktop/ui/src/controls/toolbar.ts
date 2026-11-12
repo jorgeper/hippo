@@ -8,7 +8,7 @@ import { el, icon } from './dom.ts';
 
 export const POLL_MS = 1000;
 /** How long the line saying how an update went stays up. */
-const DONE_LINE_MS = 8000;
+export const DONE_LINE_MS = 8000;
 
 export interface ToolbarDeps {
   store: Store;
@@ -44,6 +44,43 @@ export function updateLine(st: EnrichState): { text: string; failed: boolean } {
   return { text: parts.join(', '), failed: failed > 0 };
 }
 
+/** The progress line while a pass runs. */
+export function progressLine(st: Pick<EnrichState, 'done' | 'total'>): string {
+  return st.total ? `Updating ${n(st.done)} of ${n(st.total)}` : 'Updating…';
+}
+
+/** What following an update pass needs: the pass's state, a pause, the line to write, and the refill after the pass. */
+export interface UpdateFollow {
+  status(): Promise<EnrichState>;
+  wait(ms: number): Promise<void>;
+  /** Writes the line under the count ('' clears it). */
+  say(text: string, failed?: boolean): void;
+  afterUpdate(): Promise<void>;
+}
+
+/**
+ * Follows a running pass to its end: its progress every POLL_MS, then the line on how it went (which replaces the progress
+ * line at once), then the refill; a line that is not a failure is cleared DONE_LINE_MS later. A failure (of the pass, of a
+ * status request or of the refill) stays up until the next update.
+ */
+export async function followUpdate(f: UpdateFollow): Promise<void> {
+  for (;;) {
+    await f.wait(POLL_MS);
+    let st: EnrichState;
+    try { st = await f.status(); }
+    catch (e) { f.say(e instanceof Error ? e.message : String(e), true); return; }
+    if (st.running) { f.say(progressLine(st)); continue; }
+    const line = updateLine(st);
+    f.say(line.text, line.failed);
+    try { await f.afterUpdate(); }
+    catch (e) { f.say(e instanceof Error ? e.message : String(e), true); return; }
+    if (line.failed) return;
+    await f.wait(DONE_LINE_MS);
+    f.say('');
+    return;
+  }
+}
+
 export function mountToolbar(count: HTMLElement, tools: HTMLElement, progress: HTMLElement, deps: ToolbarDeps): Toolbar {
   const { store, api } = deps;
   const tool = (testid: string, label: string, ...paths: string[]) => {
@@ -64,49 +101,45 @@ export function mountToolbar(count: HTMLElement, tools: HTMLElement, progress: H
 
   // ---------------------------------------------------------------- update
 
-  let running = false, clearTimer: ReturnType<typeof setTimeout> | undefined;
-  const say = (text: string, failed = false) => {
-    clearTimeout(clearTimer);
+  // Every follow has its own generation: a line from an older one (its clearing, after a newer update started) is dropped.
+  let running = false, generation = 0;
+  const sayFor = (g: number) => (text: string, failed = false) => {
+    if (g !== generation) return;
     progress.textContent = text;
     progress.classList.toggle('failed', failed);
     progress.title = text;
   };
-  const sayProgress = (st: EnrichState) => say(st.total ? `Updating ${n(st.done)} of ${n(st.total)}` : 'Updating…');
+  const wait = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-  async function poll(): Promise<void> {
-    for (;;) {
-      await new Promise(r => setTimeout(r, POLL_MS));
-      let st: EnrichState;
-      try { st = await api.enrichStatus(); }
-      catch (e) { say(e instanceof Error ? e.message : String(e), true); return; }
-      if (st.running) { sayProgress(st); continue; }
-      const line = updateLine(st);
-      say(line.text, line.failed);
-      try { await deps.afterUpdate(); }
-      catch (e) { say(e instanceof Error ? e.message : String(e), true); return; }
-      if (!line.failed) clearTimer = setTimeout(() => say(''), DONE_LINE_MS);
-      return;
-    }
-  }
-
+  const done = () => {
+    running = false;
+    update.disabled = false;
+    update.classList.remove('busy');
+  };
   update.addEventListener('click', async () => {
     if (running) return;
     running = true;
     update.disabled = true;
     update.classList.add('busy');
-    say('Updating…');
+    const say = sayFor(++generation);
+    say(progressLine({ done: 0, total: 0 }));
+    let started = true;
     try {
-      try { sayProgress(await api.enrichStart()); }
+      try { say(progressLine(await api.enrichStart())); }
       catch (e) {
         // One already running (started elsewhere) is followed like our own.
         const msg = e instanceof Error ? e.message : String(e);
-        if (!/already running/i.test(msg)) { say(msg, true); return; }
+        if (!/already running/i.test(msg)) { say(msg, true); started = false; }
       }
-      await poll();
+      if (started) {
+        // The button comes back as soon as the pass has ended and the desk is refilled; the summary clears on its own.
+        await followUpdate({ status: () => api.enrichStatus(), wait, say, afterUpdate: async () => {
+          await deps.afterUpdate();
+          done();
+        } });
+      }
     } finally {
-      running = false;
-      update.disabled = false;
-      update.classList.remove('busy');
+      done();
     }
   });
 
