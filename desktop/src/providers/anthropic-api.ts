@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import { classifyFailure, DEFAULT_TIMEOUT_MS, ProviderError } from './types.ts';
 import type { Provider } from './types.ts';
+import { readImageBase64 } from './spawn.ts';
 
 /** `haiku` is the alias for the current small model (Claude Haiku 5.5). */
 export const HAIKU_MODEL_ID = 'claude-haiku-5-5';
@@ -14,7 +14,7 @@ export function anthropicApiProvider(env: Record<string, string | undefined> = p
       const model = req.model === 'haiku' ? HAIKU_MODEL_ID : req.model;
       const content: unknown[] = [];
       for (const img of req.images ?? []) {
-        content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: fs.readFileSync(img).toString('base64') } });
+        content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: readImageBase64(img) } });
       }
       content.push({ type: 'text', text: req.prompt });
       let res: Response;

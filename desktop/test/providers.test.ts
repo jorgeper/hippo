@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeProvider, fakeProvider, ProviderError } from '../src/providers/index.ts';
 import { loadEnv, parseEnv } from '../src/core/env.ts';
+import { childEnv } from '../src/providers/spawn.ts';
 
 const schema = { type: 'object', properties: { fruit: { type: 'string' } }, required: ['fruit'] };
 const base = { system: 'Reply in JSON.', prompt: 'Name one fruit.', schema, model: 'haiku' };
@@ -15,26 +16,31 @@ const posix = process.platform !== 'win32';
 const STUB = `#!/usr/bin/env node
 const fs = require('node:fs');
 let stdin = '';
+if (process.env.STUB_PID) fs.writeFileSync(process.env.STUB_PID, String(process.pid));
 process.stdin.on('data', d => { stdin += d; });
 process.stdin.on('end', () => {
-  const rec = { argv: process.argv.slice(2), cwd: process.cwd(), entries: fs.readdirSync(process.cwd()), stdin, pid: process.pid };
+  const rec = { argv: process.argv.slice(2), cwd: process.cwd(), entries: fs.readdirSync(process.cwd()), stdin, pid: process.pid, hasAnthropicKey: process.env.ANTHROPIC_API_KEY !== undefined, hasOpenaiKey: process.env.OPENAI_API_KEY !== undefined };
   if (process.env.STUB_OUT) fs.writeFileSync(process.env.STUB_OUT, JSON.stringify(rec));
   const mode = process.env.STUB_MODE || 'ok';
   if (mode === 'ok') console.log(JSON.stringify({ is_error: false, result: '', structured_output: { fruit: 'pear' } }));
   else if (mode === 'limit') console.log(JSON.stringify({ is_error: true, result: "You've hit your usage limit" }));
   else if (mode === 'login') console.log(JSON.stringify({ is_error: true, result: 'Not logged in. Please run /login' }));
   else if (mode === 'junk') console.log('not json at all');
+  else if (mode === 'crash') { console.log('garbage'); process.exitCode = 1; }
   else if (mode === 'nostruct') console.log(JSON.stringify({ is_error: false, result: 'hello' }));
   else if (mode === 'sleep') setTimeout(() => {}, 60000);
 });
 `;
 
-function stubEnv(mode: string): { env: Record<string, string>; out: string } {
+function stubEnv(mode: string): { env: Record<string, string>; out: string; pidFile: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hippo-stub-'));
   const exe = path.join(dir, 'claude');
   fs.writeFileSync(exe, STUB, { mode: 0o755 });
   const out = path.join(dir, 'record.json');
-  return { env: { PATH: dir + path.delimiter + (process.env.PATH ?? ''), STUB_MODE: mode, STUB_OUT: out }, out };
+  const pidFile = path.join(dir, 'pid');
+  // Only PATH reaches a child from the provider env, so the stub reads its settings from the process environment.
+  Object.assign(process.env, { STUB_PID: pidFile, STUB_MODE: mode, STUB_OUT: out });
+  return { env: { PATH: dir + path.delimiter + (process.env.PATH ?? '') }, out, pidFile };
 }
 
 test('claude-cli passes every spec flag, never --bare, runs in an empty temp dir', { skip: !posix }, async () => {
@@ -75,23 +81,61 @@ test('claude-cli with images adds the three image flags and names the path', { s
 });
 
 test('claude-cli error mapping', { skip: !posix }, async () => {
-  const cases: [string, string][] = [['limit', 'usage_limit'], ['login', 'not_signed_in'], ['junk', 'failed'], ['nostruct', 'bad_output']];
+  const cases: [string, string][] = [['limit', 'usage_limit'], ['login', 'not_signed_in'], ['junk', 'bad_output'], ['nostruct', 'bad_output'], ['crash', 'failed']];
   for (const [mode, code] of cases) {
     const { env } = stubEnv(mode);
-    await assert.rejects(makeProvider('claude-cli', env).complete(base), (e: any) => {
-      assert.ok(e instanceof ProviderError);
-      if (mode === 'junk') return e.code === 'bad_output' || e.code === 'failed';
-      return e.code === code;
-    }, mode);
+    await assert.rejects(makeProvider('claude-cli', env).complete(base), (e: any) => e instanceof ProviderError && e.code === code, mode);
   }
 });
 
 test('claude-cli timeout kills the child', { skip: !posix }, async () => {
-  const { env, out } = stubEnv('sleep');
-  await assert.rejects(makeProvider('claude-cli', env).complete({ ...base, timeoutMs: 400 }), (e: any) => e.code === 'timeout');
-  const pid = JSON.parse(fs.readFileSync(out, 'utf8')).pid;
-  await new Promise(r => setTimeout(r, 200));
-  assert.throws(() => process.kill(pid, 0), 'child is gone');
+  const { env, pidFile } = stubEnv('sleep');
+  await assert.rejects(makeProvider('claude-cli', env).complete({ ...base, timeoutMs: 1500 }), (e: any) => e.code === 'timeout');
+  let pid = NaN;
+  for (let i = 0; i < 30 && !fs.existsSync(pidFile); i++) await new Promise(r => setTimeout(r, 100));
+  pid = Number(fs.readFileSync(pidFile, 'utf8'));
+  let alive = true;
+  for (let i = 0; i < 30 && alive; i++) {
+    try { process.kill(pid, 0); await new Promise(r => setTimeout(r, 100)); } catch { alive = false; }
+  }
+  assert.ok(!alive, 'child is gone');
+});
+
+test('children do not inherit keys from the provider env, only PATH', { skip: !posix }, async () => {
+  const saved = { a: process.env.ANTHROPIC_API_KEY, o: process.env.OPENAI_API_KEY };
+  delete process.env.ANTHROPIC_API_KEY; delete process.env.OPENAI_API_KEY;
+  try {
+    const { env, out } = stubEnv('ok');
+    await makeProvider('claude-cli', { ...env, ANTHROPIC_API_KEY: 'sentinel-not-a-real-key', OPENAI_API_KEY: 'sentinel-not-a-real-key' }).complete(base);
+    const rec = JSON.parse(fs.readFileSync(out, 'utf8'));
+    assert.equal(rec.hasAnthropicKey, false);
+    assert.equal(rec.hasOpenaiKey, false);
+    const ce = childEnv({ PATH: '/x', OPENAI_API_KEY: 'sentinel-not-a-real-key', OPENAI_BASE_URL: 'u' });
+    assert.equal(ce.PATH, '/x');
+    assert.equal(ce.OPENAI_API_KEY, undefined);
+    assert.equal(ce.OPENAI_BASE_URL, undefined);
+    assert.equal(childEnv({}).PATH, process.env.PATH);
+  } finally {
+    if (saved.a !== undefined) process.env.ANTHROPIC_API_KEY = saved.a;
+    if (saved.o !== undefined) process.env.OPENAI_API_KEY = saved.o;
+  }
+});
+
+test('an unreadable image fails before any network call, naming the basename only', async () => {
+  const realFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = (async () => { called = true; throw new Error('no network in tests'); }) as typeof fetch;
+  try {
+    const missing = path.join(os.tmpdir(), 'hippo-no-such-dir', 'gone.jpg');
+    const env = { ANTHROPIC_API_KEY: 'sentinel-not-a-real-key', OPENAI_API_KEY: 'sentinel-not-a-real-key', OPENAI_BASE_URL: 'http://localhost:1' };
+    for (const [name, model] of [['anthropic-api', 'haiku'], ['openai-compatible', 'some-model']]) {
+      await assert.rejects(makeProvider(name, env).complete({ ...base, model, images: [missing] }), (e: any) =>
+        e instanceof ProviderError && e.code === 'failed' && e.message === 'could not read image gone.jpg' && !e.message.includes('hippo-no-such-dir'), name);
+    }
+    assert.equal(called, false);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test('claude-cli without a claude on PATH is unavailable', async () => {

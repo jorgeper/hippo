@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { classifyFailure, DEFAULT_TIMEOUT_MS, ProviderError } from './types.ts';
 import type { ModelRequest, Provider } from './types.ts';
-import { resolveCommand, run } from './spawn.ts';
+import { childEnv, resolveCommand, run } from './spawn.ts';
 
 /** Argument list for the signed-in `claude` command (design section 6). The prompt goes through stdin. */
 export function claudeArgs(req: ModelRequest): string[] {
@@ -39,9 +39,7 @@ export function claudeCliProvider(env: Record<string, string | undefined> = proc
         : req.prompt;
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'hippo-claude-'));
       try {
-        const childEnv: NodeJS.ProcessEnv = { ...process.env };
-        for (const [k, v] of Object.entries(env)) if (v !== undefined) childEnv[k] = v;
-        const r = await run(command, claudeArgs({ ...req, images }), { cwd, env: childEnv, stdin: prompt, timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS, label: 'claude' });
+        const r = await run(command, claudeArgs({ ...req, images }), { cwd, env: childEnv(env), stdin: prompt, timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS, label: 'claude' });
         let parsed: any;
         try { parsed = JSON.parse(r.stdout); } catch { parsed = undefined; }
         const text = [typeof parsed?.result === 'string' ? parsed.result : '', r.stderr, parsed ? '' : r.stdout].join('\n');

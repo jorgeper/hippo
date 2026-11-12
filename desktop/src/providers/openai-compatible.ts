@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import { DEFAULT_TIMEOUT_MS, ProviderError } from './types.ts';
 import type { Provider } from './types.ts';
+import { readImageBase64 } from './spawn.ts';
 
 export function openaiCompatibleProvider(env: Record<string, string | undefined> = process.env): Provider {
   return {
@@ -15,7 +15,7 @@ export function openaiCompatibleProvider(env: Record<string, string | undefined>
       const url = env.OPENAI_BASE_URL!.replace(/\/+$/, '') + '/chat/completions';
       const userContent: unknown[] = [{ type: 'text', text: req.prompt }];
       for (const img of req.images ?? []) {
-        userContent.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${fs.readFileSync(img).toString('base64')}` } });
+        userContent.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${readImageBase64(img)}` } });
       }
       let res: Response;
       try {

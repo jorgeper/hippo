@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { classifyFailure, DEFAULT_TIMEOUT_MS, ProviderError } from './types.ts';
 import type { ModelRequest, Provider } from './types.ts';
-import { resolveCommand, run } from './spawn.ts';
+import { childEnv, resolveCommand, run } from './spawn.ts';
 
 /** Argument list for `codex exec` (checked against `codex exec --help`, codex-cli 0.166.0). The prompt goes through stdin. */
 export function codexArgs(req: ModelRequest, dir: string, schemaFile: string, outFile: string): string[] {
@@ -24,10 +24,8 @@ export function codexCliProvider(env: Record<string, string | undefined> = proce
         const schemaFile = path.join(dir, 'schema.json');
         const outFile = path.join(dir, 'out.json');
         fs.writeFileSync(schemaFile, JSON.stringify(req.schema));
-        const childEnv: NodeJS.ProcessEnv = { ...process.env };
-        for (const [k, v] of Object.entries(env)) if (v !== undefined) childEnv[k] = v;
         const stdin = `${req.system}\n\n${req.prompt}`;
-        const r = await run(command, codexArgs(req, dir, schemaFile, outFile), { cwd: dir, env: childEnv, stdin, timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS, label: 'codex' });
+        const r = await run(command, codexArgs(req, dir, schemaFile, outFile), { cwd: dir, env: childEnv(env), stdin, timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS, label: 'codex' });
         if (r.code !== 0) {
           const c = classifyFailure(r.stderr + '\n' + r.stdout);
           throw new ProviderError(c, `codex failed (${c})`);

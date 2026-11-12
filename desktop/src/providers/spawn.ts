@@ -46,3 +46,16 @@ export function run(command: string, args: string[], opts: { cwd: string; env: N
     child.stdin.end(opts.stdin ?? '');
   });
 }
+
+/** Environment for a child: exactly the parent's, with only PATH taken from the provider env.
+ *  Keys read from .env must never reach `claude`/`codex`: with an API key set they bill the API, not the signed-in plan. */
+export function childEnv(env: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...process.env };
+  if (env.PATH !== undefined) out.PATH = env.PATH;
+  return out;
+}
+
+/** Reads an image or raises a ProviderError naming only the file's basename. */
+export function readImageBase64(file: string): string {
+  try { return fs.readFileSync(file).toString('base64'); } catch { throw new ProviderError('failed', `could not read image ${path.basename(file)}`); }
+}
