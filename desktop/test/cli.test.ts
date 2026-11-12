@@ -31,12 +31,57 @@ test('hippo enrich with the fake provider prints one line per capture acted on a
   assert.match(again.stdout, /^7 captures · 0 model calls · 0 written · 7 unchanged · 0 failed$/m);
 });
 
+test('hippo enrich runs the index step; hippo status reports it without the SQLite warning', () => {
+  const folder = copyFixtures();
+  const env = { HIPPO_DESK_HOME: home() };
+  const r = hippo(['enrich', '--folder', folder, '--provider', 'fake'], env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^Index: 7 captures · 7 added · 0 updated · 0 removed · 4 thumbnails$/m);
+  assert.doesNotMatch(r.stderr, /ExperimentalWarning/);
+  const s = hippo(['status'], env);
+  assert.equal(s.status, 0, s.stderr);
+  assert.equal(s.stderr, '');
+  assert.match(s.stdout, /^Captures: 7 \(1 note · 1 link · 2 photo · 1 screenshot · 1 recording · 1 video · 0 file\)$/m);
+  assert.match(s.stdout, /^Enriched: 5 of 7$/m);
+  assert.match(s.stdout, /^Pending: 0$/m);
+  assert.match(s.stdout, /^Failures: 0$/m);
+  assert.match(s.stdout, /^Last enrich: \d{4}-\d\d-\d\dT[\d:.]+Z$/m);
+  assert.match(s.stdout, /^Last index: \d{4}-\d\d-\d\dT[\d:.]+Z$/m);
+});
+
+test('hippo index builds, updates and rebuilds; nothing in the folder changes', () => {
+  const folder = copyFixtures(); const before = snapshot(folder);
+  const env = { HIPPO_DESK_HOME: home() };
+  const first = hippo(['index', '--folder', folder], env);
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /^Index: 7 captures · 7 added · 0 updated · 0 removed · 4 thumbnails$/m);
+  const second = hippo(['index'], env);
+  assert.match(second.stdout, /^Index: 7 captures · 0 added · 0 updated · 0 removed · 0 thumbnails$/m);
+  const rebuilt = hippo(['index', '--rebuild'], env);
+  assert.match(rebuilt.stdout, /^Index: 7 captures · 7 added · 0 updated · 0 removed · 4 thumbnails$/m);
+  const s = hippo(['status'], env);
+  assert.match(s.stdout, /^Enriched: 0 of 7$/m);
+  assert.match(s.stdout, /^Last enrich: never$/m);
+  assert.deepEqual(snapshot(folder), before);
+  assert.equal(hippo(['index', '--bogus'], env).status, 2);
+});
+
+test('hippo status before any index says so', () => {
+  const r = hippo(['status', '--folder', copyFixtures()], { HIPPO_DESK_HOME: home() });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^No index yet: run hippo index\.$/m);
+  assert.match(r.stdout, /^Captures: 0 /m);
+});
+
 test('hippo enrich --dry-run writes nothing', () => {
   const folder = copyFixtures();
-  const r = hippo(['enrich', '--folder', folder, '--dry-run', '--provider', 'fake'], { HIPPO_DESK_HOME: home() });
+  const h = home();
+  const r = hippo(['enrich', '--folder', folder, '--dry-run', '--provider', 'fake'], { HIPPO_DESK_HOME: h });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /would call the model for 5 captures and write 5 documents/);
   assert.equal(fs.existsSync(path.join(folder, 'enrichments/server/2026/11/07/00000000-0000-4000-8000-000000000001')), false);
+  assert.doesNotMatch(r.stdout, /^Index:/m);
+  assert.ok(!fs.readdirSync(h).some(n => n.endsWith('.sqlite')), 'a dry run creates no index');
 });
 
 test('hippo enrich with a bad --limit exits 2', () => {
@@ -51,29 +96,34 @@ test('hippo enrich exits 3 and says how far it got when the provider is unavaila
   assert.equal(r.status, 3, r.stderr);
   assert.match(r.stderr, /Stopped early \(unavailable\): the claude command was not found on PATH/);
   assert.match(r.stderr, /Got through \d+ of 7 captures/);
+  assert.match(r.stdout, /^Index: 7 captures · 7 added/m, 'the index step still runs after a stop');
   assert.equal(fs.existsSync(path.join(folder, 'enrichments/server/2026/11/07/00000000-0000-4000-8000-000000000001')), false);
 });
 
 const posix = process.platform !== 'win32';
 
-/** A PATH holding a `claude` stub that answers after `seconds` with a valid enrichment. */
-function slowClaude(seconds: number): string {
+/** A PATH holding a `claude` stub that answers after `seconds` with a valid enrichment. When `marker` is given the stub
+ *  creates that file as soon as it is called, so a test knows a model call is in flight. */
+function slowClaude(seconds: number, marker?: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hippo-slow-claude-'));
   const answer = JSON.stringify({ type: 'result', is_error: false, structured_output: { title: 'Slow answer', summary: 'Slow.',
     image_descriptions: [], tags: ['slow'], topic: 'slow', people: [], keywords: [] } });
-  fs.writeFileSync(path.join(dir, 'claude'), `#!/bin/sh\ncat > /dev/null\nsleep ${seconds}\nprintf '%s' '${answer}'\n`, { mode: 0o755 });
+  const touch = marker ? `: > '${marker}'\n` : '';
+  fs.writeFileSync(path.join(dir, 'claude'), `#!/bin/sh\n${touch}cat > /dev/null\nsleep ${seconds}\nprintf '%s' '${answer}'\n`, { mode: 0o755 });
   return dir + path.delimiter + (process.env.PATH ?? '');
 }
 
-function runUntil(args: string[], env: Record<string, string>, onOut: (child: ReturnType<typeof spawn>, out: string) => void):
-  Promise<{ code: number | null; stdout: string; stderr: string; ms: number }> {
+function runUntil(args: string[], env: Record<string, string>, onOut: (child: ReturnType<typeof spawn>, out: string) => void,
+  onSpawn?: (child: ReturnType<typeof spawn>) => void):
+  Promise<{ code: number | null; stdout: string; stderr: string; ms: number; t0: number }> {
   return new Promise(resolve => {
     const t0 = Date.now();
     const child = spawn(process.execPath, [bin, ...args], { env: { ...process.env, ...env } });
     let stdout = '', stderr = '';
     child.stdout.on('data', d => { stdout += d; onOut(child, stdout); });
     child.stderr.on('data', d => { stderr += d; onOut(child, stdout); });
-    child.on('close', code => resolve({ code, stdout, stderr, ms: Date.now() - t0 }));
+    child.on('close', code => resolve({ code, stdout, stderr, ms: Date.now() - t0, t0 }));
+    onSpawn?.(child);
   });
 }
 
@@ -94,9 +144,21 @@ test('SIGINT stops after the calls in flight, prints the summary and exits 130',
 
 test('a second signal exits at once', { skip: !posix }, async () => {
   const folder = copyFixtures();
-  let sent = 0;
-  const r = await runUntil(['enrich', '--folder', folder, '--provider', 'claude-cli'], { HIPPO_DESK_HOME: home(), PATH: slowClaude(5) },
-    child => { if (sent++ === 0) setTimeout(() => { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGTERM'), 200); }, 1000); });
+  // Signal once a model call is in flight (the stub has created the marker), never on whatever the child prints first.
+  const marker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'hippo-marker-')), 'called');
+  let signalledAt = 0;
+  const r = await runUntil(['enrich', '--folder', folder, '--provider', 'claude-cli'], { HIPPO_DESK_HOME: home(), PATH: slowClaude(5, marker) },
+    () => {}, child => {
+      const poll = setInterval(() => {
+        if (!fs.existsSync(marker)) return;
+        clearInterval(poll);
+        signalledAt = Date.now();
+        child.kill('SIGTERM');
+        setTimeout(() => child.kill('SIGTERM'), 200);
+      }, 20);
+      child.on('close', () => clearInterval(poll));
+    });
   assert.equal(r.code, 130, r.stderr);
-  assert.ok(r.ms < 4000, `took ${r.ms} ms`);
+  assert.ok(signalledAt > 0, 'the model was never called');
+  assert.ok(r.ms - (signalledAt - r.t0) < 2000, `exited ${r.ms - (signalledAt - r.t0)} ms after the first signal`);
 });
