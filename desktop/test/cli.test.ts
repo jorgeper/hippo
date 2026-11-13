@@ -6,6 +6,8 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { copyFixtures, snapshot } from './helpers.ts';
+import { scanFolder } from '../src/core/folder.ts';
+import { hasContent, modelInput } from '../src/enrich/prompt.ts';
 
 const bin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../bin/hippo.mjs');
 const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hippo-home-'));
@@ -43,6 +45,8 @@ test('hippo enrich runs the index step; hippo status reports it without the SQLi
   assert.equal(s.stderr, '');
   assert.match(s.stdout, /^Captures: 7 \(1 note · 1 link · 2 photo · 1 screenshot · 1 recording · 1 video · 0 file\)$/m);
   assert.match(s.stdout, /^Enriched: 5 of 7$/m);
+  // The video and the recording without a transcript have nothing to send: said, so 5 + 2 + 0 failures make the 7.
+  assert.match(s.stdout, /^Nothing to describe: 2 \(no text or picture\)$/m);
   assert.match(s.stdout, /^Pending: 0$/m);
   assert.match(s.stdout, /^Failures: 0$/m);
   assert.match(s.stdout, /^Last enrich: \d{4}-\d\d-\d\dT[\d:.]+Z$/m);
@@ -64,6 +68,16 @@ test('hippo index builds, updates and rebuilds; nothing in the folder changes', 
   assert.match(s.stdout, /^Last enrich: never$/m);
   assert.deepEqual(snapshot(folder), before);
   assert.equal(hippo(['index', '--bogus'], env).status, 2);
+});
+
+test('hippo status leaves out "Nothing to describe" when every capture has something to describe', async () => {
+  const folder = copyFixtures();
+  for (const c of (await scanFolder(folder)).captures) if (!hasContent(modelInput(c))) fs.rmSync(c.dir, { recursive: true });
+  const env = { HIPPO_DESK_HOME: home() };
+  assert.equal(hippo(['enrich', '--folder', folder, '--provider', 'fake'], env).status, 0);
+  const s = hippo(['status'], env);
+  assert.match(s.stdout, /^Enriched: 5 of 5$/m);
+  assert.doesNotMatch(s.stdout, /Nothing to describe/);
 });
 
 test('hippo status before any index says so', () => {

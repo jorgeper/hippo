@@ -123,3 +123,19 @@ test('labels come out in table order', () => {
     { ...motion(['walking'], 'high'), weather: { data: { is_day: false } } });
   assert.deepEqual(labels(c), ['walking', 'on_headphones', 'in_a_burst', 'dark']);
 });
+
+test('an audio device name in evidence is cut to 60 code points and loses control characters', () => {
+  const long = '🦛'.repeat(100);
+  const ev = one(cap({ metadata_observations: [route({ port_type: 'car_audio', port_name: long })] }), 'in_car')!.evidence[0];
+  const name = ev.replace(/^audio route was /, '');
+  assert.equal([...name].length, 60);
+  assert.equal(name, '🦛'.repeat(59) + '…');
+  const exact = 'x'.repeat(60);
+  assert.deepEqual(one(cap({ metadata_observations: [route({ port_type: 'headphones', port_name: exact })] }), 'on_headphones')?.evidence,
+    [`audio route was ${exact}`]);
+  assert.deepEqual(one(cap({ metadata_observations: [route({ port_type: 'bluetooth_a2dp', port_name: 'Buds\u0000\u001b[31m\n\u007fPro\u0085' })] }), 'on_headphones')?.evidence,
+    ['audio route was Buds[31m Pro']);
+  // Nothing left after the control characters: the plain fallback.
+  assert.deepEqual(one(cap({ metadata_observations: [route({ port_type: 'car_audio', port_name: '\u0000\u0007' })] }), 'in_car')?.evidence,
+    ['audio route was car audio']);
+});

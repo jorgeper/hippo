@@ -105,7 +105,18 @@ test('after enrichment with the fake provider, changed captures are re-indexed a
   const records = await Promise.all((await scanFolder(folder)).captures.map(buildRecord));
   const enriched = records.filter(x => x.enriched).length;
   assert.ok(enriched >= 5);
-  assert.equal(status(folder).enriched, enriched);
+  const st = status(folder);
+  assert.equal(st.enriched, enriched);
+  // The fixtures: 5 enriched, 2 with nothing to describe (a video, a recording without a transcript), 0 pending, 0 failures.
+  assert.deepEqual([st.enriched, st.nothingToDescribe, st.pending, st.failures.length, st.total], [5, 2, 0, 0, 7]);
+});
+
+test('status counts captures with nothing to describe before any enrichment too, and after a rebuild', async () => {
+  const folder = copyFixtures();
+  await buildIndex(folder);
+  assert.equal(status(folder).nothingToDescribe, 2);
+  await buildIndex(folder, { rebuild: true });
+  assert.equal(status(folder).nothingToDescribe, 2);
 });
 
 test('status lists enrichment failures with their reasons and the last enrich time', async () => {
@@ -231,7 +242,7 @@ test('openIndex coexists with the failures table in the same file', async () => 
 test('status on a folder never indexed reports nothing indexed', () => {
   const folder = copyFixtures();
   const s = status(folder);
-  assert.equal(s.total, 0); assert.equal(s.enriched, 0);
+  assert.equal(s.total, 0); assert.equal(s.enriched, 0); assert.equal(s.nothingToDescribe, 0);
   assert.deepEqual(s.byKind, { note: 0, link: 0, photo: 0, video: 0, recording: 0, screenshot: 0, file: 0 });
   assert.equal(s.lastIndexAt, undefined);
 });

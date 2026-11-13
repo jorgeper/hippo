@@ -59,6 +59,8 @@ export interface ModelInput {
 }
 
 const nonBlank = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+/** Long text from the capture is cut to NOTE_LIMIT code points (never inside one) before it goes in the prompt. */
+const capped = (s: string): string => [...s].slice(0, NOTE_LIMIT).join('');
 const clean = (v: unknown): string | undefined => (nonBlank(v) ? v.trim() : undefined);
 
 /** The picture attachments sent to the model: the first four, in attachment order. A picture without a valid
@@ -84,7 +86,7 @@ export function modelInput(c: RawCapture): ModelInput {
   const textAtt = atts.find(a => a.type === 'text');
   const body = clean(c.noteBody);
   if (body !== undefined) {
-    input.note = { text: [...body].slice(0, NOTE_LIMIT).join('') };
+    input.note = { text: capped(body) };
     if (textAtt) input.note.attachment_id = textAtt.id;
   }
 
@@ -93,24 +95,24 @@ export function modelInput(c: RawCapture): ModelInput {
     const l: { url: string; title?: string; description?: string } = { url };
     const t = clean(p?.title), d = clean(p?.description);
     if (t !== undefined) l.title = t;
-    if (d !== undefined) l.description = d;
+    if (d !== undefined) l.description = capped(d);
     return l;
   });
   if (links.length) input.links = links;
 
-  const recognized = [...res.recognizedText.values()].filter(r => nonBlank(r.text)).map(r => ({ attachment_id: r.attachment_id, text: r.text!.trim() }));
+  const recognized = [...res.recognizedText.values()].filter(r => nonBlank(r.text)).map(r => ({ attachment_id: r.attachment_id, text: capped(r.text!.trim()) }));
   if (recognized.length) input.recognized_text = recognized;
 
   const commentIds = new Set(c.comments.map(k => k.id));
   const transcripts = [...res.transcripts.values()].filter(t => !commentIds.has(t.attachment_id) && nonBlank(t.text))
-    .map(t => ({ attachment_id: t.attachment_id, text: t.text!.trim() }));
+    .map(t => ({ attachment_id: t.attachment_id, text: capped(t.text!.trim()) }));
   if (transcripts.length) input.transcripts = transcripts;
 
   const comments = c.comments.map(k => {
     const out: { id: string; text?: string; transcript?: string } = { id: k.id };
     const text = clean(k.text), transcript = clean(res.transcripts.get(k.id)?.text);
     if (text !== undefined) out.text = text;
-    if (transcript !== undefined) out.transcript = transcript;
+    if (transcript !== undefined) out.transcript = capped(transcript);
     return out;
   }).filter(k => k.text !== undefined || k.transcript !== undefined);
   if (comments.length) input.comments = comments;

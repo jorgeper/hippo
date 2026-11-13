@@ -7,6 +7,9 @@ export interface ModelEnrichment { title: string; summary?: string; image_descri
   tags: string[]; topic: string; people: { name: string; source: string }[]; keywords: { word: string; weight: number }[] }
 
 export const TITLE_MAX = 60;          // Unicode code points, as the schema counts them
+/** Caps on the model's longer text (code points; the schema sets none). Model text lands in the synced folder and on the phone. */
+export const SUMMARY_MAX = 600;
+export const DESCRIPTION_MAX = 1200;
 const MAX_TAGS = 8;
 const MAX_KEYWORDS = 12;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -39,6 +42,24 @@ export function cutTitle(s: string): string {
   return head === '' ? [...s].slice(0, TITLE_MAX).join('').trim() : head;
 }
 
+/** At most `max` code points: when cut, it ends on a whole word (when there is a space to cut at), never inside a grapheme,
+ *  followed by "…" (counted in `max`). */
+export function cutText(s: string, max: number): string {
+  if (codePoints(s) <= max) return s;
+  const room = max - 1;
+  let head = '';
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)) {
+    if (codePoints(head) + codePoints(segment) > room) break;
+    head += segment;
+  }
+  if (!/^\s/.test(s.slice(head.length))) {             // the cut fell inside a word: go back to the last space
+    const space = head.search(/\s\S*$/);
+    if (space > 0) head = head.slice(0, space);
+  }
+  head = head.replace(/[\s,;:.\-–—]+$/u, '');
+  return `${head === '' ? [...s].slice(0, room).join('') : head}…`;
+}
+
 const topicKey = (t: string) => t.toLowerCase().replace(/[\s_\-]+/g, ' ').trim();
 
 export function normalize(raw: unknown, c: RawCapture, knownTopics: string[]): ModelEnrichment | undefined {
@@ -67,7 +88,7 @@ export function normalize(raw: unknown, c: RawCapture, knownTopics: string[]): M
     if (!isObject(d) || typeof d.attachment_id !== 'string' || !pictureIds.has(d.attachment_id)) continue;
     const text = typeof d.text === 'string' ? d.text.trim() : '';
     if (text !== '' && !image_descriptions.some(x => x.attachment_id === d.attachment_id))
-      image_descriptions.push({ attachment_id: d.attachment_id, text });
+      image_descriptions.push({ attachment_id: d.attachment_id, text: cutText(text, DESCRIPTION_MAX) });
   }
 
   const people: ModelEnrichment['people'] = [];
@@ -92,6 +113,6 @@ export function normalize(raw: unknown, c: RawCapture, knownTopics: string[]): M
 
   const out: ModelEnrichment = { title, image_descriptions, tags, topic, people, keywords };
   const summary = typeof raw.summary === 'string' ? raw.summary.trim() : '';
-  if (summary !== '') out.summary = summary;
+  if (summary !== '') out.summary = cutText(summary, SUMMARY_MAX);
   return out;
 }

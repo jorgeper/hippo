@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { copyFixtures, enrichmentErrors } from './helpers.ts';
 import { scanFolder } from '../src/core/folder.ts';
-import { normalize } from '../src/enrich/normalize.ts';
+import { DESCRIPTION_MAX, normalize, SUMMARY_MAX } from '../src/enrich/normalize.ts';
 import type { ModelEnrichment } from '../src/enrich/normalize.ts';
 import { composeServerDoc } from '../src/enrich/serverdoc.ts';
 import type { RawCapture } from '../src/core/types.ts';
@@ -88,4 +88,43 @@ test('a blank comment id is never an allowed source', () => {
   c.comments = [{ id: '', added_at: '2026-11-07T18:00:00.000Z', text: 'Ana said hi.' }];
   const v = run({ ...base, people: [{ name: 'Ana', source: '' }] }, c);
   assert.deepEqual(v.people, []);
+});
+
+const cps = (s: string | undefined) => [...(s ?? '')].length;
+const desc = (v: ModelEnrichment) => v.image_descriptions[0]?.text;
+
+test('summary and picture descriptions are capped at 600 and 1,200 code points, cut on a word with an ellipsis', () => {
+  assert.equal(SUMMARY_MAX, 600);
+  assert.equal(DESCRIPTION_MAX, 1200);
+  const words = 'The menu lists soups and salads and a long list of breads. '.repeat(60).trim();
+  const v = run({ ...base, summary: words, image_descriptions: [{ attachment_id: PIC7, text: words }] }, cap(7));
+  for (const [text, max] of [[v.summary ?? '', SUMMARY_MAX], [desc(v) ?? '', DESCRIPTION_MAX]] as const) {
+    assert.ok(cps(text) <= max, `${cps(text)} > ${max}`);
+    assert.ok(cps(text) > max - 20, 'cut near the cap, not far before it');
+    assert.ok(text.endsWith('…'), text);
+    const head = text.slice(0, -1);
+    assert.ok(words.startsWith(head));
+    assert.match(words.slice(head.length), /^[\s.,]/, `"${head.slice(-20)}" ends inside a word`);
+  }
+});
+
+test('a summary or description of exactly the cap is untouched', () => {
+  const at = (n: number) => 'a'.repeat(n - 1) + '.';
+  const v = run({ ...base, summary: at(SUMMARY_MAX), image_descriptions: [{ attachment_id: PIC7, text: at(DESCRIPTION_MAX) }] }, cap(7));
+  assert.equal(v.summary, at(SUMMARY_MAX));
+  assert.equal(desc(v), at(DESCRIPTION_MAX));
+});
+
+test('the cut counts code points and never splits an astral character', () => {
+  // One word of astral characters (no space to cut at): a hard cut on a character boundary.
+  const hippos = '🦛'.repeat(2000);
+  const v = run({ ...base, summary: hippos, image_descriptions: [{ attachment_id: PIC7, text: hippos }] }, cap(7));
+  assert.equal(v.summary, '🦛'.repeat(SUMMARY_MAX - 1) + '…');
+  assert.equal(desc(v), '🦛'.repeat(DESCRIPTION_MAX - 1) + '…');
+  // An astral character right at the cut after spaces: the cut is on the space before it.
+  const mixed = 'x '.repeat(299) + '🦛🦛🦛 more';
+  const w = run({ ...base, summary: mixed }, cap(7));
+  assert.ok(!/[\uD800-\uDBFF]…$/.test(w.summary!), 'no lone high surrogate before the ellipsis');
+  assert.ok(cps(w.summary) <= SUMMARY_MAX);
+  assert.ok(w.summary!.endsWith('x…'), w.summary!.slice(-10));
 });

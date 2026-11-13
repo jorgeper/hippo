@@ -248,7 +248,8 @@ test('concurrency never exceeds 3', async () => {
 
 test('a document over 1 MiB is a failure, not a write', async () => {
   const folder = copyFixtures();
-  const r = await enrichFolder({ folder, now, provider: fakeProvider(req => ({ ...(fakeEnrichment(req) as object), summary: 'x'.repeat(1_100_000) })) });
+  // The summary is capped at 600 characters (normalize.ts), so a tag carries the bulk.
+  const r = await enrichFolder({ folder, now, provider: fakeProvider(req => ({ ...(fakeEnrichment(req) as object), tags: ['x'.repeat(1_100_000)] })) });
   assert.equal(r.written, 0); assert.equal(r.failed.length, 5);
   assert.match(r.failed[0].reason, /1 MiB/);
 });

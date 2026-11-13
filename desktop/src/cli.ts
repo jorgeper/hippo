@@ -148,6 +148,7 @@ async function statusCommand(args: string[]): Promise<number> {
   if (!s.lastIndexAt) out.push('No index yet: run hippo index.');
   const kinds = (Object.entries(s.byKind) as [string, number][]).map(([k, n]) => `${n} ${k}`).join(' · ');
   out.push(`Captures: ${s.total} (${kinds})`, `Enriched: ${s.enriched} of ${s.total}`);
+  if (s.nothingToDescribe) out.push(`Nothing to describe: ${s.nothingToDescribe} (no text or picture)`);
   out.push(`Pending: ${s.pending}${s.pending ? ' (not complete in the folder yet, skipped until they sync)' : ''}`);
   out.push(`Failures: ${s.failures.length}`);
   for (const f of s.failures)
@@ -312,6 +313,20 @@ async function uiCommand(args: string[]): Promise<number> {
   }
   const devOrigin = values.dev ? DEV_ORIGIN : undefined;
   const server = await startServer({ folder, port, provider, uiDir: UI_DIST, devOrigin });
+  // First SIGINT or SIGTERM: stop the server (cancelling and waiting for an update in progress). A second one exits at once.
+  // The handlers go in before anything is printed: a Ctrl-C sent as soon as the lines below appear must find them, or Node's
+  // default action kills the process before the server is closed.
+  const stopped = new Promise<void>(resolve => {
+    let stopping = false;
+    const stop = () => {
+      if (stopping) process.exit(130);
+      stopping = true;
+      process.stderr.write('Stopping…\n');
+      server.close().then(resolve, e => { process.stderr.write(`hippo ui: ${(e as Error).message}\n`); resolve(); });
+    };
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+  });
   // The only line that ever shows the token.
   const url = devOrigin ? `${devOrigin}/?t=${server.token}` : server.url;
   process.stdout.write(`Hippo Desk: ${url}\n`);
@@ -324,19 +339,7 @@ async function uiCommand(args: string[]): Promise<number> {
   else if (!fs.existsSync(path.join(UI_DIST, 'index.html'))) process.stdout.write('The desk page has not been built yet: run npm run build in desktop/.\n');
   if (!values['no-open']) openBrowser(url);
   process.stdout.write('Press Ctrl-C to stop.\n');
-
-  // First SIGINT or SIGTERM: stop the server (cancelling and waiting for an update in progress). A second one exits at once.
-  await new Promise<void>(resolve => {
-    let stopping = false;
-    const stop = () => {
-      if (stopping) process.exit(130);
-      stopping = true;
-      process.stderr.write('Stopping…\n');
-      server.close().then(resolve, e => { process.stderr.write(`hippo ui: ${(e as Error).message}\n`); resolve(); });
-    };
-    process.on('SIGINT', stop);
-    process.on('SIGTERM', stop);
-  });
+  await stopped;
   return 0;
 }
 

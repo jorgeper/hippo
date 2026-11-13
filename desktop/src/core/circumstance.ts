@@ -46,7 +46,17 @@ function speed(c: RawCapture): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
 }
 
-const portName = (p: Port, fallback: string) => (nonBlank(p.port_name) ? p.port_name.trim() : fallback);
+/** A device name is the phone's to report and can be anything: evidence shows at most this many code points of it. */
+export const PORT_NAME_MAX = 60;
+
+/** The device's own name for evidence: control characters out (line breaks and tabs become spaces), at most 60 code points. */
+function portName(p: Port, fallback: string): string {
+  if (!nonBlank(p.port_name)) return fallback;
+  const name = p.port_name.replace(/[\t\n\v\f\r\u0085]/g, ' ').replace(/\p{Cc}/gu, '').replace(/\s+/g, ' ').trim();
+  if (name === '') return fallback;
+  const cps = [...name];
+  return cps.length <= PORT_NAME_MAX ? name : `${cps.slice(0, PORT_NAME_MAX - 1).join('').trimEnd()}…`;
+}
 
 export function deriveCircumstances(c: RawCapture): Circumstance[] {
   const out: Circumstance[] = [];

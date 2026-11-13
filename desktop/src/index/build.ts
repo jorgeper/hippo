@@ -10,6 +10,7 @@ import { buildRecord } from '../core/record.ts';
 import type { CaptureRecord } from '../core/record.ts';
 import { resolved } from '../core/resolve.ts';
 import type { Kind, RawCapture } from '../core/types.ts';
+import { hasContent, modelInput } from '../enrich/prompt.ts';
 import { openFailureStore } from '../enrich/state.ts';
 import { ensureThumbs } from './thumbs.ts';
 import { getMeta, INDEX_TABLES, openIndex, SCHEMA_VERSION, setMeta } from './db.ts';
@@ -19,7 +20,9 @@ export interface IndexReport { captures: number; added: number; updated: number;
   thumbFailures: { id: string; reason: string }[];
   /** Captures that could not be indexed this run: skipped, the rest of the pass goes on. One indexed before keeps its earlier rows. */
   failed: { id: string; reason: string }[] }
-export interface Status { folder: string; total: number; byKind: Record<Kind, number>; enriched: number; pending: number;
+export interface Status { folder: string; total: number; byKind: Record<Kind, number>; enriched: number;
+  /** Captures not enriched that have nothing to send to the model (no text, link or picture), as of the last index run. */
+  nothingToDescribe: number; pending: number;
   failures: { id: string; attempts: number; error: string }[];
   /** The captures the last index run could not index. */
   indexFailures: { id: string; reason: string }[];
@@ -175,6 +178,9 @@ export async function buildIndex(folder: string, opts: { rebuild?: boolean } = {
     } catch (e) { fail(c.id, e); }
   }
   const present = new Set(scan.captures.map(c => c.id));
+  // What the enricher would never send (the same test it uses), for `hippo status`.
+  const empty = new Set<string>();
+  for (const c of scan.captures) { try { if (!hasContent(modelInput(c))) empty.add(c.id); } catch { /* counted as describable */ } }
   const gone = [...known.keys()].filter(id => !present.has(id));
 
   // Phase 2: one transaction; each capture in its own savepoint, so one that cannot be written leaves no half rows and stops nothing.
@@ -200,6 +206,8 @@ export async function buildIndex(folder: string, opts: { rebuild?: boolean } = {
       }
       setMeta(db, 'folder', path.resolve(folder));
       setMeta(db, 'pending', String(scan.pending.length));
+      const notEnriched = db.raw.prepare('SELECT id FROM captures WHERE enriched = 0').all() as { id: string }[];
+      setMeta(db, 'nothing_to_describe', String(notEnriched.filter(r => empty.has(r.id)).length));
       setMeta(db, 'index_failures', JSON.stringify(report.failed));
       setMeta(db, 'last_index_at', new Date().toISOString());
       db.raw.exec('COMMIT');
@@ -226,7 +234,7 @@ function indexFailures(json: string | undefined): { id: string; reason: string }
 
 export function status(folder: string): Status {
   const byKind = Object.fromEntries(KINDS.map(k => [k, 0])) as Record<Kind, number>;
-  const out: Status = { folder: path.resolve(folder), total: 0, byKind, enriched: 0, pending: 0, failures: [], indexFailures: [] };
+  const out: Status = { folder: path.resolve(folder), total: 0, byKind, enriched: 0, nothingToDescribe: 0, pending: 0, failures: [], indexFailures: [] };
   if (!fs.existsSync(indexPath(folder))) return out;
   const db = openIndex(folder);
   try {
@@ -237,6 +245,8 @@ export function status(folder: string): Status {
     }
     const pending = Number(getMeta(db, 'pending'));
     if (Number.isSafeInteger(pending) && pending > 0) out.pending = pending;
+    const nothing = Number(getMeta(db, 'nothing_to_describe'));
+    if (Number.isSafeInteger(nothing) && nothing > 0) out.nothingToDescribe = nothing;
     const lastEnrich = getMeta(db, 'last_enrich_at'); if (lastEnrich) out.lastEnrichAt = lastEnrich;
     const lastIndex = getMeta(db, 'last_index_at'); if (lastIndex) out.lastIndexAt = lastIndex;
     out.indexFailures = indexFailures(getMeta(db, 'index_failures'));
