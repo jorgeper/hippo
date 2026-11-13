@@ -1271,6 +1271,23 @@ private let a2Picture = CaptureCore.Attachment(attachmentID: "a2", relativePath:
         #expect(model.logLoaded && model.logLines.isEmpty)
     }
 
+    // A read that fails after Log is switched on still ends the wait: the Log section must not spin for ever.
+    @MainActor @Test func failedReadAfterLogOnStopsTheLogWait() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let p = try await t.note("hello", at: now)
+        let model = CaptureDetailModel(store: t.store, captureID: p.metadata.captureID, now: { now },
+                                       calendar: calendar, locale: locale)
+        await model.load()
+        #expect(model.logLoaded && !model.loadFailed)
+        // The capture is removed between opening the screen and switching Log on.
+        _ = try await t.store.delete(captureID: p.metadata.captureID)
+        await model.setVisibility(TierVisibility(log: true))
+        #expect(model.loadFailed)
+        #expect(model.logLoaded)
+        #expect(model.logLines.isEmpty)
+    }
+
     // A phone document that can't be read leaves the capture loadable with Server off, as with it on.
     @MainActor @Test func unreadablePhoneDocumentStillLoadsWithServerOff() async throws {
         let t = try TestStore()

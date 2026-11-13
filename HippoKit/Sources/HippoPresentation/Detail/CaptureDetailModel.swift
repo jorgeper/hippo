@@ -175,7 +175,12 @@ public final class CaptureDetailModel {
         }.value
         if let beforeApply { await beforeApply() }
         guard mine == generation else { return }
-        guard let loaded else { loadFailed = true; return }
+        guard let loaded else {
+            loadFailed = true
+            // The Log section waits on this flag: a failed read ends the wait too (it shows no lines, not a spinner).
+            logLoaded = true
+            return
+        }
         loadFailed = false
         unfiltered = loaded.detail
         detail = loaded.detail.filtered(by: visibility)
