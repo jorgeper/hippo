@@ -2,13 +2,14 @@
 // becomes an Error carrying the server's message. The token, when the page has one, goes in the X-Hippo-Token header on every
 // call: in dev the page comes from Vite and has no cookie, and the header also keeps two desks on different ports apart.
 import type { DeskItem, CaptureDetail } from '../../src/server/wire.ts';
-import type { EnrichPass } from '../../src/server/server.ts';
+import type { EnrichPass, EnrichPlan } from '../../src/server/server.ts';
 import type { Facets } from '../../src/recall/engine.ts';
 import type { LayoutName, SearchSpec } from '../../src/recall/spec.ts';
 import type { Status } from '../../src/index/build.ts';
 import type { Config } from '../../src/core/paths.ts';
 
 export type { DeskItem, CaptureDetail } from '../../src/server/wire.ts';
+export type { EnrichPlan } from '../../src/server/server.ts';
 
 export interface Settings { provider: string; askModel: string; enrichModel: string; mapTiles: boolean; theme: string }
 export interface BootResponse { facets: Facets; status: Status; settings: Settings; today: string; timezone: string }
@@ -26,6 +27,8 @@ export interface Api {
   search(req: SearchRequest): Promise<SearchResponse>;
   ask(req: AskRequest): Promise<AskResponse>;
   capture(id: string): Promise<CaptureResponse>;
+  /** What an update pass would do (a dry run: nothing is written, no model is called). */
+  enrichPlan(): Promise<EnrichPlan>;
   enrichStart(): Promise<EnrichState>;
   enrichStatus(): Promise<EnrichState>;
   settings(patch: SettingsPatch): Promise<{ settings: Settings }>;
@@ -68,6 +71,7 @@ export function createApi(opts: ApiOptions = {}): Api {
     search: req => call('POST', '/api/search', req),
     ask: req => call('POST', '/api/ask', req),
     capture: id => call('GET', `/api/capture/${encodeURIComponent(id)}`),
+    enrichPlan: () => call('POST', '/api/enrich', { dryRun: true }),
     enrichStart: () => call('POST', '/api/enrich', {}),
     enrichStatus: () => call('GET', '/api/enrich'),
     settings: patch => call('POST', '/api/settings', patch),

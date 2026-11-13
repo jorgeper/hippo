@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
 import crypto from 'node:crypto';
-import { copyFixtures } from './helpers.ts';
+import { copyFixtures, snapshot } from './helpers.ts';
 import { enrichFolder } from '../src/enrich/enrich.ts';
 import { fakeEnrichment, fakeProvider } from '../src/providers/fake.ts';
 import { ProviderError } from '../src/providers/types.ts';
@@ -434,6 +434,33 @@ test('POST /api/enrich runs one pass in the background (409 while running); late
     const boot = (await request(s.port, 'GET', '/api/boot', h)).json;
     assert.equal(boot.status.enriched, 5);
     assert.ok(boot.status.lastEnrichAt);
+  } finally { await s.close(); }
+});
+
+test('POST /api/enrich {dryRun: true} says what a pass would do, writes nothing and calls no model; same gate', async () => {
+  const f4 = fixtureCopy();
+  await buildIndex(f4);
+  let calls = 0;
+  const s = await startServer({ folder: f4, port: 0, log: () => {}, provider: fakeProvider(req => { calls++; return fakeEnrichment(req); }) });
+  try {
+    const h = { Host: `127.0.0.1:${s.port}`, 'X-Hippo-Token': s.token, 'Content-Type': 'application/json' };
+    const before = snapshot(f4);
+    const plan = await request(s.port, 'POST', '/api/enrich', h, JSON.stringify({ dryRun: true }));
+    assert.equal(plan.status, 200);
+    assert.deepEqual(plan.json, { dryRun: true, send: 5, write: 5, captures: 7, provider: 'fake', folder: path.resolve(f4) });
+    assert.deepEqual(snapshot(f4), before);
+    assert.equal(calls, 0);
+    // It started nothing.
+    assert.deepEqual((await request(s.port, 'GET', '/api/enrich', h)).json, { running: false, done: 0, total: 0 });
+    // The same gate as every route: no token, a foreign Host or a foreign Origin is 403.
+    for (const r of [
+      await request(s.port, 'POST', '/api/enrich', { Host: h.Host, 'Content-Type': 'application/json' }, '{"dryRun":true}'),
+      await request(s.port, 'POST', '/api/enrich', { ...h, Host: 'evil.example' }, '{"dryRun":true}'),
+      await request(s.port, 'POST', '/api/enrich', { ...h, Origin: 'http://evil.example' }, '{"dryRun":true}'),
+    ]) assert.equal(r.status, 403);
+    assert.equal((await request(s.port, 'POST', '/api/enrich', h, '{"dryRun":"yes"}')).status, 400);
+    assert.deepEqual(snapshot(f4), before);
+    assert.equal(calls, 0);
   } finally { await s.close(); }
 });
 

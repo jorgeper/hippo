@@ -1,4 +1,6 @@
 // The desk in a real browser, on a generated sample folder, with the fake provider (spec "Done means" steps 3 to 5).
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
@@ -20,6 +22,25 @@ async function ask(page: Page, sentence: string): Promise<void> {
 
 const consoleProblems: string[] = [];
 
+/** The server's own answer for a spec: the ids the desk should hold (sorted). */
+async function searchIds(page: Page, spec: object): Promise<string[]> {
+  const res = await page.request.post(`${process.env.HIPPO_E2E_ORIGIN}/api/search`, { data: { spec, pinned: [], dismissed: [] } });
+  expect(res.status()).toBe(200);
+  return ((await res.json()).items as { id: string }[]).map(i => i.id).sort();
+}
+const sorted = (a: string[]) => [...a].sort();
+
+// No test may reach a host other than this machine (map tiles are off in global-setup; nothing else goes out).
+let external: string[] = [];
+test.beforeEach(({ page }) => {
+  external = [];
+  page.on('request', r => {
+    const u = new URL(r.url());
+    if (/^(https?|wss?):$/.test(u.protocol) && u.hostname !== '127.0.0.1' && u.hostname !== 'localhost') external.push(r.url());
+  });
+});
+test.afterEach(() => { expect(external).toEqual([]); });
+
 test('ask, correct, refine', async ({ page }) => {
   // Software WebGL logs "GL Driver Message" performance warnings; they are the driver's, not the page's.
   page.on('console', m => { if ((m.type() === 'error' || m.type() === 'warning') && !m.text().includes('GL Driver Message')) consoleProblems.push(`${m.type()}: ${m.text()}`); });
@@ -35,11 +56,14 @@ test('ask, correct, refine', async ({ page }) => {
   const videos = await ids(page);
   expect(videos.length).toBeGreaterThanOrEqual(8);
   expect(videos.length).toBeLessThan(all);
+  // Which captures, not only how many: exactly the YouTube links.
+  expect(sorted(videos)).toEqual(await searchIds(page, { kinds: ['link'], sites: ['youtube.com'] }));
 
   await ask(page, 'no, actually it was a screenshot');
   const shots = await ids(page);
   expect(shots.some(id => videos.includes(id))).toBe(false);
   expect(shots.length).toBeGreaterThan(0);
+  expect(sorted(shots)).toEqual(await searchIds(page, { kinds: ['screenshot'] }));
 
   await ask(page, 'from last week');
   const recent = await ids(page);
@@ -105,4 +129,63 @@ test('an item lifts, turns over and goes back', async ({ page }) => {
 test('a request without the cookie or token is refused', async ({ request }) => {
   const res = await request.get(`${process.env.HIPPO_E2E_ORIGIN}/api/boot`);
   expect(res.status()).toBe(403);
+});
+
+/** Every server enrichment document in the sample folder, by capture id. */
+function serverDocs(): Map<string, string> {
+  const root = path.join(process.env.HIPPO_E2E_FOLDER as string, 'enrichments', 'server');
+  const out = new Map<string, string>();
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name === 'enrichment.json') out.set(path.basename(dir), full);
+    }
+  };
+  walk(root);
+  return out;
+}
+const providerCalls = () => Number(fs.readFileSync(process.env.HIPPO_E2E_CALLS as string, 'utf8'));
+
+// Last: it changes the sample folder (three captures lose their server enrichment, then get it back).
+test('Update asks before it sends captures to the model; "Not now" sends nothing, "Send and update" runs the pass', async ({ page }) => {
+  await page.goto(url());
+  await settled(page);
+  const update = page.getByTestId('update');
+  await expect(update).toHaveAttribute('aria-label', 'Update: describe new captures with fake');
+  await expect(update).toHaveAttribute('title', 'Update: describe new captures with fake');
+
+  // Three notes the model has not described yet.
+  const notes = (await searchIds(page, { kinds: ['note'] })).slice(0, 3);
+  expect(notes.length).toBe(3);
+  const docs = serverDocs();
+  for (const id of notes) fs.rmSync(docs.get(id)!);
+  const before = serverDocs().size, calls = providerCalls();
+
+  const question = page.getByTestId('confirm-update');
+  await update.click();
+  await expect(question).toBeVisible();
+  await expect(question).toContainText('Update will send 3 captures (their text and pictures) to fake and write 3 files into sample. Go ahead?');
+  await expect(question.locator('.folder')).toHaveAttribute('title', process.env.HIPPO_E2E_FOLDER as string);
+  // Focus starts on "Not now": Enter alone does not send.
+  await expect(page.getByTestId('update-not-now')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(question).toBeHidden();
+  await expect(update).toBeFocused();
+
+  await update.click();
+  await page.getByTestId('update-not-now').click();
+  await expect(question).toBeHidden();
+  await expect(update).toBeFocused();
+  await settled(page);
+  expect(providerCalls()).toBe(calls);
+  expect(serverDocs().size).toBe(before);
+
+  await update.click();
+  await page.getByTestId('update-send').click();
+  await expect(page.locator('#progress')).toHaveText('3 captures updated', { timeout: 30_000 });
+  expect(providerCalls()).toBe(calls + 3);
+  const after = serverDocs();
+  expect(after.size).toBe(before + 3);
+  for (const id of notes) expect(after.has(id)).toBe(true);
 });

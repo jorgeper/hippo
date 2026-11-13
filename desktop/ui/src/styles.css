@@ -149,6 +149,23 @@ button { cursor: pointer; }
 .settings .actions .primary:hover { background: var(--ui-paper, ButtonFace); filter: brightness(1.05); }
 .settings .actions button:disabled { opacity: 0.5; cursor: default; }
 
+/* ------------------------------------------------------------ the question before an update */
+
+.confirm {
+  position: fixed; top: 58px; left: var(--gap); width: min(340px, calc(100vw - 2 * var(--gap)));
+  padding: 16px 16px 14px; border-radius: 12px;
+  background: var(--ui-glass-strong, Canvas); border: 1px solid var(--ui-line, GrayText);
+  box-shadow: 0 18px 40px var(--ui-shadow, transparent); backdrop-filter: blur(14px);
+}
+.confirm[hidden] { display: none; }
+.confirm .question { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--ui-ink, CanvasText); }
+.confirm .folder { font-weight: 600; text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+.confirm .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.confirm .actions button { height: 30px; padding: 0 14px; border-radius: 7px; border: 1px solid var(--ui-line, GrayText); background: transparent; font-size: 13px; }
+.confirm .actions button:hover { background: var(--ui-glass-hover, ButtonFace); }
+.confirm .actions .primary { background: var(--ui-paper, ButtonFace); color: var(--ui-paper-ink, ButtonText); border-color: transparent; font-weight: 600; }
+.confirm .actions .primary:hover { background: var(--ui-paper, ButtonFace); filter: brightness(1.05); }
+
 /* ------------------------------------------------------------ small windows, reduced motion */
 
 @media (max-width: 860px) {

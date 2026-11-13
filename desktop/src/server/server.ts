@@ -45,6 +45,8 @@ export interface ServerOptions { folder: string; port?: number; provider: Provid
   log?: (line: string) => void }
 export interface RunningServer { url: string; port: number; token: string; close(): Promise<void> }
 export interface EnrichPass { enrich?: EnrichReport; index?: IndexReport; error?: string }
+/** What an update pass would do, from a dry run: the captures it would send to the model, the files it would write. */
+export interface EnrichPlan { dryRun: true; send: number; write: number; captures: number; provider: string; folder: string }
 type Settings = Pick<Config, 'provider' | 'askModel' | 'enrichModel' | 'mapTiles' | 'theme'>;
 
 class HttpError extends Error {
@@ -287,6 +289,16 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     json(res, 202, { running: true, done: 0, total: 0 });
   };
 
+  /** The pass's dry run: reads the folder, writes nothing (not even the failures table) and calls no model. */
+  const planPass = async (res: http.ServerResponse) => {
+    if (closing) throw new HttpError(503, 'closing', 'the server is stopping');
+    if (pass.running) throw new HttpError(409, 'running', 'an update is already running');
+    const r = await enrichFolder({ folder, dryRun: true });
+    const plan: EnrichPlan = { dryRun: true, send: r.wouldCall.length, write: r.wouldWrite.length, captures: r.captures,
+      provider: provider.name, folder };
+    json(res, 200, plan);
+  };
+
   const passState = (res: http.ServerResponse) =>
     json(res, 200, { running: pass.running, done: pass.done, total: pass.total, ...(pass.report ? { report: pass.report } : {}) });
 
@@ -394,7 +406,11 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
         else if (pathname === '/api/ask') { only('POST'); await askRoute(req, res); }
         else if (pathname === '/api/settings') { only('POST'); await settingsRoute(req, res); }
         else if (pathname === '/api/enrich') {
-          if (method === 'POST') { await readBody(req); startPass(res); } else passState(res);
+          if (method === 'POST') {
+            const body = bodyObject(await readBody(req));
+            if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') throw new HttpError(400, 'bad_request', 'dryRun: expected true or false');
+            if (body.dryRun === true) await planPass(res); else startPass(res);
+          } else passState(res);
         }
         else if (capture) {
           only('GET');

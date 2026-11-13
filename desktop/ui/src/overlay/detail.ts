@@ -31,12 +31,19 @@ const METHODS: Record<string, string> = {
   voice_recording: 'Recorded on the phone', file_import: 'Imported as a file',
 };
 const WEEKDAYS: Record<string, string> = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday', sun: 'Sunday' };
+/** A table's own entry for a key from a capture, never an inherited one (`constructor`, `__proto__`, `toString`). */
+const own = (table: Record<string, string>, key: string): string | undefined => (Object.hasOwn(table, key) ? table[key] : undefined);
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 const humanise = (s: string) => {
   const t = s.replace(/^context\./, '').replace(/[._]+/g, ' ').trim();
   return t.charAt(0).toUpperCase() + t.slice(1);
 };
+
+/** A circumstance label in words; one this page does not know, as written. */
+export const circumstanceWords = (label: string): string => own(CIRCUMSTANCES, label) ?? label;
+/** How the capture was made, in words. */
+export const methodWords = (method: string): string => own(METHODS, method) ?? humanise(method);
 
 /** Only this page's own media route: `/media/<id>/<ref>`. */
 export function mediaSrc(u: string | undefined): string | undefined {
@@ -55,7 +62,7 @@ export function safeLink(u: string | undefined): string | undefined {
 /** "Tuesday 10 November 2026, 14:32" from the capture's own local date and time. */
 export function whenLine(item: Pick<DeskItem, 'local_date' | 'local_time' | 'weekday'>): string {
   const [y, m, d] = item.local_date.split('-').map(Number);
-  const day = WEEKDAYS[item.weekday] ?? item.weekday;
+  const day = own(WEEKDAYS, item.weekday) ?? item.weekday;
   const date = Number.isFinite(y) && m >= 1 && m <= 12 ? `${d} ${MONTHS[m - 1]} ${y}` : item.local_date;
   return `${day} ${date}, ${item.local_time}`;
 }
@@ -75,8 +82,12 @@ export function duration(s: number | undefined): string {
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
-/** A gap in plain words: "9 s", "45 min", "2 h 4 min", "1 day 4 h". */
+/** Beyond this a gap is "More than a month": a phone's clock or a bad value can make it any size. */
+const GAP_DAYS_MAX = 30;
+
+/** A gap in plain words: "9 s", "45 min", "2 h 4 min", "1 day 4 h", up to 30 days; "More than a month" beyond. */
 export function gapWords(seconds: number): string {
+  if (!(seconds <= GAP_DAYS_MAX * 86400)) return 'More than a month';
   if (seconds < 59.5) return `${Math.round(seconds)} s`;
   if (seconds < 86400 - 30) {
     const m = Math.round(seconds / 60), h = Math.floor(m / 60), mm = m % 60;
@@ -111,23 +122,23 @@ export function deviceLines(context: Record<string, unknown>): string[] {
   const outputs = Array.isArray(route.outputs) ? route.outputs.map(obj) : [];
   const where = [...new Set(outputs.map(o => {
     const type = str(o.port_type) ?? '';
-    return BUILT_IN_PORTS[type] ?? str(o.port_name) ?? PORTS[type];
+    return own(BUILT_IN_PORTS, type) ?? str(o.port_name) ?? own(PORTS, type);
   }).filter((x): x is string => !!x))];
   if (where.length) out.push(`Sound going to ${where.join(' and ')}`);
 
   const dev = obj(context['context.device']);
-  const level = num(dev.battery_level), state = BATTERY[str(dev.battery_state) ?? ''];
-  if (level !== undefined) out.push(`Battery at ${Math.round(level * 100)}%${state ? `, ${state}` : ''}`);
+  const level = num(dev.battery_level), state = own(BATTERY, str(dev.battery_state) ?? '');
+  if (level !== undefined) out.push(`Battery at ${Math.round(Math.min(1, Math.max(0, level)) * 100)}%${state ? `, ${state}` : ''}`);
   else if (state) out.push(`Battery ${state}`);
   if (dev.low_power_mode === true) out.push('Low power mode on');
   if (dev.interface_style === 'dark') out.push('Dark appearance');
   if (dev.thermal_state === 'serious' || dev.thermal_state === 'critical') out.push('Running hot');
   else if (dev.thermal_state === 'fair') out.push('Running warm');
-  const held = ORIENTATIONS[str(dev.orientation) ?? ''];
+  const held = own(ORIENTATIONS, str(dev.orientation) ?? '');
   if (held) out.push(held);
 
   const net = obj(context['context.network']);
-  const on = NETWORKS[str(net.interface) ?? ''];
+  const on = own(NETWORKS, str(net.interface) ?? '');
   if (on) out.push([on, net.expensive === true ? 'metered' : '', net.constrained === true ? 'low data mode' : ''].filter(Boolean).join(', '));
 
   const gap = num(obj(context['context.burst']).seconds_since_previous);
@@ -414,7 +425,7 @@ function backOf(item: DeskItem, d: CaptureDetail | undefined): Node[] {
   if (circumstances.length) {
     add('Likely', ...circumstances.map(c => {
       const box = el('div', { class: 'likely' });
-      box.append(line(el('span', { class: 'likely-label', text: CIRCUMSTANCES[c.label] ?? c.label }),
+      box.append(line(el('span', { class: 'likely-label', text: circumstanceWords(c.label) }),
         el('span', { class: 'confidence', text: `${c.confidence} confidence`, attrs: { 'data-level': c.confidence } })));
       if (c.evidence.length) box.append(el('ul', { class: 'evidence' }, ...c.evidence.map(e => el('li', { text: e }))));
       return box;
@@ -427,7 +438,7 @@ function backOf(item: DeskItem, d: CaptureDetail | undefined): Node[] {
   if (d?.image_descriptions.length) add('In the picture', ...d.image_descriptions.map(x => line(x.text)));
   if (d?.comments.length) add('Comments', ...d.comments.map(c => line(c.text ?? c.transcript ?? 'A spoken comment', ' ', soft(c.added_at.slice(0, 10)))));
   if (d) {
-    const method = METHODS[d.method] ?? humanise(d.method);
+    const method = methodWords(d.method);
     add('Captured', line(d.source_app ? `${method}, from ${d.source_app}` : method));
     add('Device', ...deviceLines(d.context).map(t => line(t)));
   }

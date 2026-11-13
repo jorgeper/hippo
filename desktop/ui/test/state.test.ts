@@ -26,6 +26,7 @@ function stubApi() {
     },
     ask: async (req: AskRequest) => { calls.push({ route: 'ask', body: structuredClone(req) }); return s.answer(req); },
     capture: unexpected('capture'),
+    enrichPlan: unexpected('enrichPlan'),
     enrichStart: unexpected('enrichStart'),
     enrichStatus: unexpected('enrichStatus'),
     settings: unexpected('settings'),

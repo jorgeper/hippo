@@ -84,6 +84,8 @@ async function start(): Promise<void> {
 
   const toolbar = mountToolbar(el('count'), el('tools'), el('progress'), {
     store, api,
+    provider: boot.settings.provider,
+    confirmHost: el('confirm-update'),
     resetView: () => stage.resetView(),
     ready: () => ready,
     afterUpdate: async () => {
@@ -98,6 +100,7 @@ async function start(): Promise<void> {
     themes: Object.keys(themes),
     saved: (now, before) => {
       boot = { ...boot, settings: now };
+      toolbar.setProvider(now.provider);
       if (now.mapTiles !== before.mapTiles) {
         stage.setMapTiles(now.mapTiles);
         arrange(true);
