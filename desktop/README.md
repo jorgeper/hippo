@@ -27,7 +27,7 @@ hippo status
 hippo search --text "banana" --kind link
 ```
 
-`hippo enrich` is the only command that calls a model and the only one that writes into the folder. Starting it on a real folder is a decision for the folder's owner (see [Privacy](#privacy)).
+Two things write into the folder: `hippo enrich` and the Update button on the desk, which runs the same pass. They, and questions typed into the desk, are also the only things that call a model. Starting the first enrichment on a real folder is a decision for the folder's owner (see [Privacy](#privacy)).
 
 ## Commands
 
@@ -35,7 +35,7 @@ hippo search --text "banana" --kind link
 |---|---|
 | `hippo enrich [--folder <path>] [--dry-run] [--no-model] [--limit n] [--provider name] [--model name]` | One pass over the folder. For each complete capture: works out the likely circumstances by rules, calls the model when what it would be shown has changed, and writes the capture's server enrichment document if its content differs. Then runs the index step. `--dry-run` lists the captures it would send to the model and the documents it would write, and does neither. `--no-model` writes only the rule-made circumstances. `--limit n` makes at most n model calls and leaves the rest for the next run. Ctrl-C finishes the calls in flight and stops; a second Ctrl-C quits at once. Exit code 3 when it stopped early (usage limit, not signed in, provider unavailable), 130 when interrupted. |
 | `hippo index [--folder <path>] [--rebuild]` | Builds or updates the local index and thumbnails from the folder. No model, nothing written into the folder. `--rebuild` starts from empty tables. |
-| `hippo status [--folder <path>]` | Captures by kind, how many are enriched, captures not yet complete in the folder (still syncing), enrichment failures, last runs. |
+| `hippo status [--folder <path>]` | Captures by kind, how many are enriched, how many have nothing to describe (no text or picture: a video, a recording without a transcript), captures not yet complete in the folder (still syncing), enrichment failures, last runs. |
 | `hippo search [filters] [--json]` | Finds captures. See [Search](#search). |
 | `hippo show <id> [--json]` | Everything about one capture: every field, the evidence behind each circumstance, and the absolute path of every file (originals, comment audio, thumbnails). Takes a whole id or a unique prefix of 8 or more characters. |
 | `hippo facets [--json]` | The vocabulary: kinds with counts, every topic, tag, person, site, locality and circumstance label with counts, and the date range. |
@@ -88,7 +88,7 @@ npm run build          # once, in desktop/: builds the page into ui/dist
 hippo ui               # starts the server and opens the page in your browser
 ```
 
-`hippo ui` builds the index first when it is empty. The server listens on 127.0.0.1 only, on port 4477 or the next free one (`--port` picks another). The address it prints holds a token that only that run knows; open that address, not the bare one. The page asks the model (the provider below) only when you ask a question or press Update; arranging, opening and lifting use no model.
+`hippo ui` builds the index first when it is empty. The server listens on 127.0.0.1 only, on port 4477 or the next free one (`--port` picks another). The address it prints holds a token that only that run knows; open that address, not the bare one. The page asks the model (the provider below) only when you ask a question or press Update; arranging, opening and lifting use no model. Update runs the same pass as `hippo enrich`. When that pass would send captures to the model, Update first says how many, to which provider, and how many files it would write into which folder, and waits for "Send and update". "Not now" sends and writes nothing. When nothing would go to the model, Update runs at once.
 
 To work on the page itself, run `hippo ui --dev` and `npm run dev` in `desktop/`. The page then comes from Vite on http://localhost:5177, which sends `/api` and `/media` to the server. If `hippo ui` had to take another port, start Vite as `HIPPO_PORT=<port> npm run dev`.
 
@@ -102,7 +102,7 @@ hippo enrich                               # enriches, then updates the index
 hippo ui
 ```
 
-Everything you ask afterwards is answered from the local index. The Update button on the desk runs the same pass as `hippo enrich`.
+After that, each question you type into the desk goes to the provider to be turned into a search (see [Privacy](#privacy) for what it carries); the captures it finds come from the local index. The Update button on the desk runs the same pass as `hippo enrich`, and asks before it sends anything.
 
 ### Try it without a folder of your own
 
@@ -157,7 +157,7 @@ The agent needs the `hippo` command on its PATH (`npm link`) and an index built 
 
 ## Providers
 
-The model provider is used by `hippo enrich` only. Pick one with `--provider`, or set `"provider"` in the config file.
+The model provider is used by `hippo enrich` and the desk's Update button to describe captures, and by the desk to turn a question into a search. Pick one with `--provider`, or set `"provider"` in the config file.
 
 | Provider | Uses | Needs |
 |---|---|---|
@@ -168,6 +168,8 @@ The model provider is used by `hippo enrich` only. Pick one with `--provider`, o
 | `fake` | Canned answers | Nothing; for tests |
 
 The default model is the `haiku` alias (the small fast model); change it with `--model` or `"enrichModel"` in the config file.
+
+Capture text can hold pages other people wrote: shared articles, link descriptions, text read from screenshots. Such text could try to tell the model what to do. `claude-cli`, the default, runs with its tools off for text, and for pictures it may only read the picture thumbnails. `codex-cli` runs an agent that can read files on this Mac: its read-only sandbox stops it writing, not reading. For a folder that holds shared web content, use `claude-cli`. Whatever the provider answers, a summary is kept to 600 characters and a picture description to 1,200.
 
 Keys come from the environment or from `desktop/.env`, which is gitignored: copy [`.env.example`](.env.example) to `.env` and fill in only the providers you use. A value set in the environment wins over the file. Keys are never written to the config file, the index or the folder. Keys from `.env` are not passed to the `claude` and `codex` commands, so they keep using the signed-in plan.
 
@@ -186,7 +188,7 @@ In it:
 - `index-<hash>.sqlite`: the index for one folder (the hash is of the folder path). It also records enrichment failures, retried up to three times per capture. Delete it at any time and run `hippo index --rebuild` to get the same results back with no model call.
 - `thumbs/`: a 256 px and a 1024 px JPEG of each picture, HEIC included, named by the picture's SHA-256.
 
-In the folder, `hippo enrich` writes one document per capture, `enrichments/server/YYYY/MM/DD/<capture-id>/enrichment.json` (layer `server`, producer `hippo-desk`, format 1.2), through a temp file in the same directory that is renamed into place. A document is rewritten only when its facets would change, so a second run uploads nothing. Facets it owns: `summary`, `tags`, `display`, `image_description`, `people`, `circumstance`, and `hippo_desk_state`. Facets from other producers are kept as found.
+In the folder, `hippo enrich` (and Update on the desk) writes one document per capture, `enrichments/server/YYYY/MM/DD/<capture-id>/enrichment.json` (layer `server`, producer `hippo-desk`, format 1.2), through a temp file in the same directory that is renamed into place. A document is rewritten only when its facets would change, so a second run uploads nothing. Facets it owns: `summary`, `tags`, `display`, `image_description`, `people`, `circumstance`, and `hippo_desk_state`. Facets from other producers are kept as found.
 
 ### The `hippo_desk_state` facet
 
@@ -201,7 +203,14 @@ A private bookkeeping facet, not part of the enrichment format, which the phone 
 
 ## Privacy
 
-Enrichment sends a capture's text and pictures (as JPEGs no larger than 1024 px) to the chosen model provider. That is the same exposure as pointing an agent at the folder. Run `hippo enrich --dry-run` first to see which captures would be sent and which documents written. The first `hippo enrich` on a real folder, which is also the first write into it, is for the folder's owner to start.
+What leaves this machine, and when:
+
+- **Enrichment** (`hippo enrich`, or Update on the desk) sends each capture's text and pictures (as JPEGs no larger than 1024 px) to the chosen model provider, and writes one `enrichment.json` per capture into the folder. That is the same exposure as pointing an agent at the folder. A note's body, transcripts, text read from pictures and link descriptions are each cut to 6,000 characters before they are sent. With `claude-cli`, the prompt also names the picture files by their absolute paths in the app-data directory, and those paths hold your Mac user name.
+- **Update on the desk** is the same pass as `hippo enrich`. Before it sends anything it asks, with the number of captures, the provider and the folder; "Not now" sends nothing.
+- **A question typed into the desk** sends the question, the last few questions and replies, today's date and time zone, the current search, and the folder's vocabulary: its topics, tags, people's names, sites, places and circumstance labels, each with a count. It sends no capture text and no pictures.
+- **Map tiles**, when on, ask openstreetmap.org for the map of the area you are looking at (see [Settings](#settings)).
+
+Run `hippo enrich --dry-run` first to see which captures would be sent and which documents written. The first enrichment of a real folder, which is also the first write into it, is for the folder's owner to start.
 
 Development and tests run only on temporary copies of `fixtures/packages`, never on the tracked fixtures and never on a real folder.
 
@@ -214,4 +223,4 @@ npm run build       # builds the page into ui/dist
 npm run e2e         # the browser test (Playwright, headless Chromium)
 ```
 
-`npm run e2e` needs the browser once: `npx playwright install chromium`. It writes a 120-capture sample folder to a temp directory with its own `HIPPO_DESK_HOME`, builds the page, starts the server on a free port with the fake provider, asks three questions, undoes them, lifts and turns over one item, and checks that the server refuses a request with no token. It removes everything it made. `test-results/` and `playwright-report/` are git-ignored. `npm test` does not run it.
+`npm run e2e` needs the browser once: `npx playwright install chromium`. It writes a 120-capture sample folder to a temp directory with its own `HIPPO_DESK_HOME` (map tiles off), builds the page, starts the server on a free port with the fake provider, asks three questions and checks which captures came back, undoes them, lifts and turns over one item, checks that the server refuses a request with no token, and checks that Update asks before it sends captures to the model ("Not now" sends nothing, "Send and update" runs the pass). No test may reach a host other than this machine. It removes everything it made. `test-results/` and `playwright-report/` are git-ignored. `npm test` does not run it.
