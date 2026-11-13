@@ -1,6 +1,6 @@
 # Hippo Desk (desktop)
 
-The desktop side of Hippo. It reads a synced Hippo folder, enriches each capture with a model (title, summary, tags, topic, people, picture descriptions) and rules (likely circumstances such as "in the car"), keeps a local index of everything, and lets you or a coding agent recall captures by association from the command line.
+The desktop side of Hippo. It reads a synced Hippo folder, enriches each capture with a model (title, summary, tags, topic, people, picture descriptions) and rules (likely circumstances such as "in the car"), keeps a local index of everything, and lets you recall captures by association: on a desk in the browser (`hippo ui`), from the command line, or through a coding agent.
 
 Design: [`docs/superpowers/specs/2026-11-12-hippo-desk-recall-design.md`](../docs/superpowers/specs/2026-11-12-hippo-desk-recall-design.md).
 
@@ -39,6 +39,7 @@ hippo search --text "banana" --kind link
 | `hippo search [filters] [--json]` | Finds captures. See [Search](#search). |
 | `hippo show <id> [--json]` | Everything about one capture: every field, the evidence behind each circumstance, and the absolute path of every file (originals, comment audio, thumbnails). Takes a whole id or a unique prefix of 8 or more characters. |
 | `hippo facets [--json]` | The vocabulary: kinds with counts, every topic, tag, person, site, locality and circumstance label with counts, and the date range. |
+| `hippo ui [--folder <path>] [--port n] [--no-open] [--provider name] [--dev]` | Starts the desk: a server on 127.0.0.1 and the page in your browser. See [The desk](#the-desk). |
 | `hippo sample --out <dir> [--count 300] [--seed 1] [--end YYYY-MM-DD]` | Writes a new folder of invented captures, already enriched. See [The sample folder](#the-sample-folder). |
 
 Every command except `sample` takes `--folder <path>`; without it the remembered folder is used. Exit code 2 means a usage error (an unknown flag or a bad value, named in the message).
@@ -77,6 +78,71 @@ hippo search --site youtube.com --circumstance in_car
 What it makes: links (a third of them YouTube, some shorts), photos and screenshots drawn from simple shapes, typed notes, short voice recordings with transcripts, videos and files, in `Europe/Lisbon` time, with the phone's context signals (audio route, motion, speed, weather) and comments. It writes the device enrichment and the server enrichment `hippo enrich` would write (display, summary, tags, picture descriptions, people, circumstances and `hippo_desk_state`), so `hippo enrich` on it calls no model and writes nothing. The same `--seed`, `--count` and `--end` give a byte-identical folder.
 
 `--out` must be a new or empty directory. It refuses a directory inside a Hippo folder (one with `captures/`) and inside this repository's `fixtures/`.
+
+## The desk
+
+`hippo ui` shows the index as a desk of things you can pick up. You ask in plain words ("the youtube videos from last week"), the captures that match lie on the desk in piles, and you handle them: open a pile, lift one, turn it over, set it aside, pin it.
+
+```sh
+npm run build          # once, in desktop/: builds the page into ui/dist
+hippo ui               # starts the server and opens the page in your browser
+```
+
+`hippo ui` builds the index first when it is empty. The server listens on 127.0.0.1 only, on port 4477 or the next free one (`--port` picks another). The address it prints holds a token that only that run knows; open that address, not the bare one. The page asks the model (the provider below) only when you ask a question or press Update; arranging, opening and lifting use no model.
+
+To work on the page itself, run `hippo ui --dev` and `npm run dev` in `desktop/`. The page then comes from Vite on http://localhost:5177, which sends `/api` and `/media` to the server. If `hippo ui` had to take another port, start Vite as `HIPPO_PORT=<port> npm run dev`.
+
+### Running it on your own folder
+
+Replace `"<path>"` with the folder that holds `captures/`. The first `hippo enrich` is the first write into that folder: it adds one `enrichments/server/YYYY/MM/DD/<capture-id>/enrichment.json` per capture and nothing else (no assets, no log, no state file), and it sends each capture's text and pictures to the provider you chose. Look first:
+
+```sh
+hippo enrich --dry-run --folder "<path>"   # lists what would be sent and written; writes nothing
+hippo enrich                               # enriches, then updates the index
+hippo ui
+```
+
+Everything you ask afterwards is answered from the local index. The Update button on the desk runs the same pass as `hippo enrich`.
+
+### Try it without a folder of your own
+
+```sh
+hippo sample --out ~/hippo-sample          # 300 invented captures, ending today
+hippo ui --folder ~/hippo-sample --provider fake
+```
+
+The `fake` provider answers by simple rules and calls no model. It understands, among others: "show me the youtube videos", "no, actually it was a screenshot", "from last week", "in the car", "by place", "by time", "by topic", "by person" and "start over". A short run:
+
+1. Ask "show me the youtube videos". The desk narrows to the YouTube links.
+2. Ask "no, actually it was a screenshot". The correction replaces the kind and keeps the rest.
+3. Ask "from last week". The time limit is added to the screenshots.
+4. Press the Place button. The same captures lie on a map, and captures with no location sit in a "No location" pile beside it.
+5. Press Undo until the desk shows everything again.
+
+### Gestures
+
+- **Open a pile:** click it. The pile fans out. Scroll to riffle through it. Escape, or a click outside, gathers it.
+- **Lift:** click an item. It comes up to read. "Turn over" or F turns it to its back, which shows the details and the evidence behind each guess; "Turn back" returns. "Put back" or Escape sets it down.
+- **Set aside:** throw an item toward an edge of the desk. Thrown items collect in a pile in a corner; open it and click one to take it back.
+- **Pin:** drop an item with Shift held, or drop it on the "Maybe these" pile. A pinned item stays on the desk whatever you ask next.
+- **Move:** drag an item to put it down somewhere else. Drag the empty desk to pan.
+- **Undo:** the Undo button, or Cmd/Ctrl+Z. It steps back one action at a time, newest first: a throw, a take-back, a pin or an unpin is undone before the question it was made under. "Start over" clears the desk and what you set aside.
+- **Layouts:** the buttons at the top right arrange the same captures by kind, time, place, topic or person. Asking can change the layout too ("by place").
+- **Ask bar:** Enter sends; Up and Down walk through earlier sentences; Escape clears it.
+
+### Settings
+
+The settings panel has the theme, the provider and the two model names (one for questions, one for enrichment), and map tiles. Saving writes the same config file the command line uses. It never shows or stores a key.
+
+Map tiles come from OpenStreetMap, which then sees the area you are looking at. Turn "Map tiles" off and the place layout draws a plain sheet with the places as pins; nothing is fetched from outside this machine.
+
+### When the model says it is not signed in
+
+The desk shows the provider's message in the reply line, and nothing on the desk changes.
+
+- `claude-cli` or `codex-cli`: run `claude` or `codex` once in a terminal and sign in there, then ask again. The desk uses whatever that command is signed in as.
+- API providers: set the key in the environment or in `desktop/.env` (see [Providers](#providers)) and restart `hippo ui`. The page never takes a key.
+- To look around without a model, run `hippo ui --provider fake`.
 
 ## Recall from a coding agent
 
@@ -141,6 +207,10 @@ Development and tests run only on temporary copies of `fixtures/packages`, never
 ## Development
 
 ```sh
-npm test            # node --test over test/**/*.test.ts
-npm run typecheck   # tsc --noEmit
+npm test            # node --test over test/**/*.test.ts and ui/test/**/*.test.ts
+npm run typecheck   # tsc --noEmit for the server, the page (ui/) and the browser test (e2e/)
+npm run build       # builds the page into ui/dist
+npm run e2e         # the browser test (Playwright, headless Chromium)
 ```
+
+`npm run e2e` needs the browser once: `npx playwright install chromium`. It writes a 120-capture sample folder to a temp directory with its own `HIPPO_DESK_HOME`, builds the page, starts the server on a free port with the fake provider, asks three questions, undoes them, lifts and turns over one item, and checks that the server refuses a request with no token. It removes everything it made. `test-results/` and `playwright-report/` are git-ignored. `npm test` does not run it.

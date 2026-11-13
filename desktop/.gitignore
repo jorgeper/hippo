@@ -3,3 +3,4 @@ ui/dist/
 .env*
 !.env.example
 test-results/
+playwright-report/

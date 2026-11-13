@@ -1,9 +1,10 @@
 # Hippo
 
-Hippo is a fast, local-first iPhone capture app that replaces emailing yourself things to remember. Each capture is saved on the phone first, as plain files plus versioned JSON, and then uploaded as a portable package to a cloud folder you own, where a future desktop app can read it.
+Hippo is a fast, local-first iPhone capture app that replaces emailing yourself things to remember. Each capture is saved on the phone first, as plain files plus versioned JSON, and then uploaded as a portable package to a cloud folder you own, where the desktop app (Hippo Desk, in `desktop/`) reads it, enriches it and lets you recall it.
 
 - Spec: [`hippo-v0-spec.md`](hippo-v0-spec.md)
 - Design (where it differs from the spec, it wins): [`docs/superpowers/specs/2026-11-07-hippo-v0-design.md`](docs/superpowers/specs/2026-11-07-hippo-v0-design.md)
+- Desktop: [`desktop/README.md`](desktop/README.md) (Hippo Desk: enrich, index, search and the desk)
 - Roadmap (what comes next, decided and considered): [`docs/roadmap.md`](docs/roadmap.md)
 
 **Status:** `HippoKit` (the core Swift package) and the iPhone app with its Share Extension exist. The app saves captures locally and syncs them to Dropbox (when an app key is configured; see [Dropbox](#dropbox)) and, in DEBUG builds, to a Developer folder. Release builds upload to Dropbox.

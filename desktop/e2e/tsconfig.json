@@ -1,0 +1,5 @@
+{
+  "extends": "../ui/tsconfig.json",
+  "compilerOptions": { "lib": ["es2023", "DOM", "DOM.Iterable"] },
+  "include": [".", "../playwright.config.ts", "../ui/src/main.ts", "../src/types"]
+}

@@ -51,6 +51,12 @@ Dropped for now: Health (heart rate, workout in progress, sleep). Judged too har
 - A desktop reader must list `comments/` on rescan (the package digest does not change).
 - Download from Dropbox should also fetch `comments/` so comments come back to a new phone.
 
+## Hippo Desk (desktop recall)
+
+**Built on the desktop (2026-11-12, [design](superpowers/specs/2026-11-12-hippo-desk-recall-design.md), [plan](superpowers/plans/2026-11-12-hippo-desk-recall.md), [README](../desktop/README.md)).** The first part of the desktop reader: a Node app in `desktop/` that reads the synced folder, enriches each capture with a model (title, summary, tags, topic, people, picture descriptions) and rules (likely circumstances), and keeps a local index. Writes only `enrichments/server/…/enrichment.json` into the folder. Recall three ways: the `hippo` command line (`search`, `show`, `facets`), a skill for coding agents, and the desk, a browser page (`hippo ui`) where a plain-words question lays the matching captures out as piles on a table that can be opened, lifted, turned over, set aside, pinned and arranged by kind, time, place, topic or person. Tested in a browser on a generated sample folder with a fake provider. Not yet run on the real Dropbox folder: starting that is Jorge's.
+
+- Phone side: nothing yet. Later phone work on this feature is added here.
+
 ## Later: ask and browse (an idea, not scheduled)
 
 Jorge's idea (2026-11-10): agents are text in, text out. Build a surface where the question goes in as text and the answer comes back as a set of captures to look at: a list, a grid, or piles on a table, which he can then zoom into, filter and sort by hand. Talk to the agent and browse, both. Definitely on the desktop; interesting on the phone too, with a model running against the phone's own data.
