@@ -2,7 +2,7 @@
 
 Scenarios that can only be checked on a real iPhone. Install with `make device`, run each row, then fill in Result (pass, fail with a note, or "not run") and Date. Spec refers to `hippo-v0-spec.md`; design refers to `docs/superpowers/specs/2026-11-07-hippo-v0-design.md`.
 
-Rows 1–24, whose upload halves waited for Dropbox, are re-run in the same device session as the D rows. Design D refers to `docs/superpowers/specs/2026-11-08-hippo-dropbox-design.md` §9. Design (comments) refers to `docs/superpowers/specs/2026-11-10-hippo-comments-design.md` §9. Design (context) refers to `docs/superpowers/specs/2026-11-10-hippo-capture-context-design.md` §10.
+Rows 1–24, whose upload halves waited for Dropbox, are re-run in the same device session as the D rows. Design D refers to `docs/superpowers/specs/2026-11-08-hippo-dropbox-design.md` §9. Design (comments) refers to `docs/superpowers/specs/2026-11-10-hippo-comments-design.md` §9. Design (context) refers to `docs/superpowers/specs/2026-11-10-hippo-capture-context-design.md` §10. Design (desk) refers to `docs/superpowers/specs/2026-11-12-hippo-desk-recall-design.md` §9.
 
 | # | Scenario | Steps | Expected | Result | Date |
 |---|---|---|---|---|---|
@@ -89,5 +89,15 @@ Rows 1–24, whose upload halves waited for Dropbox, are re-run in the same devi
 | X11 | Design (context) §10, folder documents | Connect Dropbox (or sync after updating) and look at the Hippo folder on the Mac. | `README.md` and `format/` (the three documents and `schema/`) are present. A `README.md` you wrote yourself is not overwritten and the documents still appear as `format/README.md`. | not run | |
 | X12 | Design (context) §10, old captures | Open captures made before this build, including ones with comments. | They open normally and show no Context section for signals they never had. | not run | |
 | X13 | Design (context) §10, activity in progress | Turn on "Motion activity". Start one activity (a drive or a walk) and save a capture after at least 30 minutes of it. Open Hippo after the 10-minute window has closed. | The Motion row and `at_capture` in the `motion_activity` facet show that activity, and its first segment starts before `window_start`. | not run | |
+| R1 | Design (desk) §9 | In a debug build with the Developer folder connected, open Settings, Storage, tap "Write sample server enrichment" (it writes for the newest capture, which must already be synced; otherwise it says "Sync this capture first."), let the sync pass finish, open that capture | Title, Topic, People, Likely and (for a picture) In the picture show with the gold stripe; "on_a_boat" shows as written | not run | |
+| R2 | Design (desk) §9 | On the Mac run `hippo enrich` on the real folder; wait for Dropbox; sync the phone; open an enriched capture | Its title, topic, summary, tags, picture description, people and likely circumstances match the Mac's `enrichment.json` | not run | |
+| R3 | Design (desk) §9 | Search the timeline for a word that appears only in a picture description | The capture is found | not run | |
+| R4 | Design (desk) §9 | Switch Server off in that capture's details | Every gold element goes; a link title the server had replaced shows the phone's title again | not run | |
+| R5 | Design (desk) §9 | Switch Phone off | Phone-derived elements go; raw content and the server's additions stay | not run | |
+| R6 | Design (desk) §9 | Switch Raw off | Raw sections go; the preview stays | not run | |
+| R7 | Design (desk) §9 | Switch Log on | This capture's log lines show at the bottom, without developer mode | not run | |
+| R8 | Design (desk) §9 | Change the switches, open another capture, then relaunch the app | The switches are as left | not run | |
+| R9 | Design (desk) §9 | Open a capture with no server enrichment | It looks as before this build, plus the switch row | not run | |
+| R10 | Design (desk) §9 | Set the text size to the largest accessibility size (Settings → Accessibility → Display & Text Size → Larger Text), open a capture's details | All five switches can be reached and tapped (swiping the row sideways if needed); no label is cut off | not run | |
 
 Device run 2026-11-08 (Debug build of feat/enrichment-visibility, iPhone 18 Pro, iOS 27): Jorge reported all E and V rows passing. E7, E8, E12 and E15 ask for observed values (provenance, type identifiers, LinkPresentation behaviour); those were not written down and are worth recording on the next run.

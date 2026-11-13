@@ -178,6 +178,33 @@ private struct EnrichmentHarness {
         #expect(try t.deviceRevision(id) == nil)
     }
 
+    /// A pull can replace a server document written by format 1.1 with one carrying the 1.2 kinds; the search
+    /// text is rebuilt from the new document.
+    @Test func format12ServerDocumentReplacingAnOldOneIsSearchable() async throws {
+        let t = try EnrichmentHarness(); defer { t.cleanup() }
+        let pkg = try await t.h.add(note: "Wombat")
+        let id = pkg.metadata.captureID
+        try t.store.write(try t.document(pkg, .server, facets: [.summary: SummaryData(text: "quokka sighting")]),
+                          newAssets: [:])
+        #expect(try t.search("quokka") == [id])
+        #expect(try t.search("kayak").isEmpty)
+        #expect(try t.search("Marlowe").isEmpty)
+        #expect(try t.search("Regatta").isEmpty)
+
+        try t.store.write(try t.document(pkg, .server, facets: [
+            .summary: SummaryData(text: "quokka sighting"),
+            .display: DisplayData(title: "Regatta day", topic: "Sailing"),
+            .imageDescription: ImageDescriptionData(items: [ImageDescriptionItem(attachmentID: "a",
+                                                                                 text: "a red kayak on a lake")]),
+            .people: PeopleData(items: [PersonItem(name: "Marlowe", source: "user_note")]),
+        ]), newAssets: [:])
+        #expect(try t.search("quokka") == [id])
+        #expect(try t.search("kayak") == [id])
+        #expect(try t.search("Marlowe") == [id])
+        #expect(try t.search("Regatta") == [id])
+        #expect(try t.search("Sailing") == [id])
+    }
+
     @Test func removeLayerClearsSearch() async throws {
         let t = try EnrichmentHarness(); defer { t.cleanup() }
         let pkg = try await t.h.add(note: "Wombat")

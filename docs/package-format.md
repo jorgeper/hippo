@@ -1,10 +1,10 @@
-# Hippo capture package format, version 1.1
+# Hippo capture package format, version 1.2
 
 For developers building a reader (the desktop app). The signals added in 1.1 are listed in one table in `context-signals.md`. Machine-readable definitions: `schema/capture-metadata-v1.schema.json`, `schema/complete-v1.schema.json` and `schema/capture-comment-v1.schema.json`. Worked examples: `fixtures/packages/` in the repository (package 7 carries every 1.1 signal). In a synced Hippo folder this document is `format/package-format.md` and the schemas are in `format/schema/`. The reference writer and validator are `PackageWriter` and `PackageValidator` in `HippoKit/Sources/CaptureCore`.
 
 ## Versioning
 
-The format version has two parts, written "major.minor". This document is version 1.1.
+The format version has two parts, written "major.minor". This document is version 1.2.
 
 | Part | Where | Rule |
 |---|---|---|
@@ -72,7 +72,7 @@ Optional (omitted when unknown):
 | `shared_title` | string | Title supplied by the sharing app. |
 | `shared_text` | string | Text supplied by the sharing app. |
 | `source_application` | string | |
-| `schema_minor` | integer | Format minor of the writer (1.1 writes `1`). Missing means 0. |
+| `schema_minor` | integer | Format minor of the writer (1.1 writes `1`, 1.2 writes `2`). Missing means 0. |
 | `capture_location` | object | `latitude`, `longitude` (degrees), `horizontal_accuracy_meters`, `observed_at` (RFC 3339 UTC), `provenance`, and the optional extras below. |
 
 `capture_location` extras (format 1.1). All optional. A value and its accuracy are dropped together: if the value is invalid (not finite, a negative speed, a course outside 0-360) or its accuracy is invalid (negative or not finite), both fields of that pair are omitted. A valid value with no accuracy is kept without it. The location itself is always kept. A single fix often has no speed or course; they are then absent.
@@ -199,7 +199,8 @@ Exactly one of `text` or `audio` is present. The json is the comment's own marke
 | Format | Dates | Changes |
 |---|---|---|
 | 1.0 | 2026-11-07 to 2026-11-10 | Packages, enrichment, comments, the `camera` capture method. No `schema_minor`. |
-| 1.1 | 2026-11-10 | `schema_minor`; the `context.*` observations; the six `capture_location` extras; the facet kinds `motion_activity`, `weather`, `barcodes`, `language`, `sound_classification`, `screenshot`. |
+| 1.1 | 2026-11-10 to 2026-11-12 | `schema_minor`; the `context.*` observations; the six `capture_location` extras; the facet kinds `motion_activity`, `weather`, `barcodes`, `language`, `sound_classification`, `screenshot`. |
+| 1.2 | 2026-11-12 | The server facet kinds `display`, `image_description`, `people`, `circumstance`. Packages are unchanged. |
 
 Every later minor adds a row here.
 

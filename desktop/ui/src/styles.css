@@ -1,0 +1,180 @@
+/*
+ * The page around the desk: the controls laid over the canvas. Every colour and font comes from a custom property the theme
+ * sets on :root (themes/<name>/ supplies them); the fallbacks are the system's own neutral colours, used only until the
+ * theme has loaded. Nothing here names a colour.
+ */
+:root {
+  color-scheme: dark;
+  --gap: 18px;
+  --radius: 10px;
+  font: 14px/1.4 var(--ui-font, system-ui, sans-serif);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--ui-ground, Canvas); color: var(--ui-ink, CanvasText); overflow: hidden; -webkit-font-smoothing: antialiased; }
+#desk { position: fixed; inset: 0; }
+#stage { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--ui-focus, Highlight); outline-offset: 2px; }
+
+/* ------------------------------------------------------------ top: the tally and tools (left), layouts (right) */
+
+.top {
+  position: fixed; top: 14px; left: var(--gap); right: var(--gap);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  pointer-events: none;
+}
+.top > * { pointer-events: auto; }
+.tally { display: flex; align-items: center; gap: 14px; min-width: 0; }
+
+.count {
+  margin: 0; white-space: nowrap; font-size: 13px; color: var(--ui-ink-soft, GrayText);
+  font-variant-numeric: tabular-nums; letter-spacing: 0.01em;
+}
+.count b { font-weight: 600; color: var(--ui-ink, CanvasText); }
+.count .aside { color: var(--ui-ink-soft, GrayText); }
+
+.tools { display: flex; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--ui-glass, Canvas); border: 1px solid var(--ui-line, GrayText); backdrop-filter: blur(8px); }
+.tool {
+  width: 30px; height: 30px; display: grid; place-items: center; padding: 0;
+  border: 0; border-radius: 7px; background: transparent; color: var(--ui-ink-soft, GrayText);
+  transition: background-color 120ms, color 120ms;
+}
+.tool svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.tool:hover:not(:disabled) { background: var(--ui-glass-hover, ButtonFace); color: var(--ui-ink, CanvasText); }
+.tool[aria-expanded="true"] { background: var(--ui-glass-hover, ButtonFace); color: var(--ui-ink, CanvasText); }
+.tool:disabled { opacity: 0.35; cursor: default; }
+.tool.busy svg { animation: turn 1.1s linear infinite; }
+@keyframes turn { to { transform: rotate(360deg); } }
+
+.progress { margin: 0; padding-left: 14px; border-left: 1px solid var(--ui-line, GrayText); font-size: 12.5px; color: var(--ui-ink-soft, GrayText); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.progress.failed { color: var(--ui-danger, CanvasText); }
+.progress:empty { display: none; }
+
+/* The layout buttons: a quiet row in which the one in use is a slip of the desk's paper. */
+.layouts {
+  display: flex; gap: 2px; padding: 3px; border-radius: var(--radius);
+  background: var(--ui-glass, Canvas); border: 1px solid var(--ui-line, GrayText); backdrop-filter: blur(8px);
+}
+.layouts button {
+  border: 0; background: transparent; color: var(--ui-ink-soft, GrayText);
+  padding: 5px 12px; border-radius: 7px; font-size: 13px; letter-spacing: 0.01em;
+  transition: background-color 140ms, color 140ms;
+}
+.layouts button:hover { color: var(--ui-ink, CanvasText); background: var(--ui-glass-hover, ButtonFace); }
+.layouts button[aria-pressed="true"] {
+  background: var(--ui-paper, ButtonFace); color: var(--ui-paper-ink, ButtonText); font-weight: 600;
+  box-shadow: 0 1px 2px var(--ui-shadow, transparent);
+}
+
+/* ------------------------------------------------------------ bottom: the reply line over the ask bar */
+
+.bottom {
+  position: fixed; left: 16px; right: 16px; bottom: 22px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  pointer-events: none;
+}
+.bottom > * { pointer-events: auto; }
+
+.reply {
+  margin: 0; max-width: min(680px, 100%); text-align: center;
+  font: 16px/1.35 var(--ui-reply-font, serif); color: var(--ui-ink, CanvasText);
+  text-shadow: 0 1px 8px var(--ui-ground, Canvas);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  transition: opacity 200ms;
+}
+.reply:empty { display: none; }
+.thinking .reply { opacity: 0.5; }
+
+.ask {
+  width: min(620px, 100%); height: 46px; display: flex; align-items: center; gap: 12px; padding: 0 16px 0 18px;
+  border-radius: 14px; background: var(--ui-glass-strong, Canvas); border: 1px solid var(--ui-line, GrayText);
+  box-shadow: 0 12px 32px var(--ui-shadow, transparent); backdrop-filter: blur(12px);
+  transition: border-color 140ms;
+}
+.ask:focus-within { border-color: var(--ui-line-strong, CanvasText); }
+.ask input {
+  flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent;
+  font-size: 15px; color: var(--ui-ink, CanvasText); caret-color: var(--ui-lamp, CanvasText);
+}
+.ask input::placeholder { color: var(--ui-ink-faint, GrayText); }
+
+/* The lamp: a dim point while the desk waits, the key light's warm colour, breathing, while a question is out. */
+.lamp { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--ui-ink-faint, GrayText); transition: background-color 200ms; }
+.thinking .lamp { background: var(--ui-lamp, Highlight); animation: breathe 1.3s ease-in-out infinite; }
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 0 var(--ui-lamp-glow, transparent); transform: scale(0.85); }
+  50% { box-shadow: 0 0 0 6px transparent, 0 0 12px 2px var(--ui-lamp-glow, transparent); transform: scale(1.1); }
+}
+
+/* ------------------------------------------------------------ settings */
+
+.settings {
+  position: fixed; top: 58px; left: var(--gap); width: min(320px, calc(100vw - 2 * var(--gap)));
+  padding: 16px 16px 14px; border-radius: 12px;
+  background: var(--ui-glass-strong, Canvas); border: 1px solid var(--ui-line, GrayText);
+  box-shadow: 0 18px 40px var(--ui-shadow, transparent); backdrop-filter: blur(14px);
+}
+.settings[hidden] { display: none; }
+.settings h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+.settings .field { display: grid; gap: 5px; margin-bottom: 12px; }
+.settings label, .settings .label { font-size: 12.5px; color: var(--ui-ink-soft, GrayText); }
+.settings select, .settings input[type="text"] {
+  width: 100%; height: 32px; padding: 0 9px; border-radius: 7px;
+  background: var(--ui-glass-hover, Field); border: 1px solid var(--ui-line, GrayText); color: var(--ui-ink, FieldText);
+}
+.settings select:focus-visible, .settings input[type="text"]:focus-visible { outline-offset: 0; }
+.settings .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.settings .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings .switch label { color: var(--ui-ink, CanvasText); font-size: 13px; }
+.settings input[type="checkbox"] {
+  appearance: none; flex: none; width: 34px; height: 20px; margin: 0; border-radius: 10px; position: relative; cursor: pointer;
+  background: var(--ui-glass-hover, ButtonFace); border: 1px solid var(--ui-line-strong, GrayText); transition: background-color 140ms;
+}
+.settings input[type="checkbox"]::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--ui-ink-soft, GrayText); transition: transform 140ms, background-color 140ms;
+}
+.settings input[type="checkbox"]:checked { background: var(--ui-paper, Highlight); }
+.settings input[type="checkbox"]:checked::after { transform: translateX(14px); background: var(--ui-paper-ink, HighlightText); }
+.settings .hint { margin: 6px 0 0; font-size: 12px; line-height: 1.4; color: var(--ui-ink-faint, GrayText); }
+.settings .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.settings .message { margin: 0 auto 0 0; font-size: 12.5px; color: var(--ui-ink-soft, GrayText); }
+.settings .message.failed { color: var(--ui-danger, CanvasText); }
+.settings .actions button { height: 30px; padding: 0 14px; border-radius: 7px; border: 1px solid var(--ui-line, GrayText); background: transparent; font-size: 13px; }
+.settings .actions button:hover { background: var(--ui-glass-hover, ButtonFace); }
+.settings .actions .primary { background: var(--ui-paper, ButtonFace); color: var(--ui-paper-ink, ButtonText); border-color: transparent; font-weight: 600; }
+.settings .actions .primary:hover { background: var(--ui-paper, ButtonFace); filter: brightness(1.05); }
+.settings .actions button:disabled { opacity: 0.5; cursor: default; }
+
+/* ------------------------------------------------------------ the question before an update */
+
+.confirm {
+  position: fixed; top: 58px; left: var(--gap); width: min(340px, calc(100vw - 2 * var(--gap)));
+  padding: 16px 16px 14px; border-radius: 12px;
+  background: var(--ui-glass-strong, Canvas); border: 1px solid var(--ui-line, GrayText);
+  box-shadow: 0 18px 40px var(--ui-shadow, transparent); backdrop-filter: blur(14px);
+}
+.confirm[hidden] { display: none; }
+.confirm .question { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--ui-ink, CanvasText); }
+.confirm .folder { font-weight: 600; text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+.confirm .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.confirm .actions button { height: 30px; padding: 0 14px; border-radius: 7px; border: 1px solid var(--ui-line, GrayText); background: transparent; font-size: 13px; }
+.confirm .actions button:hover { background: var(--ui-glass-hover, ButtonFace); }
+.confirm .actions .primary { background: var(--ui-paper, ButtonFace); color: var(--ui-paper-ink, ButtonText); border-color: transparent; font-weight: 600; }
+.confirm .actions .primary:hover { background: var(--ui-paper, ButtonFace); filter: brightness(1.05); }
+
+/* ------------------------------------------------------------ small windows, reduced motion */
+
+@media (max-width: 860px) {
+  .count .aside { display: none; }
+  .layouts button { padding: 5px 9px; }
+  .progress { max-width: 150px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking .lamp { animation: none; box-shadow: 0 0 10px 2px var(--ui-lamp-glow, transparent); }
+  .tool.busy svg { animation: none; }
+  * { transition-duration: 0ms !important; }
+}

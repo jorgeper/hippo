@@ -324,3 +324,64 @@ public struct ScreenshotData: Codable, Sendable, Equatable {
     public var items: [Item]
     public init(items: [Item]) { self.items = items }
 }
+
+// MARK: Server facets (format 1.2)
+
+public struct DisplayKeyword: Codable, Sendable, Equatable {
+    public var word: String
+    /// 0 to 1.
+    public var weight: Double
+    public init(word: String, weight: Double) { self.word = word; self.weight = weight }
+}
+
+public struct DisplayData: Codable, Sendable, Equatable {
+    /// At most 60 characters.
+    public var title: String?
+    public var topic: String?
+    /// At most 12.
+    public var keywords: [DisplayKeyword]?
+    public init(title: String? = nil, topic: String? = nil, keywords: [DisplayKeyword]? = nil) {
+        self.title = title; self.topic = topic; self.keywords = keywords
+    }
+}
+
+public struct ImageDescriptionItem: Codable, Sendable, Equatable {
+    public var attachmentID: String
+    public var text: String
+    public init(attachmentID: String, text: String) { self.attachmentID = attachmentID; self.text = text }
+    enum CodingKeys: String, CodingKey { case attachmentID = "attachment_id", text }
+}
+
+public struct ImageDescriptionData: Codable, Sendable, Equatable {
+    public var items: [ImageDescriptionItem]
+    public init(items: [ImageDescriptionItem]) { self.items = items }
+}
+
+public struct PersonItem: Codable, Sendable, Equatable {
+    public var name: String
+    /// `user_note`, `shared_text`, `shared_title`, an attachment ID or a comment ID.
+    public var source: String
+    public init(name: String, source: String) { self.name = name; self.source = source }
+}
+
+public struct PeopleData: Codable, Sendable, Equatable {
+    public var items: [PersonItem]
+    public init(items: [PersonItem]) { self.items = items }
+}
+
+public struct CircumstanceItem: Codable, Sendable, Equatable {
+    /// An open set: `in_car`, `walking`, `running`, `cycling`, `on_headphones`, `in_a_burst`, `daylight`, `dark`, ...
+    public var label: String
+    /// `low`, `medium` or `high`; an open set.
+    public var confidence: String
+    /// Short plain sentences, e.g. "audio route was CarPlay".
+    public var evidence: [String]?
+    public init(label: String, confidence: String, evidence: [String]? = nil) {
+        self.label = label; self.confidence = confidence; self.evidence = evidence
+    }
+}
+
+public struct CircumstanceData: Codable, Sendable, Equatable {
+    public var items: [CircumstanceItem]
+    public init(items: [CircumstanceItem]) { self.items = items }
+}

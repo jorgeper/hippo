@@ -13,6 +13,8 @@ Field-level detail is in `package-format.md` (capture-time signals, in `metadata
 
 Read both files for a capture. A signal that needs a permission or the network is never collected by the Share Extension.
 
+A reader may publish its own conclusions as the `circumstance` facet in the server `enrichment.json` (format 1.2, see `enrichment-format.md`); the phone still records only facts.
+
 ## Signals
 
 "Since" is the format minor that introduced the signal. Every signal here is since `1.1`.

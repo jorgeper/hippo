@@ -51,9 +51,13 @@ Dropped for now: Health (heart rate, workout in progress, sleep). Judged too har
 - A desktop reader must list `comments/` on rescan (the package digest does not change).
 - Download from Dropbox should also fetch `comments/` so comments come back to a new phone.
 
-## Later: ask and browse (an idea, not scheduled)
+## Hippo Desk (desktop recall)
 
-Jorge's idea (2026-11-10): agents are text in, text out. Build a surface where the question goes in as text and the answer comes back as a set of captures to look at: a list, a grid, or piles on a table, which he can then zoom into, filter and sort by hand. Talk to the agent and browse, both. Definitely on the desktop; interesting on the phone too, with a model running against the phone's own data.
+- **Done: Hippo Desk, the desktop side (2026-11-12, [design](superpowers/specs/2026-11-12-hippo-desk-recall-design.md), [plan](superpowers/plans/2026-11-12-hippo-desk-recall.md), [README](../desktop/README.md)).** A Node app in `desktop/` that reads the synced folder, enriches each capture with a model (title, summary, tags, topic, people, picture descriptions) and rules (likely circumstances), and keeps a local index. It writes only `enrichments/server/…/enrichment.json` into the folder. Recall three ways: the `hippo` command line (`search`, `show`, `facets`), a skill for coding agents, and the desk, a browser page (`hippo ui`) where a plain-words question lays the matching captures out as piles that can be opened, lifted, turned over, set aside, pinned and arranged by kind, time, place, topic or person. Tested in a browser on a generated sample folder with a fake provider. The phone side is built; its device checks (R1–R10 in `docs/acceptance.md`) are not yet run. A capture's details show the title, topic, picture descriptions, people and likely circumstances from the server tier, and timeline search finds text in them. Switches for Raw, Phone, Server, Sync and Log in a capture's details show or hide each tier, with the capture's log. Not yet run on the real Dropbox folder: starting that is Jorge's.
+
+## Ask and browse (built on the desktop as Hippo Desk, above; phone side still an idea)
+
+Jorge's idea (2026-11-10), now built for the desktop as Hippo Desk: agents are text in, text out. Build a surface where the question goes in as text and the answer comes back as a set of captures to look at: a list, a grid, or piles on a table, which he can then zoom into, filter and sort by hand. Talk to the agent and browse, both. Definitely on the desktop; interesting on the phone too, with a model running against the phone's own data.
 
 What it needs from the data, already true or coming: every signal a queryable fact with a stable key (capture context phase), captures addressable by `capture_id`, thumbnails available locally. The agent's answer would be capture IDs plus a grouping, rendered by native views, so the model never has to describe what the screen can show.
 

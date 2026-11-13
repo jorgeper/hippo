@@ -207,3 +207,89 @@ private func det(_ t: String) -> Detection { Detection(type: "phone", text: t, v
         #expect(bad == .empty)
     }
 }
+
+// MARK: Format 1.2 server kinds
+
+private let fixturesRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    .appendingPathComponent("fixtures/packages/enrichments", isDirectory: true)
+
+private func fixture7(_ layer: EnrichmentLayer) throws -> EnrichmentDocument {
+    try EnrichmentJSON.decode(Data(contentsOf: fixturesRoot.appendingPathComponent(
+        "\(layer.rawValue)/2026/11/07/00000000-0000-4000-8000-000000000007/enrichment.json")))
+}
+
+@Suite struct ResolvedEnrichmentServerKindsTests {
+    @Test func capture7ResolvesEveryNewKindFromServer() throws {
+        let r = ResolvedEnrichment.make(device: try fixture7(.device), server: try fixture7(.server), assetURL: assetURL)
+        #expect(r.title == "Cafe menu with specials code")
+        #expect(r.topic == "food")
+        #expect(Array(r.imageDescriptions.keys) == ["00000000-0000-4000-8000-000700000001"])
+        #expect(r.imageDescriptions["00000000-0000-4000-8000-000700000001"]?.hasPrefix("A printed cafe menu") == true)
+        #expect(r.people == [PersonItem(name: "Ana", source: "user_note")])
+        #expect(r.circumstances.map(\.label) == ["in_car", "in_a_burst", "daylight"])
+        #expect(r.circumstances.first?.evidence?.first == "audio route was CarPlay")
+        #expect(r.fromServer.title && r.fromServer.topic && r.fromServer.people && r.fromServer.circumstances)
+        #expect(r.fromServer.imageDescriptions == ["00000000-0000-4000-8000-000700000001"])
+        #expect(r.usesServer)
+    }
+
+    @Test func noServerDocumentLeavesNewKindsEmpty() throws {
+        let r = ResolvedEnrichment.make(device: try fixture7(.device), server: nil, assetURL: assetURL)
+        #expect(r.title == nil && r.topic == nil && r.imageDescriptions.isEmpty && r.people.isEmpty)
+        #expect(r.circumstances.isEmpty)
+        #expect(!r.fromServer.title && !r.fromServer.topic && !r.fromServer.people && !r.fromServer.circumstances)
+        #expect(r.fromServer.imageDescriptions.isEmpty)
+        #expect(!r.usesServer)
+    }
+
+    @Test func facetThatDoesNotDecodeIsSkipped() throws {
+        let r = try docs(silver: [:], gold: [.display: (.ok, DisplayData(title: "T", topic: "food")),
+                                             .people: (.ok, "oops")])
+        #expect(r.title == "T" && r.topic == "food" && r.people.isEmpty && !r.fromServer.people)
+        #expect(r.usesServer)
+    }
+
+    @Test func failedDisplayYieldsNoTitle() throws {
+        let r = try docs(silver: [:], gold: [.display: (.failed, DisplayData(title: "T", topic: "food"))])
+        #expect(r.title == nil && r.topic == nil && !r.fromServer.title && !r.usesServer)
+    }
+
+    @Test func blankTitleIsAbsent() throws {
+        let r = try docs(silver: [:], gold: [.display: (.ok, DisplayData(title: "  ", topic: "food"))])
+        #expect(r.title == nil && !r.fromServer.title)
+        #expect(r.topic == "food" && r.fromServer.topic)
+    }
+
+    @Test func blankPeopleAndCircumstancesDropped() throws {
+        let r = try docs(silver: [:], gold: [
+            .people: (.ok, PeopleData(items: [PersonItem(name: " ", source: "user_note"),
+                                              PersonItem(name: "Ana", source: "user_note")])),
+            .circumstance: (.ok, CircumstanceData(items: [CircumstanceItem(label: "", confidence: "high"),
+                                                          CircumstanceItem(label: "dark", confidence: "low")]))])
+        #expect(r.people == [PersonItem(name: "Ana", source: "user_note")])
+        #expect(r.circumstances == [CircumstanceItem(label: "dark", confidence: "low")])
+        let allBlank = try docs(silver: [:], gold: [
+            .people: (.ok, PeopleData(items: [PersonItem(name: "", source: "user_note")]))])
+        #expect(allBlank.people.isEmpty && !allBlank.fromServer.people && !allBlank.usesServer)
+    }
+
+    @Test func deviceValuesUsedWhenServerHasNone() throws {
+        let silver: [FacetKind: (FacetStatus, any Encodable)] = [
+            .display: (.ok, DisplayData(title: "S", topic: "s")),
+            .imageDescription: (.ok, ImageDescriptionData(items: [ImageDescriptionItem(attachmentID: "A", text: "s"),
+                                                                  ImageDescriptionItem(attachmentID: "B", text: "s")])),
+            .people: (.ok, PeopleData(items: [PersonItem(name: "S", source: "user_note")])),
+            .circumstance: (.ok, CircumstanceData(items: [CircumstanceItem(label: "walking", confidence: "low")]))]
+        let r = try docs(silver: silver, gold: [
+            .display: (.ok, DisplayData(title: "G")),
+            .imageDescription: (.ok, ImageDescriptionData(items: [ImageDescriptionItem(attachmentID: "A", text: "g"),
+                                                                  ImageDescriptionItem(attachmentID: "B", text: " ")])),
+            .people: (.failed, PeopleData(items: [PersonItem(name: "G", source: "user_note")])),
+            .circumstance: (.ok, CircumstanceData(items: []))])
+        #expect(r.title == "G" && r.topic == "s")
+        #expect(r.imageDescriptions == ["A": "g", "B": "s"] && r.fromServer.imageDescriptions == ["A"])
+        #expect(r.people.map(\.name) == ["S"] && r.circumstances.map(\.label) == ["walking"])
+        #expect(r.fromServer == ServerOrigin(title: true, imageDescriptions: ["A"]))
+    }
+}

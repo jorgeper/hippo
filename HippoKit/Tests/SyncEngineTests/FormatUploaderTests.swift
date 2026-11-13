@@ -113,6 +113,16 @@ private struct Setup {
         #expect(s.bundle.digest.count == 64)
     }
 
+    @Test func bundleCarriesTheFormat12Documents() throws {
+        let s = try Setup(); defer { s.h.cleanup() }
+        func text(_ path: String) throws -> String {
+            let file = try #require(s.bundle.formatFiles.first { $0.relativePath == path })
+            return try String(contentsOf: file.localURL, encoding: .utf8)
+        }
+        #expect(try text("format/enrichment-format.md").contains("Facet kinds added in format 1.2"))
+        #expect(try text("format/schema/enrichment-v1.schema.json").contains("circumstanceData"))
+    }
+
     @Test func loadRejectsAMissingDocumentAndAReadmeWithoutTheMarker() throws {
         let s = try Setup(); defer { s.h.cleanup() }
         let copy = try s.copyOfRepoFiles()

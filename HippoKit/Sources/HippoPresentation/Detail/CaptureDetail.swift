@@ -21,6 +21,34 @@ public struct FoundItem: Equatable, Sendable {
     public init(kind: String, text: String, action: FoundAction?) { self.kind = kind; self.text = text; self.action = action }
 }
 
+/// One name in Detail's People section, with where in the capture it was found.
+public struct PersonRow: Equatable, Sendable, Identifiable {
+    /// The name, lower-cased.
+    public var id: String
+    public var name: String
+    /// "In your note", "In attachment 2", ...; empty when the source is not one this capture has.
+    public var foundIn: String
+    public var layer: Layer
+    public init(id: String, name: String, foundIn: String, layer: Layer) {
+        self.id = id; self.name = name; self.foundIn = foundIn; self.layer = layer
+    }
+}
+
+/// One circumstance in Detail's Likely section, in words. A conclusion, not a fact.
+public struct LikelyRow: Equatable, Sendable, Identifiable {
+    /// The label as written, e.g. `in_car`.
+    public var id: String
+    /// "In a car"; an unknown label as written.
+    public var text: String
+    /// "High confidence"; an unknown value as written.
+    public var confidence: String
+    public var evidence: [String]
+    public var layer: Layer
+    public init(id: String, text: String, confidence: String, evidence: [String], layer: Layer) {
+        self.id = id; self.text = text; self.confidence = confidence; self.evidence = evidence; self.layer = layer
+    }
+}
+
 /// One entry in Detail's Comments section: the capture-time comment (`user_note`), a capture-time recording, or a
 /// comment added afterwards.
 public struct CommentRow: Equatable, Sendable, Identifiable {
@@ -39,6 +67,8 @@ public struct CommentRow: Equatable, Sendable, Identifiable {
     /// Set when a capture-time recording was trimmed from this iPhone (Save space); its file is in the destination
     /// only. Always nil for `user_note` and comment rows: comment files are never trimmed.
     public var remoteOnly: RemoteOnlyAttachment?
+    /// False when the Raw switch hides the comment itself and only its transcript is shown.
+    public var showsBody = true
 
     public init(id: String, body: Body, caption: String? = nil, transcript: String? = nil, transcriptLayer: Layer? = nil,
                 remoteOnly: RemoteOnlyAttachment? = nil) {
@@ -79,6 +109,17 @@ public struct CaptureDetail: Equatable, Sendable {
     public var foundLayer: Layer
     public var summaryLayer: Layer
     public var tagsLayer: Layer
+    /// The model's title for the capture (`display.title`).
+    public var title: String? = nil
+    public var titleLayer: Layer = .silver
+    /// The capture's one-word topic (`display.topic`).
+    public var topic: String? = nil
+    public var topicLayer: Layer = .silver
+    /// "In the picture": one entry per attachment with a description, in attachment order.
+    public var imageDescriptions: [TitledText] = []
+    public var people: [PersonRow] = []
+    /// Likely circumstances, in the order the document gives them.
+    public var likely: [LikelyRow] = []
     /// Detail's Status section: bronze save line, one line per enrichment step, the server arrival. Sync rows are `sync`.
     public var status: [StatusLine]
     /// Where a result will appear and isn't there yet.
@@ -160,6 +201,11 @@ public struct CaptureDetail: Equatable, Sendable {
             foundLayer: enrichment.fromServer.detections ? .gold : .silver,
             summaryLayer: enrichment.fromServer.summary ? .gold : .silver,
             tagsLayer: enrichment.fromServer.tags ? .gold : .silver,
+            title: nonEmpty(enrichment.title), titleLayer: enrichment.fromServer.title ? .gold : .silver,
+            topic: nonEmpty(enrichment.topic), topicLayer: enrichment.fromServer.topic ? .gold : .silver,
+            imageDescriptions: titled(m, enrichment.imageDescriptions, gold: enrichment.fromServer.imageDescriptions),
+            people: personRows(enrichment, metadata: m, comments: comments),
+            likely: likelyRows(enrichment),
             status: StatusLine.lines(saved: m.capturedAt, steps: steps, goldKinds: goldKinds(enrichment),
                                      goldArrivedAt: goldArrivedAt, locale: locale, zone: savedZone),
             pending: steps.reduce(into: [:]) { out, step in
@@ -256,6 +302,44 @@ public struct CaptureDetail: Equatable, Sendable {
         m.attachments.enumerated().compactMap { i, a in
             guard !excluding.contains(a.attachmentID), let text = nonEmpty(texts[a.attachmentID]) else { return nil }
             return TitledText(title: "Attachment \(i + 1)", text: text, layer: gold.contains(a.attachmentID) ? .gold : .silver)
+        }
+    }
+
+    /// One row per name, the first of any repeat (by lower-cased name) kept, so row identities stay unique.
+    private static func personRows(_ e: ResolvedEnrichment, metadata m: CaptureMetadata,
+                                   comments: [CaptureComment]) -> [PersonRow] {
+        let layer: Layer = e.fromServer.people ? .gold : .silver
+        let commentIDs = Set(comments.map(\.commentID))
+        var seen: Set<String> = []
+        return e.people.compactMap { p in
+            guard let name = nonEmpty(p.name), seen.insert(name.lowercased()).inserted else { return nil }
+            let foundIn: String
+            switch p.source {
+            case "user_note": foundIn = "In your note"
+            case "shared_text": foundIn = "In the shared text"
+            case "shared_title": foundIn = "In the shared title"
+            default:
+                if let i = m.attachments.firstIndex(where: { $0.attachmentID == p.source }) {
+                    foundIn = "In attachment \(i + 1)"
+                } else if commentIDs.contains(p.source) {
+                    foundIn = "In a comment"
+                } else {
+                    foundIn = ""
+                }
+            }
+            return PersonRow(id: name.lowercased(), name: name, foundIn: foundIn, layer: layer)
+        }
+    }
+
+    /// One row per label, the first of any repeat kept, so row identities stay unique.
+    private static func likelyRows(_ e: ResolvedEnrichment) -> [LikelyRow] {
+        let layer: Layer = e.fromServer.circumstances ? .gold : .silver
+        var seen: Set<String> = []
+        return e.circumstances.compactMap { c in
+            guard nonEmpty(c.label) != nil, seen.insert(c.label).inserted else { return nil }
+            return LikelyRow(id: c.label, text: CircumstanceWording.text(for: c.label),
+                             confidence: CircumstanceWording.confidence(c.confidence),
+                             evidence: (c.evidence ?? []).compactMap { nonEmpty($0) }, layer: layer)
         }
     }
 

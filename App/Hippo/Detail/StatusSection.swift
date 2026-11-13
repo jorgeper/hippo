@@ -10,7 +10,12 @@ struct StatusSection: View {
     var uploadingAgain = false
     var onUploadAgain: () -> Void = {}
 
+    /// No section at all when every line it could show is switched off or absent.
     var body: some View {
+        if detail.hasStatusContent { section }
+    }
+
+    private var section: some View {
         Section("Status") {
             ForEach(Array(detail.status.enumerated()), id: \.offset) { _, line in
                 HStack(spacing: 8) {

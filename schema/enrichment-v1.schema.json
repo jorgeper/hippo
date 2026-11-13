@@ -214,6 +214,47 @@
           "attachment_id": { "$ref": "#/$defs/uuid" },
           "reason": { "type": "string", "description": "Open set: exif_user_comment, screen_size_match." }
         } } } }
+    },
+    "displayData": {
+      "type": "object", "additionalProperties": true,
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "topic": { "type": "string", "minLength": 1 },
+        "keywords": { "type": "array", "maxItems": 12, "items": {
+          "type": "object", "required": ["word", "weight"], "additionalProperties": true,
+          "properties": {
+            "word": { "type": "string", "minLength": 1 },
+            "weight": { "type": "number", "minimum": 0, "maximum": 1 }
+          } } }
+      }
+    },
+    "imageDescriptionData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["attachment_id", "text"], "additionalProperties": true,
+        "properties": {
+          "attachment_id": { "$ref": "#/$defs/uuid" },
+          "text": { "type": "string" }
+        } } } }
+    },
+    "peopleData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["name", "source"], "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "minLength": 1, "description": "Open set: user_note, shared_text, shared_title, an attachment ID or a comment ID." }
+        } } } }
+    },
+    "circumstanceData": {
+      "type": "object", "required": ["items"], "additionalProperties": true,
+      "properties": { "items": { "type": "array", "items": {
+        "type": "object", "required": ["label", "confidence"], "additionalProperties": true,
+        "properties": {
+          "label": { "type": "string", "minLength": 1, "description": "Open set: in_car, walking, running, cycling, on_headphones, in_a_burst, daylight, dark." },
+          "confidence": { "type": "string", "minLength": 1, "description": "Open set: low, medium, high." },
+          "evidence": { "type": "array", "items": { "type": "string" } }
+        } } } }
     }
   },
   "allOf": [
@@ -234,7 +275,11 @@
             "barcodes": { "properties": { "data": { "$ref": "#/$defs/barcodesData" } } },
             "language": { "properties": { "data": { "$ref": "#/$defs/languageData" } } },
             "sound_classification": { "properties": { "data": { "$ref": "#/$defs/soundClassificationData" } } },
-            "screenshot": { "properties": { "data": { "$ref": "#/$defs/screenshotData" } } }
+            "screenshot": { "properties": { "data": { "$ref": "#/$defs/screenshotData" } } },
+            "display": { "properties": { "data": { "$ref": "#/$defs/displayData" } } },
+            "image_description": { "properties": { "data": { "$ref": "#/$defs/imageDescriptionData" } } },
+            "people": { "properties": { "data": { "$ref": "#/$defs/peopleData" } } },
+            "circumstance": { "properties": { "data": { "$ref": "#/$defs/circumstanceData" } } }
           }
         }
       }

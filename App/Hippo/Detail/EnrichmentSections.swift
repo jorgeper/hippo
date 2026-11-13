@@ -28,7 +28,8 @@ struct FileThumbnail: View {
     }
 }
 
-/// Link cards, summary and tags, found items and recognised text for one capture.
+/// Title, link cards, summary, topic and tags, people, likely circumstances, found items, recognised text and
+/// picture descriptions for one capture.
 struct EnrichmentSections: View {
     let detail: CaptureDetail
     let showsStripes: Bool
@@ -42,6 +43,11 @@ struct EnrichmentSections: View {
     }
 
     var body: some View {
+        if let title = detail.title {
+            Section("Title") {
+                Text(title).textSelection(.enabled).layerStripe(detail.titleLayer, shown: showsStripes)
+            }
+        }
         if !detail.linkCards.isEmpty || detail.pending[.linkPreview] != nil {
             Section("Link previews") {
                 ForEach(detail.linkCards, id: \.url) { card in
@@ -55,10 +61,29 @@ struct EnrichmentSections: View {
                 Text(summary).textSelection(.enabled).layerStripe(detail.summaryLayer, shown: showsStripes)
             }
         }
+        if let topic = detail.topic {
+            Section("Topic") {
+                Text(topic).textSelection(.enabled).layerStripe(detail.topicLayer, shown: showsStripes)
+            }
+        }
         if !detail.tags.isEmpty {
             Section("Tags") {
                 Text(detail.tags.map { "#\($0)" }.joined(separator: "  ")).textSelection(.enabled)
                     .layerStripe(detail.tagsLayer, shown: showsStripes)
+            }
+        }
+        if !detail.people.isEmpty {
+            Section("People") {
+                ForEach(detail.people) { person($0).layerStripe($0.layer, shown: showsStripes) }
+            }
+        }
+        if !detail.likely.isEmpty {
+            Section {
+                ForEach(detail.likely) { likely($0).layerStripe($0.layer, shown: showsStripes) }
+            } header: {
+                Text("Likely")
+            } footer: {
+                Text("Worked out from signals. Likely, not certain.")
             }
         }
         if !detail.found.isEmpty || detail.pending[.dataDetection] != nil {
@@ -84,12 +109,48 @@ struct EnrichmentSections: View {
                 pending(.textRecognition)
             }
         }
+        if !detail.imageDescriptions.isEmpty {
+            Section("In the picture") {
+                ForEach(detail.imageDescriptions, id: \.title) { disclosure($0).layerStripe($0.layer, shown: showsStripes) }
+            }
+        }
     }
 
     /// The pending line for `kind`, in the spot where its result will appear. Silver: added on this iPhone.
     @ViewBuilder private func pending(_ kind: FacetKind) -> some View {
         if let line = detail.pending[kind] {
             PendingLineView(line: line).layerStripe(.silver, shown: showsStripes)
+        }
+    }
+
+    /// The name, with where it was found as small secondary text when known.
+    private func person(_ p: PersonRow) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(p.name)
+            if !p.foundIn.isEmpty {
+                Text(p.foundIn).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The circumstance in words with its confidence; the evidence lines when expanded. No evidence: a plain row.
+    @ViewBuilder private func likely(_ row: LikelyRow) -> some View {
+        let label = VStack(alignment: .leading, spacing: 2) {
+            Text(row.text)
+            Text(row.confidence).font(.footnote).foregroundStyle(.secondary)
+        }
+        if row.evidence.isEmpty {
+            label.accessibilityElement(children: .combine)
+        } else {
+            DisclosureGroup {
+                ForEach(Array(row.evidence.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.callout).textSelection(.enabled)
+                }
+            } label: {
+                // One element, like the row with no evidence: the circumstance and its confidence together.
+                label.accessibilityElement(children: .combine)
+            }
         }
     }
 

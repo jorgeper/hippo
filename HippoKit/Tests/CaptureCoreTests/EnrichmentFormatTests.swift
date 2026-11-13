@@ -121,4 +121,50 @@ import Testing
         let none = Facet(version: 1, status: .empty, generatedAt: Self.date, provenance: "x", data: nil)
         #expect(none.decodeData(LinkPreviewData.self) == nil)
     }
+
+    // MARK: Format 1.2
+
+    @Test func newKindsDecode() throws {
+        func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+            try JSONDecoder().decode(T.self, from: Data(json.utf8))
+        }
+        #expect(FacetKind.display.rawValue == "display")
+        #expect(FacetKind.imageDescription.rawValue == "image_description")
+        #expect(FacetKind.people.rawValue == "people")
+        #expect(FacetKind.circumstance.rawValue == "circumstance")
+
+        let display = try decode(DisplayData.self, """
+        {"title": "Cafe menu with specials code", "topic": "food", "future": {"x": 1},
+         "keywords": [{"word": "menu", "weight": 1}, {"word": "cafe", "weight": 0.8, "more": true}]}
+        """)
+        #expect(display.title == "Cafe menu with specials code")
+        #expect(display.topic == "food")
+        #expect(display.keywords == [DisplayKeyword(word: "menu", weight: 1), DisplayKeyword(word: "cafe", weight: 0.8)])
+        let bare = try decode(DisplayData.self, "{}")
+        #expect(bare.title == nil && bare.topic == nil && bare.keywords == nil)
+        let bareText = String(decoding: try JSONEncoder().encode(bare), as: UTF8.self)
+        #expect(bareText == "{}")
+
+        let images = try decode(ImageDescriptionData.self, """
+        {"items": [{"attachment_id": "00000000-0000-4000-8000-000700000001", "text": "A printed menu.", "extra": 2}]}
+        """)
+        #expect(images.items == [ImageDescriptionItem(attachmentID: "00000000-0000-4000-8000-000700000001", text: "A printed menu.")])
+        let imageText = String(decoding: try JSONEncoder().encode(images), as: UTF8.self)
+        #expect(imageText.contains("\"attachment_id\""))
+
+        let people = try decode(PeopleData.self, """
+        {"items": [{"name": "Ana", "source": "user_note", "unknown": "x"}], "later": []}
+        """)
+        #expect(people.items == [PersonItem(name: "Ana", source: "user_note")])
+
+        let circumstance = try decode(CircumstanceData.self, """
+        {"items": [{"label": "in_car", "confidence": "high", "evidence": ["audio route was CarPlay"], "score": 0.9},
+                   {"label": "daylight", "confidence": "medium"}]}
+        """)
+        #expect(circumstance.items.count == 2)
+        #expect(circumstance.items[0] == CircumstanceItem(label: "in_car", confidence: "high", evidence: ["audio route was CarPlay"]))
+        #expect(circumstance.items[1].label == "daylight")
+        #expect(circumstance.items[1].confidence == "medium")
+        #expect(circumstance.items[1].evidence == nil)
+    }
 }

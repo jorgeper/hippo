@@ -7,7 +7,15 @@ import SyncEngine
 
 @MainActor @Observable
 public final class CaptureDetailModel {
+    /// The capture as the tier switches show it.
     public private(set) var detail: CaptureDetail?
+    /// The tier switches; read from settings at init, changed by `setVisibility(_:)`.
+    public private(set) var visibility: TierVisibility
+    /// This capture's log lines, oldest first; loaded only while `visibility.log` is on, else empty.
+    public private(set) var logLines: [LogLine] = []
+    /// Whether `logLines` matches the Log switch: false from when Log changes until a load has set the lines,
+    /// so the view doesn't say "Nothing logged yet" before they are read.
+    public private(set) var logLoaded = false
     /// True after a failed load; cleared by the next successful one. A failed load keeps the previous `detail`.
     public private(set) var loadFailed = false
     /// The confirmation to show before `delete()`; refreshed by `load()`.
@@ -22,6 +30,9 @@ public final class CaptureDetailModel {
     public private(set) var restoreMessages: [String: String] = [:]
 
     @ObservationIgnored private let store: HippoStore
+    @ObservationIgnored private let settings: AppSettings?
+    /// The last loaded detail before filtering, so a switch that needs no new read applies at once.
+    @ObservationIgnored private var unfiltered: CaptureDetail?
     @ObservationIgnored private let captureID: String
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let calendar: Calendar
@@ -45,7 +56,10 @@ public final class CaptureDetailModel {
                 isOnline: @escaping @Sendable () -> Bool = { true },
                 sync: @escaping @Sendable () async -> Void = {},
                 adapterFor: (@Sendable (Destination) throws -> any StorageAdapter)? = nil,
-                accountName: @escaping @Sendable (Destination) async -> String? = { _ in nil }) {
+                accountName: @escaping @Sendable (Destination) async -> String? = { _ in nil },
+                settings: AppSettings? = nil) {
+        self.settings = settings
+        self.visibility = settings?.tierVisibility ?? .standard
         self.accountName = accountName
         self.adapterFor = adapterFor
         self.sync = sync
@@ -65,6 +79,27 @@ public final class CaptureDetailModel {
         var capturedAt: Date
         /// By attachment ID.
         var accountNames: [String: String]
+        var logLines: [LogLine]
+    }
+
+    /// Logs older than 30 days are deleted, so an old capture's lines may be incomplete.
+    public var logMayBePruned: Bool {
+        guard let capturedAt else { return false }
+        return capturedAt < now().addingTimeInterval(-30 * 86_400)
+    }
+
+    /// Saves the switches for every details screen, then shows this capture by them. Only Server and Log need a
+    /// new read (Server off resolves without the server document); the others apply at once from the last load.
+    public func setVisibility(_ v: TierVisibility) async {
+        let old = visibility
+        settings?.tierVisibility = v
+        visibility = v
+        if v.server == old.server, let unfiltered { detail = unfiltered.filtered(by: v) }
+        if v.log != old.log {
+            logLines = []
+            logLoaded = false
+        }
+        await load()
     }
 
     /// Reads the capture's metadata, note body and upload jobs. Leaves `detail` nil if it can't be read.
@@ -74,6 +109,7 @@ public final class CaptureDetailModel {
         let mine = generation
         let store = store, id = captureID, now = now(), calendar = calendar, locale = locale
         let isEnabled = isEnabled, isOnline = isOnline, accountName = accountName
+        let visibility = visibility
         let loaded: Loaded? = await Task.detached {
             do {
                 guard let metadata = try store.index.metadata(captureID: id, layout: store.layout),
@@ -90,10 +126,15 @@ public final class CaptureDetailModel {
                 let active = (try? store.destinations.active()) ?? nil
                 var accountNames: [String: String] = [:]
                 for case let d? in names.values { accountNames[d.id] = await accountName(d) }
-                let enrichment = ResolvedEnrichment.load(store: store, captureID: id)
                 let tasks = try store.enrichmentTasks.tasks(captureIDs: [id])
-                let deviceDocument = (try? store.enrichments.document(.device, captureID: id)) ?? nil
-                let goldArrivedAt = (try? store.enrichments.document(.server, captureID: id))?.generatedAt
+                // Each layer is read once; a failed read is logged and counts as no document.
+                let deviceDocument = ResolvedEnrichment.read(.device, store: store, captureID: id)
+                // Server off: resolve as if no server document had arrived, so the phone's own values come back
+                // wherever gold had replaced them, and Status has no arrival line.
+                let serverDocument = visibility.server ? ResolvedEnrichment.read(.server, store: store, captureID: id) : nil
+                let enrichment = ResolvedEnrichment.make(device: deviceDocument, server: serverDocument, store: store,
+                                                         captureID: id)
+                let goldArrivedAt = serverDocument?.generatedAt
                 let changed = (try? store.remoteState.changed(captureID: id)) ?? nil
                 let trimmedPaths = (try? store.trims.trimmedPaths(captureID: id)) ?? []
                 // The destination `deleteEverywhere` binds to: the active one when this capture has a job for it,
@@ -119,8 +160,14 @@ public final class CaptureDetailModel {
                                                 locale: locale, calendar: calendar)
                 let prompt = DeletionPrompt.make(jobs: jobs, destinationName: boundName)
                 let everywhere = boundName.map { DeletionPrompt.everywhere(destinationName: $0) }
+                let logLines = visibility.log
+                    ? store.log.events(captureID: id, from: metadata.capturedAt).enumerated().map {
+                        LogLine.make($1, id: $0, now: now, zone: calendar.timeZone, locale: locale)
+                    }
+                    : []
                 return Loaded(detail: detail, prompt: prompt, everywherePrompt: everywhere, capturedAt: metadata.capturedAt,
-                              accountNames: trimmed.reduce(into: [:]) { $0[$1.attachmentID] = accountNames[$1.destinationID] })
+                              accountNames: trimmed.reduce(into: [:]) { $0[$1.attachmentID] = accountNames[$1.destinationID] },
+                              logLines: logLines)
             } catch {
                 Self.log.error("\("load_failed", privacy: .public)")
                 return nil
@@ -128,9 +175,17 @@ public final class CaptureDetailModel {
         }.value
         if let beforeApply { await beforeApply() }
         guard mine == generation else { return }
-        guard let loaded else { loadFailed = true; return }
+        guard let loaded else {
+            loadFailed = true
+            // The Log section waits on this flag: a failed read ends the wait too (it shows no lines, not a spinner).
+            logLoaded = true
+            return
+        }
         loadFailed = false
-        detail = loaded.detail
+        unfiltered = loaded.detail
+        detail = loaded.detail.filtered(by: visibility)
+        logLines = loaded.logLines
+        logLoaded = true
         deletionPrompt = loaded.prompt
         everywherePrompt = loaded.everywherePrompt
         capturedAt = loaded.capturedAt
@@ -166,7 +221,7 @@ public final class CaptureDetailModel {
         guard restoreProgress[attachmentID] == nil, let adapterFor else { return }
         restoreProgress[attachmentID] = 0
         var name: String?
-        if case .available(let n)? = detail?.remoteOnly[attachmentID]?.state { name = n }
+        if case .available(let n)? = unfiltered?.remoteOnly[attachmentID]?.state { name = n }
         restoreMessages[attachmentID] = nil
         let store = store, id = captureID
         let result: Result<Void, RestoreError> = await Task.detached {
@@ -194,7 +249,7 @@ public final class CaptureDetailModel {
             restoreMessages[attachmentID] = switch error {
             case .offline: "Connect to the internet to download"
             case .notConnected(let destinationName):
-                if case .unavailable(let message)? = detail?.remoteOnly[attachmentID]?.state { message }
+                if case .unavailable(let message)? = unfiltered?.remoteOnly[attachmentID]?.state { message }
                 else {
                     RemoteOnlyAttachment.unavailableText(destinationName: destinationName,
                                                          accountName: restoreAccountNames[attachmentID])
@@ -212,6 +267,7 @@ public final class CaptureDetailModel {
         let result = try await store.delete(captureID: captureID)
         generation += 1  // a load still in flight must not bring the deleted capture back
         detail = nil
+        unfiltered = nil
         deletionPrompt = nil
         everywherePrompt = nil
         return result
@@ -222,6 +278,7 @@ public final class CaptureDetailModel {
         let result = try await store.deleteEverywhere(captureID: captureID)
         generation += 1
         detail = nil
+        unfiltered = nil
         deletionPrompt = nil
         everywherePrompt = nil
         return result
