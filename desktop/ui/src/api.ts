@@ -2,14 +2,14 @@
 // becomes an Error carrying the server's message. The token, when the page has one, goes in the X-Hippo-Token header on every
 // call: in dev the page comes from Vite and has no cookie, and the header also keeps two desks on different ports apart.
 import type { DeskItem, CaptureDetail } from '../../src/server/wire.ts';
-import type { EnrichPass, EnrichPlan } from '../../src/server/server.ts';
+import type { EnrichExpect, EnrichPass, EnrichPlan } from '../../src/server/server.ts';
 import type { Facets } from '../../src/recall/engine.ts';
 import type { LayoutName, SearchSpec } from '../../src/recall/spec.ts';
 import type { Status } from '../../src/index/build.ts';
 import type { Config } from '../../src/core/paths.ts';
 
 export type { DeskItem, CaptureDetail } from '../../src/server/wire.ts';
-export type { EnrichPlan } from '../../src/server/server.ts';
+export type { EnrichExpect, EnrichPlan } from '../../src/server/server.ts';
 
 export interface Settings { provider: string; askModel: string; enrichModel: string; mapTiles: boolean; theme: string }
 export interface BootResponse { facets: Facets; status: Status; settings: Settings; today: string; timezone: string }
@@ -29,7 +29,8 @@ export interface Api {
   capture(id: string): Promise<CaptureResponse>;
   /** What an update pass would do (a dry run: nothing is written, no model is called). */
   enrichPlan(): Promise<EnrichPlan>;
-  enrichStart(): Promise<EnrichState>;
+  /** Starts the pass the person was shown; refused with ApiError code `changed` (and the new plan) when it would do more. */
+  enrichStart(expect: EnrichExpect): Promise<EnrichState>;
   enrichStatus(): Promise<EnrichState>;
   settings(patch: SettingsPatch): Promise<{ settings: Settings }>;
 }
@@ -38,6 +39,19 @@ export interface ApiOptions { token?: string; fetch?: typeof fetch }
 
 const FORBIDDEN = 'The desk lost its key. Open it again from the link `hippo ui` prints.';
 const UNREACHABLE = 'Cannot reach Hippo. Is `hippo ui` still running?';
+
+/** A non-2xx answer: the server's message, with its error code and body for the callers that act on them. */
+export class ApiError extends Error {
+  status: number; code?: string; body: unknown;
+  constructor(status: number, body: unknown) {
+    super(messageOf(status, body));
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+    const code = typeof body === 'object' && body !== null ? (body as { error?: unknown }).error : undefined;
+    if (typeof code === 'string') this.code = code;
+  }
+}
 
 function messageOf(status: number, body: unknown): string {
   if (typeof body === 'object' && body !== null && typeof (body as { message?: unknown }).message === 'string')
@@ -62,7 +76,7 @@ export function createApi(opts: ApiOptions = {}): Api {
     const text = await res.text();
     let data: unknown;
     try { data = text ? JSON.parse(text) : undefined; } catch { data = undefined; }
-    if (!res.ok) throw new Error(messageOf(res.status, data));
+    if (!res.ok) throw new ApiError(res.status, data);
     return data as T;
   }
 
@@ -72,7 +86,7 @@ export function createApi(opts: ApiOptions = {}): Api {
     ask: req => call('POST', '/api/ask', req),
     capture: id => call('GET', `/api/capture/${encodeURIComponent(id)}`),
     enrichPlan: () => call('POST', '/api/enrich', { dryRun: true }),
-    enrichStart: () => call('POST', '/api/enrich', {}),
+    enrichStart: expect => call('POST', '/api/enrich', { expect }),
     enrichStatus: () => call('GET', '/api/enrich'),
     settings: patch => call('POST', '/api/settings', patch),
   };

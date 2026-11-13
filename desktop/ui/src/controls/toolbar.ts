@@ -4,6 +4,7 @@
 // first, with the numbers; otherwise, or on "Send and update", it starts the pass (POST /api/enrich), shows its progress from
 // GET /api/enrich once a second, and when the pass ends has the page boot again (fresh facets) and run the current spec
 // again, so what the pass wrote shows on the desk.
+import { ApiError } from '../api.ts';
 import type { Api, EnrichPlan, EnrichState } from '../api.ts';
 import type { DeskState, Store } from '../state.ts';
 import { el, icon } from './dom.ts';
@@ -19,6 +20,8 @@ export interface ToolbarDeps {
   provider: string;
   /** Where the question before an update goes (an empty, hidden element). */
   confirmHost: HTMLElement;
+  /** Just before the question shows (the page closes the settings panel, which sits in the same place). */
+  beforeAsk?(): void;
   resetView(): void;
   /** After an update pass: boot again and refill the desk. */
   afterUpdate(): Promise<void>;
@@ -26,7 +29,9 @@ export interface ToolbarDeps {
   ready(): boolean;
 }
 
-export interface Toolbar { settingsButton: HTMLButtonElement; render(s: DeskState): void; setProvider(name: string): void }
+export interface Toolbar { settingsButton: HTMLButtonElement; render(s: DeskState): void; setProvider(name: string): void;
+  /** Closes an open question before an update as "Not now" (focus back on Update); nothing when none is open. */
+  closeQuestion(): void }
 
 const n = (v: number) => v.toLocaleString();
 
@@ -76,6 +81,16 @@ export function updateDecision(plan: EnrichPlan): UpdateDecision {
 
 /** The line while the server works out what a pass would do. */
 export const CHECKING_LINE = 'Looking for new captures…';
+/** A start refused as `changed` this many times in a row: give up for now. */
+export const MAX_TRIES = 3;
+export const KEEPS_CHANGING = 'The folder keeps changing. Press Update again in a moment.';
+
+/** The new plan in a start refused because the folder, the provider or the model changed since the question. */
+function changedPlan(e: unknown): EnrichPlan | undefined {
+  if (!(e instanceof ApiError) || e.code !== 'changed') return undefined;
+  const p = (e.body as { plan?: unknown }).plan as EnrichPlan | undefined;
+  return p && typeof p.send === 'number' && typeof p.provider === 'string' && typeof p.model === 'string' ? p : undefined;
+}
 
 /** What following an update pass needs: the pass's state, a pause, the line to write, and the refill after the pass. */
 export interface UpdateFollow {
@@ -149,17 +164,28 @@ export function createUpdater(d: UpdaterDeps): { click(): Promise<void>; running
         // One already running (started elsewhere) is followed like our own.
         if (!alreadyRunning(e)) { fail(e); return; }
       }
-      if (plan) {
+      // The start carries what the person was shown; the server refuses it (`changed`) when it would now do more, and the
+      // question is put again with the new numbers. Nothing goes to a model on a plan the person has not seen; a new plan
+      // that sends nothing runs at once, as a first one would.
+      for (let tries = 0; plan; tries++) {
+        if (tries === MAX_TRIES) { fail(new Error(KEEPS_CHANGING)); return; }
         const decision = updateDecision(plan);
         if (decision.ask) {
           say('');
           // "Not now": nothing is sent and nothing written. (The server has no way to read the folder again without the pass.)
           if (!await d.confirm(decision)) return;
         }
-        busy = true; d.busy(true);
+        if (!busy) { busy = true; d.busy(true); }
         say(progressLine({ done: 0, total: 0 }));
-        try { say(progressLine(await d.api.enrichStart())); }
-        catch (e) { if (!alreadyRunning(e)) { fail(e); return; } }
+        try {
+          say(progressLine(await d.api.enrichStart({ provider: plan.provider, model: plan.model, send: plan.send })));
+          break;
+        } catch (e) {
+          const next = changedPlan(e);
+          if (next) { busy = false; d.busy(false); plan = next; continue; }
+          if (alreadyRunning(e)) break;
+          fail(e); return;
+        }
       }
       if (!busy) { busy = true; d.busy(true); }
       // The button comes back as soon as the pass has ended and the desk is refilled; the summary clears on its own.
@@ -194,6 +220,7 @@ export function mountToolbar(count: HTMLElement, tools: HTMLElement, progress: H
 
   // ---------------------------------------------------------------- update
 
+  let closeQuestion = () => {};
   const setProvider = (name: string) => {
     update.setAttribute('aria-label', updateLabel(name));
     update.title = updateLabel(name);
@@ -207,7 +234,10 @@ export function mountToolbar(count: HTMLElement, tools: HTMLElement, progress: H
   };
   const updater = createUpdater({
     api, say,
-    confirm: q => askFirst(deps.confirmHost, q, update),
+    confirm: q => {
+      deps.beforeAsk?.();
+      return askFirst(deps.confirmHost, q, update, cancel => { closeQuestion = cancel; });
+    },
     busy: on => { update.disabled = on; update.classList.toggle('busy', on); },
     wait: ms => new Promise<void>(r => setTimeout(r, ms)),
     afterUpdate: () => deps.afterUpdate(),
@@ -227,14 +257,16 @@ export function mountToolbar(count: HTMLElement, tools: HTMLElement, progress: H
   store.subscribe(render);
   render(store.get());
 
-  return { settingsButton: settings, render, setProvider };
+  return { settingsButton: settings, render, setProvider, closeQuestion: () => closeQuestion() };
 }
 
 /**
  * The question before an update that would call the model, in the page's own panel. Focus starts on "Not now", so Enter
- * alone does not send; Escape is "Not now"; either way focus goes back to the Update button.
+ * alone does not send. Escape is "Not now", and so is closeQuestion (a settings save, the settings panel opening); either
+ * way focus goes back to the Update button.
  */
-function askFirst(host: HTMLElement, q: Extract<UpdateDecision, { ask: true }>, button: HTMLButtonElement): Promise<boolean> {
+function askFirst(host: HTMLElement, q: Extract<UpdateDecision, { ask: true }>, button: HTMLButtonElement,
+  onOpen: (cancel: () => void) => void): Promise<boolean> {
   return new Promise(resolve => {
     const text = el('p', { class: 'question', attrs: { id: 'confirm-update-text' } }, document.createTextNode(q.before),
       el('span', { class: 'folder', text: q.folderName, attrs: { title: q.folderPath } }), document.createTextNode(q.after));
@@ -242,7 +274,11 @@ function askFirst(host: HTMLElement, q: Extract<UpdateDecision, { ask: true }>, 
     const yes = el('button', { class: 'primary', text: 'Send and update', attrs: { type: 'button', 'data-testid': 'update-send' } });
     host.replaceChildren(text, el('div', { class: 'actions' }, no, yes));
     host.setAttribute('aria-describedby', text.id);
+    let open = true;
     const finish = (answer: boolean) => {
+      if (!open) return;
+      open = false;
+      onOpen(() => {});
       host.removeEventListener('keydown', onKey);
       host.hidden = true;
       host.replaceChildren();
@@ -256,6 +292,7 @@ function askFirst(host: HTMLElement, q: Extract<UpdateDecision, { ask: true }>, 
     no.addEventListener('click', () => finish(false), { once: true });
     yes.addEventListener('click', () => finish(true), { once: true });
     host.hidden = false;
+    onOpen(() => finish(false));
     no.focus();
   });
 }

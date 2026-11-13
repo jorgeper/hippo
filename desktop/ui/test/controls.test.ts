@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CHECKING_LINE, countText, createUpdater, DONE_LINE_MS, folderName, followUpdate, POLL_MS, progressLine, updateDecision, updateLabel, updateLine } from '../src/controls/toolbar.ts';
 import { settingsPatch } from '../src/controls/settings.ts';
+import { ApiError } from '../src/api.ts';
 import type { EnrichPlan, EnrichState, Settings } from '../src/api.ts';
 import type { EnrichReport } from '../../src/enrich/enrich.ts';
 import { item } from './items.ts';
@@ -86,7 +87,7 @@ test('settingsPatch: only the fields that changed, among theme, provider, the tw
 });
 
 const plan = (over: Partial<EnrichPlan> = {}): EnrichPlan =>
-  ({ dryRun: true, send: 0, write: 0, captures: 300, provider: 'claude-cli', folder: '/Volumes/Data/Dropbox/H1ppo', ...over });
+  ({ dryRun: true, send: 0, write: 0, captures: 300, provider: 'claude-cli', model: 'haiku', folder: '/Volumes/Data/Dropbox/H1ppo', ...over });
 
 test('updateDecision: nothing for the model runs at once; anything for the model asks first, with the real numbers', () => {
   assert.deepEqual(updateDecision(plan()), { ask: false });
@@ -121,17 +122,23 @@ test('updateLabel: says what Update does, with the provider', () => {
 });
 
 /** An updater over scripted answers, recording what it does; `waits` lets a test hold a pause open. */
-function updater(o: { plan: EnrichPlan | Error; answer?: boolean; states?: EnrichState[]; hold?: (ms: number) => Promise<void> | undefined }) {
+function updater(o: { plan: EnrichPlan | Error; answer?: boolean; answers?: boolean[]; starts?: (EnrichState | Error)[]; states?: EnrichState[];
+  hold?: (ms: number) => Promise<void> | undefined }) {
   const log: string[] = [];
-  let k = 0;
+  let k = 0, a = 0, st = 0;
   const states = o.states ?? [finished({ enrich: report({ written: 2 }) })];
   const u = createUpdater({
     api: {
       enrichPlan: async () => { log.push('plan'); if (o.plan instanceof Error) throw o.plan; return o.plan; },
-      enrichStart: async () => { log.push('start'); return { running: true, done: 0, total: 0 }; },
+      enrichStart: async e => {
+        log.push(`start ${e.provider}/${e.model}/${e.send}`);
+        const r = o.starts?.[st++];
+        if (r instanceof Error) throw r;
+        return r ?? { running: true, done: 0, total: 0 };
+      },
       enrichStatus: async () => states[Math.min(k++, states.length - 1)],
     },
-    confirm: async q => { log.push(`ask "${q.before}${q.folderName}${q.after}"`); return o.answer ?? false; },
+    confirm: async q => { log.push(`ask "${q.before}${q.folderName}${q.after}"`); return o.answers?.[a++] ?? o.answer ?? false; },
     busy: on => log.push(on ? 'busy' : 'free'),
     say: (text, failed = false) => log.push(`${failed ? 'FAILED ' : ''}"${text}"`),
     wait: async ms => { await o.hold?.(ms); },
@@ -143,7 +150,8 @@ function updater(o: { plan: EnrichPlan | Error; answer?: boolean; states?: Enric
 test('createUpdater: nothing for the model runs straight away, as before', async () => {
   const { u, log } = updater({ plan: plan({ write: 3 }) });
   await u.click();
-  assert.deepEqual(log, ['"' + CHECKING_LINE + '"', 'plan', 'busy', '"Updating…"', 'start', '"Updating…"', '"2 captures updated"', 'refill', 'free', '""']);
+  // The start still says what the page saw: nothing to send.
+  assert.deepEqual(log, ['"' + CHECKING_LINE + '"', 'plan', 'busy', '"Updating…"', 'start claude-cli/haiku/0', '"Updating…"', '"2 captures updated"', 'refill', 'free', '""']);
   assert.equal(u.running(), false);
 });
 
@@ -158,7 +166,7 @@ test('createUpdater: captures for the model ask first; "Not now" sends nothing, 
 test('createUpdater: "Send and update" starts the pass and follows it', async () => {
   const { u, log } = updater({ plan: plan({ send: 2, write: 2 }), answer: true });
   await u.click();
-  assert.deepEqual(log.slice(4), ['busy', '"Updating…"', 'start', '"Updating…"', '"2 captures updated"', 'refill', 'free', '""']);
+  assert.deepEqual(log.slice(4), ['busy', '"Updating…"', 'start claude-cli/haiku/2', '"Updating…"', '"2 captures updated"', 'refill', 'free', '""']);
 });
 
 test('createUpdater: a pass already running elsewhere is followed; another failure of the dry run says why', async () => {
@@ -192,5 +200,42 @@ test('createUpdater: an older click that ends while a newer pass runs leaves the
   releaseSecond();
   await second;
   assert.equal(log.at(-2), 'free');
+  assert.equal(u.running(), false);
+});
+
+const changed = (p: EnrichPlan) => new ApiError(409, { error: 'changed', message: 'Something changed since Update asked.', plan: p });
+
+test('createUpdater: a start refused as changed asks again with the new numbers and provider, and never starts unasked', async () => {
+  const now = plan({ send: 5, write: 6, provider: 'codex-cli' });
+  const { u, log } = updater({ plan: plan({ send: 2, write: 2 }), answers: [true, true], starts: [changed(now)] });
+  await u.click();
+  assert.deepEqual(log.slice(0, 9), ['"' + CHECKING_LINE + '"', 'plan', '""',
+    'ask "Update will send 2 captures (their text and pictures) to claude-cli and write 2 files into H1ppo. Go ahead?"',
+    'busy', '"Updating…"', 'start claude-cli/haiku/2', 'free', '""']);
+  assert.deepEqual(log.slice(9, 11), ['ask "Update will send 5 captures (their text and pictures) to codex-cli and write 6 files into H1ppo. Go ahead?"', 'busy']);
+  assert.ok(log.includes('start codex-cli/haiku/5'));
+  assert.equal(log.filter(l => l.startsWith('start')).length, 2);
+
+  // "Not now" the second time: nothing more is started.
+  const no = updater({ plan: plan({ send: 2, write: 2 }), answers: [true, false], starts: [changed(now)] });
+  await no.u.click();
+  assert.deepEqual(no.log.filter(l => l.startsWith('start')), ['start claude-cli/haiku/2']);
+  assert.equal(no.log.at(-1)?.startsWith('ask "Update will send 5 captures'), true);
+  assert.equal(no.u.running(), false);
+
+  // Nothing to send was the plan, and now there is: asked, not started.
+  const grew = updater({ plan: plan(), answers: [false], starts: [changed(plan({ send: 1, write: 1 }))] });
+  await grew.u.click();
+  assert.deepEqual(grew.log.filter(l => l.startsWith('start') || l.startsWith('ask')),
+    ['start claude-cli/haiku/0', 'ask "Update will send 1 capture (its text and pictures) to claude-cli and write 1 file into H1ppo. Go ahead?"']);
+});
+
+test('createUpdater: a folder that keeps changing gives up after three tries and says so', async () => {
+  const { u, log } = updater({ plan: plan({ send: 1, write: 1 }), answer: true,
+    starts: [changed(plan({ send: 2 })), changed(plan({ send: 3 })), changed(plan({ send: 4 }))] });
+  await u.click();
+  assert.equal(log.filter(l => l.startsWith('start')).length, 3);
+  assert.equal(log.at(-2), 'free');
+  assert.equal(log.at(-1), 'FAILED "The folder keeps changing. Press Update again in a moment."');
   assert.equal(u.running(), false);
 });

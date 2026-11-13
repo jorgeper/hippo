@@ -46,7 +46,9 @@ export interface ServerOptions { folder: string; port?: number; provider: Provid
 export interface RunningServer { url: string; port: number; token: string; close(): Promise<void> }
 export interface EnrichPass { enrich?: EnrichReport; index?: IndexReport; error?: string }
 /** What an update pass would do, from a dry run: the captures it would send to the model, the files it would write. */
-export interface EnrichPlan { dryRun: true; send: number; write: number; captures: number; provider: string; folder: string }
+export interface EnrichPlan { dryRun: true; send: number; write: number; captures: number; provider: string; model: string; folder: string }
+/** What the page showed the person before a start: the pass runs only if it would do no more than that. */
+export interface EnrichExpect { provider: string; model: string; send: number }
 type Settings = Pick<Config, 'provider' | 'askModel' | 'enrichModel' | 'mapTiles' | 'theme'>;
 
 class HttpError extends Error {
@@ -121,6 +123,14 @@ function idList(v: unknown, field: string): string[] {
   if (!Array.isArray(v) || v.length > MAX_IDS || !v.every(x => typeof x === 'string' && x.length <= 64))
     throw new HttpError(400, 'bad_request', `${field}: expected a list of capture ids`);
   return v as string[];
+}
+
+/** A start must say what the page showed: `{provider, model, send}`, send a whole number from 0. */
+function expectFrom(v: unknown): EnrichExpect {
+  const bad = new HttpError(400, 'bad_request', 'expect: expected {provider, model, send} as the update question showed them');
+  if (!isObject(v) || typeof v.provider !== 'string' || typeof v.model !== 'string' || typeof v.send !== 'number'
+    || !Number.isSafeInteger(v.send) || v.send < 0) throw bad;
+  return { provider: v.provider, model: v.model, send: v.send };
 }
 
 function settingsOf(c: Config, provider: Provider): Settings {
@@ -261,18 +271,48 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     if (!row || !serveMedia(req, res, row.path, row.mime, [folder, thumbs])) throw new HttpError(404, 'not_found', 'no such file');
   };
 
-  const startPass = (res: http.ServerResponse) => {
+  /** The pass's dry run: reads the folder, writes nothing (not even the failures table) and calls no model. */
+  const planOf = async (p: Provider, model: string): Promise<EnrichPlan> => {
+    const r = await enrichFolder({ folder, dryRun: true });
+    return { dryRun: true, send: r.wouldCall.length, write: r.wouldWrite.length, captures: r.captures, provider: p.name, model, folder };
+  };
+
+  const planPass = async (res: http.ServerResponse) => {
+    if (closing) throw new HttpError(503, 'closing', 'the server is stopping');
+    if (pass.running) throw new HttpError(409, 'running', 'an update is already running');
+    json(res, 200, await planOf(provider, loadConfig().enrichModel));
+  };
+
+  /**
+   * Starts the pass the person agreed to: the plan is worked out again, and the pass runs only with the provider and model
+   * the page showed and no more captures to send than it showed (fewer is fine). Otherwise 409 `changed` with the new plan,
+   * and nothing is sent or written. The pass is also limited to `expect.send` model calls, so a capture that syncs in
+   * between this check and the pass's own read waits for the next update.
+   */
+  const startPass = async (res: http.ServerResponse, expect: EnrichExpect) => {
     if (closing) throw new HttpError(503, 'closing', 'the server is stopping');
     if (pass.running) throw new HttpError(409, 'running', 'an update is already running');
     const c = loadConfig();
+    const p = provider, model = c.enrichModel;
+    // Held from here, so a second start waits for this one; released on a refusal.
+    pass.running = true;
+    let plan: EnrichPlan;
+    const checking = planOf(p, model);
+    pass.promise = checking.then(() => {}, () => {});
+    try { plan = await checking; } catch (e) { pass.running = false; throw e; }
+    if (closing) { pass.running = false; throw new HttpError(503, 'closing', 'the server is stopping'); }
+    if (plan.provider !== expect.provider || plan.model !== expect.model || plan.send > expect.send) {
+      pass.running = false;
+      json(res, 409, { error: 'changed', message: 'Something changed since Update asked: the folder, the provider or the model.', plan });
+      return;
+    }
     const abort = new AbortController();
-    const p = provider;
-    pass.running = true; pass.done = 0; pass.total = 0; pass.report = undefined; pass.abort = abort;
+    pass.done = 0; pass.total = 0; pass.report = undefined; pass.abort = abort;
     log('update started');
     pass.promise = (async () => {
       const report: EnrichPass = {};
       try {
-        report.enrich = await enrichFolder({ folder, provider: p, model: c.enrichModel, concurrency: c.concurrency, signal: abort.signal,
+        report.enrich = await enrichFolder({ folder, provider: p, model, concurrency: c.concurrency, signal: abort.signal, limit: expect.send,
           onProgress: e => { pass.done = e.done; pass.total = e.total; } });
         // As `hippo enrich` does: the index step runs even after a stop, so the desk shows what was written.
         markEnriched(folder);
@@ -287,16 +327,6 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       pass.running = false;
     })();
     json(res, 202, { running: true, done: 0, total: 0 });
-  };
-
-  /** The pass's dry run: reads the folder, writes nothing (not even the failures table) and calls no model. */
-  const planPass = async (res: http.ServerResponse) => {
-    if (closing) throw new HttpError(503, 'closing', 'the server is stopping');
-    if (pass.running) throw new HttpError(409, 'running', 'an update is already running');
-    const r = await enrichFolder({ folder, dryRun: true });
-    const plan: EnrichPlan = { dryRun: true, send: r.wouldCall.length, write: r.wouldWrite.length, captures: r.captures,
-      provider: provider.name, folder };
-    json(res, 200, plan);
   };
 
   const passState = (res: http.ServerResponse) =>
@@ -409,7 +439,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           if (method === 'POST') {
             const body = bodyObject(await readBody(req));
             if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') throw new HttpError(400, 'bad_request', 'dryRun: expected true or false');
-            if (body.dryRun === true) await planPass(res); else startPass(res);
+            if (body.dryRun === true) await planPass(res); else await startPass(res, expectFrom(body.expect));
           } else passState(res);
         }
         else if (capture) {

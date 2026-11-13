@@ -188,4 +188,25 @@ test('Update asks before it sends captures to the model; "Not now" sends nothing
   const after = serverDocs();
   expect(after.size).toBe(before + 3);
   for (const id of notes) expect(after.has(id)).toBe(true);
+  await settled(page);
+
+  // A question left open while the settings change is closed; the next Update asks afresh, naming the new provider. The
+  // provider is switched to claude-cli only to read its name: "Not now" means it is never called.
+  fs.rmSync(serverDocs().get(notes[0])!);
+  const callsNow = providerCalls();
+  await update.click();
+  await expect(question).toContainText('Update will send 1 capture (its text and pictures) to fake');
+  await page.getByTestId('settings').click();
+  await expect(question).toBeHidden();
+  await page.locator('#settings-provider').selectOption('claude-cli');
+  await page.locator('#settings').getByRole('button', { name: 'Save' }).click();
+  await expect(page.locator('#settings')).toBeHidden();
+  await expect(update).toHaveAttribute('aria-label', 'Update: describe new captures with claude-cli');
+  await update.click();
+  await expect(question).toContainText('Update will send 1 capture (its text and pictures) to claude-cli and write 1 file into sample. Go ahead?');
+  await page.getByTestId('update-not-now').click();
+  await expect(question).toBeHidden();
+  await expect(update).toBeFocused();
+  expect(providerCalls()).toBe(callsNow);
+  expect(serverDocs().has(notes[0])).toBe(false);
 });

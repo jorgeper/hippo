@@ -414,9 +414,11 @@ test('POST /api/enrich runs one pass in the background (409 while running); late
     const searchFake = async () => (await request(s.port, 'POST', '/api/search', json, JSON.stringify({ spec: { topics: ['fake'] } }))).json.total;
     assert.equal(await searchFake(), 0);
     assert.deepEqual((await request(s.port, 'GET', '/api/enrich', h)).json, { running: false, done: 0, total: 0 });
-    const started = await request(s.port, 'POST', '/api/enrich', json, '{}');
+    const plan = (await request(s.port, 'POST', '/api/enrich', json, '{"dryRun":true}')).json;
+    const start = JSON.stringify({ expect: { provider: plan.provider, model: plan.model, send: plan.send } });
+    const started = await request(s.port, 'POST', '/api/enrich', json, start);
     assert.equal(started.status, 202);
-    assert.equal((await request(s.port, 'POST', '/api/enrich', json, '')).status, 409);
+    assert.equal((await request(s.port, 'POST', '/api/enrich', json, start)).status, 409);
     const mid = (await request(s.port, 'GET', '/api/enrich', h)).json;
     assert.equal(mid.running, true);
     release();
@@ -447,7 +449,7 @@ test('POST /api/enrich {dryRun: true} says what a pass would do, writes nothing 
     const before = snapshot(f4);
     const plan = await request(s.port, 'POST', '/api/enrich', h, JSON.stringify({ dryRun: true }));
     assert.equal(plan.status, 200);
-    assert.deepEqual(plan.json, { dryRun: true, send: 5, write: 5, captures: 7, provider: 'fake', folder: path.resolve(f4) });
+    assert.deepEqual(plan.json, { dryRun: true, send: 5, write: 5, captures: 7, provider: 'fake', model: loadConfig().enrichModel, folder: path.resolve(f4) });
     assert.deepEqual(snapshot(f4), before);
     assert.equal(calls, 0);
     // It started nothing.
@@ -464,6 +466,79 @@ test('POST /api/enrich {dryRun: true} says what a pass would do, writes nothing 
   } finally { await s.close(); }
 });
 
+/** A server on a fresh, indexed fixture copy whose fake provider counts its calls. */
+async function countingServer() {
+  const f = fixtureCopy();
+  await buildIndex(f);
+  const counter = { calls: 0 };
+  const s = await startServer({ folder: f, port: 0, log: () => {}, provider: fakeProvider(req => { counter.calls++; return fakeEnrichment(req); }) });
+  const h = { Host: `127.0.0.1:${s.port}`, 'X-Hippo-Token': s.token, 'Content-Type': 'application/json' };
+  const post = (body: unknown) => request(s.port, 'POST', '/api/enrich', h, typeof body === 'string' ? body : JSON.stringify(body));
+  const plan = (await post({ dryRun: true })).json;
+  const finish = async () => {
+    for (let i = 0; i < 400; i++) {
+      const st = (await request(s.port, 'GET', '/api/enrich', h)).json;
+      if (!st.running) return st;
+      await new Promise(r => setTimeout(r, 25));
+    }
+    throw new Error('the pass did not finish');
+  };
+  return { f, s, counter, post, plan, finish };
+}
+
+test('a start refused: the provider, the model or more to send than the question showed is 409 "changed" with the new plan', async () => {
+  const { f, s, counter, post, plan } = await countingServer();
+  try {
+    assert.equal(plan.send, 5);
+    const before = snapshot(f);
+    for (const expect of [
+      { provider: 'claude-cli', model: plan.model, send: 5 },          // provider changed since the question
+      { provider: plan.provider, model: `${plan.model}-other`, send: 5 }, // model changed
+      { provider: plan.provider, model: plan.model, send: 4 },          // a capture synced in since: more to send
+      { provider: plan.provider, model: plan.model, send: 0 },          // the page saw nothing to send
+    ]) {
+      const r = await post({ expect });
+      assert.equal(r.status, 409, JSON.stringify(expect));
+      assert.equal(r.json.error, 'changed');
+      assert.deepEqual(r.json.plan, plan);
+      assert.equal(typeof r.json.message, 'string');
+    }
+    assert.equal(counter.calls, 0);
+    assert.deepEqual(snapshot(f), before);
+    assert.deepEqual((await request(s.port, 'GET', '/api/enrich', { Host: `127.0.0.1:${s.port}`, 'X-Hippo-Token': s.token })).json,
+      { running: false, done: 0, total: 0 });
+  } finally { await s.close(); }
+});
+
+test('a start without expect, or with a malformed one, is 400 and sends nothing', async () => {
+  const { f, s, counter, post, plan } = await countingServer();
+  try {
+    const before = snapshot(f);
+    const ok = { provider: plan.provider, model: plan.model, send: plan.send };
+    for (const body of ['', '{}', { dryRun: false }, { expect: null }, { expect: [] }, { expect: 'yes' },
+      { expect: { ...ok, provider: 3 } }, { expect: { ...ok, model: undefined } }, { expect: { ...ok, send: -1 } },
+      { expect: { ...ok, send: 1.5 } }, { expect: { ...ok, send: '5' } }, { expect: { ...ok, send: 1e20 } }]) {
+      const r = await post(body);
+      assert.equal(r.status, 400, JSON.stringify(body));
+    }
+    assert.equal(counter.calls, 0);
+    assert.deepEqual(snapshot(f), before);
+  } finally { await s.close(); }
+});
+
+test('a start that matches the question, or finds fewer to send, runs', async () => {
+  for (const extra of [0, 3]) {
+    const { s, counter, post, plan, finish } = await countingServer();
+    try {
+      const r = await post({ expect: { provider: plan.provider, model: plan.model, send: plan.send + extra } });
+      assert.equal(r.status, 202);
+      const st = await finish();
+      assert.equal(st.report.enrich.written, 5);
+      assert.equal(counter.calls, 5);
+    } finally { await s.close(); }
+  }
+});
+
 test('close() cancels a running pass and waits for it', async () => {
   const f3 = fixtureCopy();
   await buildIndex(f3);
@@ -475,7 +550,9 @@ test('close() cancels a running pass and waits for it', async () => {
     return fakeEnrichment(req);
   }) });
   const h = { Host: `127.0.0.1:${s.port}`, 'X-Hippo-Token': s.token, 'Content-Type': 'application/json' };
-  assert.equal((await request(s.port, 'POST', '/api/enrich', h, '{}')).status, 202);
+  const plan = (await request(s.port, 'POST', '/api/enrich', h, '{"dryRun":true}')).json;
+  assert.equal((await request(s.port, 'POST', '/api/enrich', h,
+    JSON.stringify({ expect: { provider: plan.provider, model: plan.model, send: plan.send } }))).status, 202);
   for (let i = 0; i < 100 && inFlight === 0; i++) await new Promise(r => setTimeout(r, 10));
   assert.ok(inFlight > 0);
   await s.close();

@@ -86,6 +86,7 @@ async function start(): Promise<void> {
     store, api,
     provider: boot.settings.provider,
     confirmHost: el('confirm-update'),
+    beforeAsk: () => settingsPanel.close(),
     resetView: () => stage.resetView(),
     ready: () => ready,
     afterUpdate: async () => {
@@ -95,12 +96,15 @@ async function start(): Promise<void> {
   });
   mountLayoutBar(el('layouts'), store);
   const ask = mountAskBar(el('ask'), reply, store);
-  mountSettings(el('settings'), toolbar.settingsButton, boot.settings, {
+  const settingsPanel = mountSettings(el('settings'), toolbar.settingsButton, boot.settings, {
     api,
     themes: Object.keys(themes),
+    opened: () => toolbar.closeQuestion(),
     saved: (now, before) => {
       boot = { ...boot, settings: now };
       toolbar.setProvider(now.provider);
+      // A question still open names what was there before the save: close it; the next Update asks afresh.
+      toolbar.closeQuestion();
       if (now.mapTiles !== before.mapTiles) {
         stage.setMapTiles(now.mapTiles);
         arrange(true);

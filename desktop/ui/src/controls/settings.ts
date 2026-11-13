@@ -19,6 +19,8 @@ export interface SettingsDeps {
   themes: string[];
   /** After a save, with the settings as the server now has them and as they were. */
   saved(now: Settings, before: Settings): void;
+  /** As the panel opens (the page closes an open update question, which sits in the same place). */
+  opened?(): void;
 }
 
 export interface SettingsPanel { open(): void; close(): void; isOpen(): boolean }
@@ -85,6 +87,7 @@ export function mountSettings(panel: HTMLElement, button: HTMLButtonElement, ini
 
   const isOpen = () => !panel.hidden;
   const open = () => {
+    deps.opened?.();
     fill();
     panel.hidden = false;
     button.setAttribute('aria-expanded', 'true');
