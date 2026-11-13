@@ -84,14 +84,24 @@ public struct ResolvedEnrichment: Equatable, Sendable {
 
     /// Reads both layers for the capture. A missing or unreadable document counts as no document.
     public static func load(store: HippoStore, captureID: String) -> ResolvedEnrichment {
-        func read(_ layer: EnrichmentLayer) -> EnrichmentDocument? {
-            do { return try store.enrichments.document(layer, captureID: captureID) } catch {
-                log.error("\("enrichment_read_failed", privacy: .public)")
-                return nil
-            }
+        make(device: read(.device, store: store, captureID: captureID),
+             server: read(.server, store: store, captureID: captureID), store: store, captureID: captureID)
+    }
+
+    /// One layer's document for the capture; nil when missing, or when unreadable (logged as
+    /// `enrichment_read_failed`).
+    static func read(_ layer: EnrichmentLayer, store: HippoStore, captureID: String) -> EnrichmentDocument? {
+        do { return try store.enrichments.document(layer, captureID: captureID) } catch {
+            log.error("\("enrichment_read_failed", privacy: .public)")
+            return nil
         }
+    }
+
+    /// `make` with the store's asset URLs for the capture.
+    static func make(device: EnrichmentDocument?, server: EnrichmentDocument?, store: HippoStore,
+                     captureID: String) -> ResolvedEnrichment {
         let enrichments = store.enrichments
-        return make(device: read(.device), server: read(.server),
+        return make(device: device, server: server,
                     assetURL: { enrichments.assetURL($0, captureID: captureID, asset: $1) })
     }
 

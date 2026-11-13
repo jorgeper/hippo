@@ -13,6 +13,9 @@ public final class CaptureDetailModel {
     public private(set) var visibility: TierVisibility
     /// This capture's log lines, oldest first; loaded only while `visibility.log` is on, else empty.
     public private(set) var logLines: [LogLine] = []
+    /// Whether `logLines` matches the Log switch: false from when Log changes until a load has set the lines,
+    /// so the view doesn't say "Nothing logged yet" before they are read.
+    public private(set) var logLoaded = false
     /// True after a failed load; cleared by the next successful one. A failed load keeps the previous `detail`.
     public private(set) var loadFailed = false
     /// The confirmation to show before `delete()`; refreshed by `load()`.
@@ -92,7 +95,10 @@ public final class CaptureDetailModel {
         settings?.tierVisibility = v
         visibility = v
         if v.server == old.server, let unfiltered { detail = unfiltered.filtered(by: v) }
-        if !v.log { logLines = [] }
+        if v.log != old.log {
+            logLines = []
+            logLoaded = false
+        }
         await load()
     }
 
@@ -121,20 +127,14 @@ public final class CaptureDetailModel {
                 var accountNames: [String: String] = [:]
                 for case let d? in names.values { accountNames[d.id] = await accountName(d) }
                 let tasks = try store.enrichmentTasks.tasks(captureIDs: [id])
-                let deviceDocument = (try? store.enrichments.document(.device, captureID: id)) ?? nil
+                // Each layer is read once; a failed read is logged and counts as no document.
+                let deviceDocument = ResolvedEnrichment.read(.device, store: store, captureID: id)
                 // Server off: resolve as if no server document had arrived, so the phone's own values come back
                 // wherever gold had replaced them, and Status has no arrival line.
-                let enrichment: ResolvedEnrichment
-                let goldArrivedAt: Date?
-                if visibility.server {
-                    enrichment = ResolvedEnrichment.load(store: store, captureID: id)
-                    goldArrivedAt = (try? store.enrichments.document(.server, captureID: id))?.generatedAt
-                } else {
-                    let enrichments = store.enrichments
-                    enrichment = ResolvedEnrichment.make(device: deviceDocument, server: nil,
-                                                         assetURL: { enrichments.assetURL($0, captureID: id, asset: $1) })
-                    goldArrivedAt = nil
-                }
+                let serverDocument = visibility.server ? ResolvedEnrichment.read(.server, store: store, captureID: id) : nil
+                let enrichment = ResolvedEnrichment.make(device: deviceDocument, server: serverDocument, store: store,
+                                                         captureID: id)
+                let goldArrivedAt = serverDocument?.generatedAt
                 let changed = (try? store.remoteState.changed(captureID: id)) ?? nil
                 let trimmedPaths = (try? store.trims.trimmedPaths(captureID: id)) ?? []
                 // The destination `deleteEverywhere` binds to: the active one when this capture has a job for it,
@@ -180,6 +180,7 @@ public final class CaptureDetailModel {
         unfiltered = loaded.detail
         detail = loaded.detail.filtered(by: visibility)
         logLines = loaded.logLines
+        logLoaded = true
         deletionPrompt = loaded.prompt
         everywherePrompt = loaded.everywherePrompt
         capturedAt = loaded.capturedAt

@@ -1186,6 +1186,14 @@ private let a2Picture = CaptureCore.Attachment(attachmentID: "a2", relativePath:
         let id = p.metadata.captureID
         let digest = try #require(try t.store.index.packageDigest(captureID: id))
         try t.store.enrichments.write(GoldSample.make(metadata: p.metadata, packageDigest: digest, now: now), newAssets: [:])
+        // The phone's own summary, which the server's overrides: only resolving without the server document brings
+        // it back (filtering gold rows alone would leave no summary).
+        let phoneSummary = Facet(version: 1, status: .ok, generatedAt: now, provenance: "test",
+                                 data: .object(["text": .string("Summary written on the phone.")]))
+        try t.store.enrichments.write(
+            EnrichmentDocument(schemaVersion: 1, captureID: id, layer: .device, packageDigest: digest,
+                               producer: EnrichmentProducer(name: "t", version: "1", build: "1"), generatedAt: now,
+                               facets: [FacetKind.summary.rawValue: phoneSummary]), newAssets: [:])
         let packageDir = t.store.layout.packageURL(relativeDirectory: p.relativeDirectory)
         let before = try FileManager.default.subpathsOfDirectory(atPath: packageDir.path).sorted()
 
@@ -1194,6 +1202,8 @@ private let a2Picture = CaptureCore.Attachment(attachmentID: "a2", relativePath:
         #expect(model.visibility == .standard)
         await model.load()
         #expect(model.detail?.title == "Sample title from server")
+        #expect(model.detail?.summary == "Sample server summary for testing.")
+        #expect(model.detail?.summaryLayer == .gold)
         #expect(model.detail?.status.contains { $0.text.hasPrefix("From your server") } == true)
         #expect(model.logLines.isEmpty)
 
@@ -1204,8 +1214,10 @@ private let a2Picture = CaptureCore.Attachment(attachmentID: "a2", relativePath:
         #expect(model.visibility == v)
         #expect(settings.tierVisibility == v)
         #expect(model.detail?.title == nil)
-        #expect(model.detail?.summary == nil)
+        #expect(model.detail?.summary == "Summary written on the phone.")
+        #expect(model.detail?.summaryLayer == .silver)
         #expect(model.detail?.status.contains { $0.text.hasPrefix("From your server") } == false)
+        #expect(model.logLoaded)
         #expect(model.logLines.contains { $0.text.hasPrefix("Saved") })
         #expect(model.logMayBePruned == false)
 
@@ -1218,10 +1230,89 @@ private let a2Picture = CaptureCore.Attachment(attachmentID: "a2", relativePath:
         v.log = false
         await model.setVisibility(v)
         #expect(model.detail?.title == "Sample title from server")
+        #expect(model.detail?.summary == "Sample server summary for testing.")
+        #expect(model.detail?.summaryLayer == .gold)
         #expect(model.logLines.isEmpty)
 
         // Nothing was written into the package.
         #expect(try FileManager.default.subpathsOfDirectory(atPath: packageDir.path).sorted() == before)
+    }
+
+    // The Log section's empty text waits for the lines: `logLoaded` is false from the moment Log changes until a
+    // load has set them, and a change to another switch leaves it alone.
+    @MainActor @Test func logLoadedIsFalseUntilTheLinesAreRead() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let p = try await t.note("hello", at: now)
+        let model = CaptureDetailModel(store: t.store, captureID: p.metadata.captureID, now: { now },
+                                       calendar: calendar, locale: locale)
+        #expect(!model.logLoaded)
+        await model.load()
+        #expect(model.logLoaded)
+
+        let gate = FirstCallGate()
+        model.beforeApply = { await gate.arrive() }
+        let on = Task { await model.setVisibility(TierVisibility(log: true)) }
+        await gate.firstArrived()
+        #expect(model.visibility.log)
+        #expect(!model.logLoaded)
+        #expect(model.logLines.isEmpty)
+        await gate.release()
+        await on.value
+        #expect(model.logLoaded)
+        #expect(!model.logLines.isEmpty)
+        model.beforeApply = nil
+
+        // Another switch keeps the lines and the flag.
+        await model.setVisibility(TierVisibility(raw: false, log: true))
+        #expect(model.logLoaded && !model.logLines.isEmpty)
+
+        await model.setVisibility(.standard)
+        #expect(model.logLoaded && model.logLines.isEmpty)
+    }
+
+    // A phone document that can't be read leaves the capture loadable with Server off, as with it on.
+    @MainActor @Test func unreadablePhoneDocumentStillLoadsWithServerOff() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let p = try await t.note("hello", at: now)
+        let id = p.metadata.captureID
+        let digest = try #require(try t.store.index.packageDigest(captureID: id))
+        try t.store.enrichments.write(GoldSample.make(metadata: p.metadata, packageDigest: digest, now: now), newAssets: [:])
+        let facet = Facet(version: 1, status: .ok, generatedAt: now, provenance: "test",
+                          data: .object(["text": .string("phone")]))
+        try t.store.enrichments.write(
+            EnrichmentDocument(schemaVersion: 1, captureID: id, layer: .device, packageDigest: digest,
+                               producer: EnrichmentProducer(name: "t", version: "1", build: "1"), generatedAt: now,
+                               facets: [FacetKind.summary.rawValue: facet]), newAssets: [:])
+        let docURL = t.base.appendingPathComponent("Hippo/enrichments/device/\(id)/enrichment.json")
+        #expect(FileManager.default.fileExists(atPath: docURL.path))
+        try Data("not json".utf8).write(to: docURL)
+
+        let model = CaptureDetailModel(store: t.store, captureID: id, now: { now }, calendar: calendar, locale: locale)
+        await model.load()
+        #expect(model.detail?.summary == "Sample server summary for testing.")
+        await model.setVisibility(TierVisibility(server: false))
+        #expect(model.loadFailed == false)
+        #expect(model.detail != nil)
+        #expect(model.detail?.summary == nil)
+    }
+
+    @Test func hasStatusContentCoversEverythingTheStatusSectionShows() {
+        let full = make(meta(), jobs: [job(.synced)], destinationName: "Dropbox")
+        #expect(full.hasStatusContent)
+        var d = full
+        d.status = []
+        #expect(d.hasStatusContent)  // storage and sync rows
+        d.sync = []
+        #expect(d.hasStatusContent)  // storage line
+        d.storage = nil
+        #expect(!d.hasStatusContent)
+        d.sync = full.sync
+        #expect(d.hasStatusContent)
+        let off = full.filtered(by: TierVisibility(raw: false, phone: false, server: false, sync: false))
+        #expect(!off.hasStatusContent)
+        #expect(full.filtered(by: TierVisibility(raw: false, phone: false, server: false)).hasStatusContent)
     }
 
     @MainActor @Test func oldCaptureLogMayBePruned() async throws {

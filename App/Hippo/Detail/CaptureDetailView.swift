@@ -250,10 +250,8 @@ struct CaptureDetailView: View {
                         }
                     }
                 }
-                if !detail.status.isEmpty || detail.storage != nil || !detail.sync.isEmpty {
-                    StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry,
-                                  uploadingAgain: uploadingAgain, onUploadAgain: uploadAgain)
-                }
+                StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry,
+                              uploadingAgain: uploadingAgain, onUploadAgain: uploadAgain)
                 if developerMode, let capturedAt = model.capturedAt {
                     Section {
                         NavigationLink("Activity") {
@@ -280,7 +278,9 @@ struct CaptureDetailView: View {
     /// The Log switch: this capture's log lines, oldest first, at the bottom of the screen.
     private var logSection: some View {
         Section {
-            if model.logLines.isEmpty {
+            if !model.logLoaded {
+                ProgressView().frame(maxWidth: .infinity)
+            } else if model.logLines.isEmpty {
                 Text("Nothing logged yet").foregroundStyle(.secondary)
             } else {
                 ForEach(model.logLines) { LogLineRow(line: $0) }

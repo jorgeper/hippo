@@ -24,6 +24,10 @@ public struct TierVisibility: Equatable, Sendable {
 }
 
 extension CaptureDetail {
+    /// Whether Detail's Status section has anything to show: status lines, the storage line (which carries the
+    /// changed files and the unrestorable note) or sync rows.
+    public var hasStatusContent: Bool { !status.isEmpty || storage != nil || !sync.isEmpty }
+
     /// The detail without any row, entry or section whose tier is switched off. `preview` and `exportURLs` are
     /// always kept, and so is the preview's own trimmed file (its download works from the preview).
     public func filtered(by v: TierVisibility) -> CaptureDetail {
