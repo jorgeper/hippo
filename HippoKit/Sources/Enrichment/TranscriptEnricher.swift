@@ -39,7 +39,7 @@ public struct TranscriptEnricher: Enricher {
         applies(to: m) || comments.contains { $0.audio != nil }
     }
 
-    private static func isAudio(_ a: Attachment) -> Bool { UTType(a.uti)?.conforms(to: .audio) ?? false }
+    private static func isAudio(_ a: Attachment) -> Bool { a.isAudio }
 
     /// Transcribes each audio attachment and audio comment, keyed by attachment or comment ID. An ID that
     /// already has an item in the current `ok` transcript facet (same version) keeps it without running the

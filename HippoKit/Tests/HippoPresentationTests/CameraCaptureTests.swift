@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import ImageIO
 import UniformTypeIdentifiers
+import CaptureCore
 import ShareIntake
 import HippoTestSupport
 @testable import HippoPresentation
@@ -49,6 +50,19 @@ struct CameraCaptureTests {
         #expect(tiff?[kCGImagePropertyTIFFMake as String] as? String == "Apple")
         let exif = props[kCGImagePropertyExifDictionary as String] as? [String: Any]
         #expect(exif?[kCGImagePropertyExifDateTimeOriginal as String] as? String == "2026:11:09 10:00:00")
+    }
+
+    @Test func stageCarriesContext() throws {
+        let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let data = try MediaMaker.imageData(width: 16, height: 16)
+        let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+        let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let entry = MetadataObservation(key: "context.network", value: .object(["interface": .string("wifi")]),
+                                        provenance: "nw_path")
+        let prepared = try CameraCapture.stage(.photo(image, orientation: 1, metadata: PhotoMetadata([:])),
+                                               intake: IntakeDirectory(storeRoot: root), captureID: UUID(),
+                                               startedAt: Date(), timeZone: .gmt, location: nil, context: [entry])
+        #expect(prepared.draft.observations == [entry])
     }
 
     @Test func videoIsMovedIntoIntake() async throws {

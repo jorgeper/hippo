@@ -46,6 +46,7 @@ public final class RecorderModel {
     private let store: HippoStore
     private let session: RecordingSession
     private let location: (Date) -> CaptureLocation?
+    private let context: (Date) -> [MetadataObservation]
     public let target: SaveTarget
     private let now: () -> Date
 
@@ -56,8 +57,9 @@ public final class RecorderModel {
     public init(store: HippoStore, intake: IntakeDirectory, recorder: AudioRecording,
                 permission: @escaping () async -> MicPermission,
                 location: @escaping (Date) -> CaptureLocation?,
+                context: @escaping (Date) -> [MetadataObservation] = { _ in [] },
                 now: @escaping () -> Date = Date.init, target: SaveTarget = .newCapture) {
-        self.store = store; self.location = location; self.target = target; self.now = now
+        self.store = store; self.location = location; self.context = context; self.target = target; self.now = now
         session = RecordingSession(intake: intake, recorder: recorder, permission: permission, now: now)
     }
 
@@ -90,7 +92,7 @@ public final class RecorderModel {
                     attachments: [AttachmentSource(body: .file(taken.url), originalFilename: nil,
                                                    uti: "com.apple.m4a-audio", mimeType: "audio/mp4",
                                                    representationSource: "recording")],
-                    location: location(taken.startedAt))
+                    location: location(taken.startedAt), observations: context(taken.startedAt))
                 _ = try await store.capture(draft)
             case .comment(let captureID):
                 _ = try await store.addComment(

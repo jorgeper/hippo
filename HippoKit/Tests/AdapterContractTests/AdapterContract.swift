@@ -154,7 +154,7 @@ private func runReplaceListDownloadContract(adapter: any StorageAdapter, scratch
     #expect(logInfo.byteCount == r2Int.byteCount)
     #expect(try await adapter.verify(remote: logInfo, localURL: r2, expected: r2Int) != nil)
 
-    // Replace is refused outside enrichments/ and logs/.
+    // Replace is refused outside enrichments/, logs/, format/ and the exact path README.md.
     do {
         _ = try await adapter.replaceFile(localURL: r1, relativePath: "captures/2026/11/07/abc/x.bin", expected: r1Int)
         Issue.record("expected replace_not_allowed")
@@ -367,4 +367,24 @@ private func runFolderOperationsContract(adapter: any StorageAdapter, scratch: U
                                               progress: { progress.add($0) })
     #expect(info.byteCount == 200)
     #expect(progress.all.last == 200)
+}
+
+/// `replaceFile` accepts exactly the paths `ReplacePolicy` allows and refuses the near misses.
+func runReplaceAllowedPathsContract(adapter: any StorageAdapter, scratch: URL) async throws {
+    let (file, integrity) = try makeFile(scratch, "policy.bin", bytes: 200, seed: 31)
+    for path in ["README.md", "format/README.md", "format/schema/a.schema.json",
+                 "enrichments/device/2026/11/07/p/enrichment.json", "logs/abc/2026-11-08.jsonl"] {
+        let receipt = try await adapter.replaceFile(localURL: file, relativePath: path, expected: integrity)
+        #expect(receipt.relativePath == path)
+        #expect(try await adapter.inspectFile(relativePath: path)?.byteCount == integrity.byteCount)
+    }
+    for path in ["README.md.bak", "readme.md", "formatting/a.md", "format", "captures/2026/11/07/x/metadata.json",
+                 "notes/README.md"] {
+        do {
+            _ = try await adapter.replaceFile(localURL: file, relativePath: path, expected: integrity)
+            Issue.record("expected replace_not_allowed for \(path)")
+        } catch let e as StorageError {
+            #expect(e == .permanent(code: "replace_not_allowed"), "\(path)")
+        }
+    }
 }

@@ -57,6 +57,7 @@ public final class ShareSessionModel {
     private let input: ShareInput?
     private let destinationName: String?
     private let location: (Date) -> CaptureLocation?
+    private let context: (Date) -> [MetadataObservation]
     private let now: () -> Date
     private let timeZone: TimeZone
     private let captureID: UUID
@@ -68,9 +69,11 @@ public final class ShareSessionModel {
     /// Share Extension: `prepare()` copies the shared items in.
     public init(store: HippoStore, intake: IntakeDirectory, input: ShareInput,
                 destinationName: String?, location: @escaping (Date) -> CaptureLocation?,
+                context: @escaping (Date) -> [MetadataObservation] = { _ in [] },
                 now: @escaping () -> Date = Date.init, timeZone: TimeZone = .current) {
         self.store = store; self.intake = intake; self.input = input
-        self.destinationName = destinationName; self.location = location; self.now = now; self.timeZone = timeZone
+        self.destinationName = destinationName; self.location = location; self.context = context
+        self.now = now; self.timeZone = timeZone
         captureID = UUID()
         voice = nil
         state = .preparing(done: 0, total: input.providers.count)
@@ -79,9 +82,11 @@ public final class ShareSessionModel {
     /// Camera. State starts `.ready`; `prepare()` is a no-op.
     public init(store: HippoStore, intake: IntakeDirectory, prepared: PreparedCapture,
                 destinationName: String?, voice: RecordingSession?,
-                location: @escaping (Date) -> CaptureLocation?, now: @escaping () -> Date = Date.init) {
+                location: @escaping (Date) -> CaptureLocation?,
+                context: @escaping (Date) -> [MetadataObservation] = { _ in [] },
+                now: @escaping () -> Date = Date.init) {
         self.store = store; self.intake = intake; input = nil
-        self.destinationName = destinationName; self.location = location; self.now = now
+        self.destinationName = destinationName; self.location = location; self.context = context; self.now = now
         timeZone = prepared.draft.timeZone
         captureID = prepared.draft.captureID
         self.voice = voice
@@ -169,12 +174,17 @@ public final class ShareSessionModel {
         }
     }
 
-    /// The draft with the trimmed comment and, for shared items, the location fix for its start time.
+    /// The draft with the trimmed comment and, for shared items, the location fix and context entries for its start time.
     private func finishedDraft() -> CaptureDraft? {
         guard var draft else { return nil }
         let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         draft.userNote = trimmed.isEmpty ? nil : trimmed
-        if input != nil { draft.location = location(draft.startedAt) }
+        if input != nil {
+            draft.location = location(draft.startedAt)
+            for entry in context(draft.startedAt) where !draft.observations.contains(where: { $0.key == entry.key }) {
+                draft.observations.append(entry)
+            }
+        }
         return draft
     }
 

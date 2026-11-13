@@ -14,6 +14,8 @@ What comes after Plan 3 (Dropbox, merged 2026-11-09). Items are not ordered yet;
 
 ## Decided: capture context (all behind Settings toggles and the relevant permission)
 
+**Done (2026-11-10, [design](superpowers/specs/2026-11-10-hippo-capture-context-design.md)).** Built: the signals below, a major.minor format version, a signal registry, and a self-describing destination folder. The purpose sharpened to recall by circumstance: "the pictures I shared last week while I was in a car".
+
 Purpose: record factual signals at capture time so that, later, Hippo or the desktop can infer an activity ("looks like you were running", "in the car", "on headphones") and ask the user to confirm it. Everything lands as `metadata_observations` entries (with provenance) or device-layer enrichment facets, omitted when unknown; inference happens later, not at capture time.
 
 - **Cheap and permission-free, captured in the moment:**
@@ -23,7 +25,8 @@ Purpose: record factual signals at capture time so that, later, Hippo or the des
   - Location extras already on the `CLLocation` fix: altitude, speed, course.
   - On-device content detectors: barcodes and QR codes in images (a QR code becomes a URL), language of text and speech, sound classification of recordings (traffic, music, crowd, birds), screenshot detection.
 - **Motion activity, backfilled by the main app** from Core Motion's seven-day history at the capture timestamp: stationary, walking, running, cycling, automotive. The share extension never asks for the permission.
-- **Weather, backfilled by the main app** at the capture's location and time: temperature, conditions, daylight or dark. Open-Meteo's historical endpoint until the paid developer program makes WeatherKit available.
+- **Weather, backfilled by the main app** at the capture's location and time: temperature, conditions, daylight or dark. Open-Meteo's historical endpoint until the paid developer program makes WeatherKit available. Later: swap Open-Meteo for WeatherKit.
+- **Later: the offline indexer.** A separate project that reads the synced folder and builds a rebuildable index over these signals; the phone does no search or filtering by context.
 
 Dropped for now: Health (heart rate, workout in progress, sleep). Judged too hard for the value.
 
@@ -47,6 +50,12 @@ Dropped for now: Health (heart rate, workout in progress, sleep). Judged too har
 - Editing or deleting a comment.
 - A desktop reader must list `comments/` on rescan (the package digest does not change).
 - Download from Dropbox should also fetch `comments/` so comments come back to a new phone.
+
+## Later: ask and browse (an idea, not scheduled)
+
+Jorge's idea (2026-11-10): agents are text in, text out. Build a surface where the question goes in as text and the answer comes back as a set of captures to look at: a list, a grid, or piles on a table, which he can then zoom into, filter and sort by hand. Talk to the agent and browse, both. Definitely on the desktop; interesting on the phone too, with a model running against the phone's own data.
+
+What it needs from the data, already true or coming: every signal a queryable fact with a stable key (capture context phase), captures addressable by `capture_id`, thumbnails available locally. The agent's answer would be capture IDs plus a grouping, rendered by native views, so the model never has to describe what the screen can show.
 
 ## The desktop reader (separate project)
 

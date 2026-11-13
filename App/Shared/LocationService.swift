@@ -68,7 +68,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
 
     private static func fix(_ l: CLLocation) -> LocationFix {
         LocationFix(latitude: l.coordinate.latitude, longitude: l.coordinate.longitude,
-                    horizontalAccuracy: l.horizontalAccuracy, timestamp: l.timestamp)
+                    horizontalAccuracy: l.horizontalAccuracy, timestamp: l.timestamp,
+                    altitude: l.altitude, verticalAccuracy: l.verticalAccuracy,
+                    speed: l.speed, speedAccuracy: l.speedAccuracy,
+                    course: l.course, courseAccuracy: l.courseAccuracy)
     }
 
     // MARK: CLLocationManagerDelegate

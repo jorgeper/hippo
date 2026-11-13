@@ -26,7 +26,8 @@ public enum CameraCapture {
     /// the video to `intake/<captureID>/0.mov`, and returns the draft (method `.camera`,
     /// representationSource "camera", location as given).
     public static func stage(_ result: CameraResult, intake: IntakeDirectory, captureID: UUID,
-                             startedAt: Date, timeZone: TimeZone, location: CaptureLocation?) throws -> PreparedCapture {
+                             startedAt: Date, timeZone: TimeZone, location: CaptureLocation?,
+                             context: [MetadataObservation] = []) throws -> PreparedCapture {
         let fm = FileManager.default
         let dir = intake.directory(for: captureID)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -61,7 +62,7 @@ public enum CameraCapture {
         let attachment = AttachmentSource(body: .file(file), originalFilename: nil, uti: uti, mimeType: mime,
                                           representationSource: "camera")
         let draft = CaptureDraft(captureID: captureID, startedAt: startedAt, timeZone: timeZone, method: .camera,
-                                 attachments: [attachment], location: location)
+                                 attachments: [attachment], location: location, observations: context)
         return PreparedCapture(draft: draft, previewImageURL: isPhoto ? file : nil, totalBytes: size)
     }
 

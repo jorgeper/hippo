@@ -255,6 +255,29 @@ private struct CommentTranscriber: Transcribing {
         #expect(try h.task(id, .linkPreview)?.status == "ok")
     }
 
+    @Test func notApplicableFromRunIsTerminalAndWritesNothing() async throws {
+        let h = try RunnerHarness(); defer { h.cleanup() }
+        let id = try await h.note("hi")
+        let fake = FakeEnricher(kind: .motionActivity, steps: [.error(.notApplicable(code: "history_expired"))])
+        let runner = h.runner([fake])
+        try await runner.schedule()
+        #expect(await runner.runPending() == EnrichmentPassResult(ran: 1, failed: 0, idle: false))
+        let task = try #require(try h.task(id, .motionActivity))
+        #expect(task.status == "not_applicable")
+        #expect(task.attemptCount == 0)
+        #expect(task.nextAttemptAt == nil)
+        #expect(try h.deviceDoc(id)?[.motionActivity] == nil)
+        let finished = events(h, id).filter { $0.event == .enrichFinished }
+        #expect(finished.count == 1)
+        #expect(finished.first?.outcome == .notApplicable)
+        #expect(finished.first?.code == "history_expired")
+        // A later pass, even after rescheduling, never runs it again.
+        #expect(try await runner.schedule() == 0)
+        #expect(await runner.runPending().idle)
+        #expect(fake.invocations == 1)
+        #expect(try h.task(id, .motionActivity)?.status == "not_applicable")
+    }
+
     @Test func deferredDoesNotCountAttempts() async throws {
         let h = try RunnerHarness(); defer { h.cleanup() }
         let id = try await h.note("hi")

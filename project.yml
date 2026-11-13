@@ -22,7 +22,21 @@ targets:
   Hippo:
     type: application
     platform: iOS
-    sources: [App/Hippo, App/Shared]
+    sources:
+      - App/Hippo
+      - App/Shared
+      # Uploaded to the sync destination so the folder describes itself; see docs/folder-readme.md.
+      - path: docs/folder-readme.md
+        buildPhase: resources
+      - path: docs/package-format.md
+        buildPhase: resources
+      - path: docs/enrichment-format.md
+        buildPhase: resources
+      - path: docs/context-signals.md
+        buildPhase: resources
+      - path: schema
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.jorgeper.hippo
@@ -44,6 +58,7 @@ targets:
         NSCameraUsageDescription: "Hippo uses the camera to take pictures and record videos as captures."
         NSPhotoLibraryAddUsageDescription: "Hippo can also keep the pictures and videos you take in your Photos library. This is off unless you turn it on in Settings."
         NSLocationWhenInUseUsageDescription: "Hippo can save where you were when you capture something. This is off unless you turn it on in Settings."
+        NSMotionUsageDescription: "Hippo records whether you were still, walking, running, cycling or in a vehicle around the time of each capture."
         UIBackgroundModes: [audio, processing]
         BGTaskSchedulerPermittedIdentifiers: [com.jorgeper.hippo.sync]
         UILaunchScreen: {}

@@ -37,6 +37,7 @@ public struct ShareIntake: Sendable {
     public init(directory: IntakeDirectory) { self.directory = directory }
 
     public func prepare(_ input: ShareInput, captureID: UUID, startedAt: Date, timeZone: TimeZone,
+                        context: [MetadataObservation] = [],
                         progress: @escaping @Sendable (_ done: Int, _ total: Int) -> Void) async -> IntakeResult {
         let fm = FileManager.default
         let folder = directory.directory(for: captureID)
@@ -103,7 +104,7 @@ public struct ShareIntake: Sendable {
 
         let draft = CaptureDraft(captureID: captureID, startedAt: startedAt, timeZone: timeZone, method: .shareExtension,
                                  sharedTitle: Self.nonBlank(input.title), sharedText: sharedText, urls: urls,
-                                 attachments: attachments, observations: Self.observations(input))
+                                 attachments: attachments, observations: Self.observations(input) + context)
         return IntakeResult(draft: draft, failures: failures, totalBytes: totalBytes, firstImageURL: firstImageURL)
     }
 

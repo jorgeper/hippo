@@ -204,7 +204,7 @@ public struct DropboxAdapter: StorageAdapter {
     public func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt {
         try await run {
             let path = try remote(relativePath)
-            guard relativePath.hasPrefix("enrichments/") || relativePath.hasPrefix("logs/") else {
+            guard ReplacePolicy.allows(relativePath) else {
                 throw StorageError.permanent(code: "replace_not_allowed")
             }
             try Task.checkCancellation()

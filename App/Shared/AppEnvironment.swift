@@ -1,6 +1,8 @@
+import CoreLocation
 import Foundation
 import os
 import CaptureCore
+import LocalRepository
 import SyncEngine
 import ShareIntake
 import HippoPresentation
@@ -75,16 +77,19 @@ struct AppEnvironment: Sendable {
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: protection)
             }
             let store = try HippoStore.open(root: storeRoot, producer: producer,
-                                          process: processKind == .shareExtension ? .share : .app)
+                                          process: processKind == .shareExtension ? .share : .app,
+                                            context: captureContextHooks())
             #if HIPPO_SHARE_EXTENSION
             let providers: [any StorageProvider] = []
             #else
             let providers = processKind == .app ? appProviders(storeRoot: storeRoot) : []
             #endif
             let registry = processKind == .app ? ProviderRegistry(providers) : nil
-            let coordinator = registry.map {
-                SyncCoordinator(store: store, registry: $0, ownerPrefix: "app", appVersion: producer.appVersion,
+            let coordinator = registry.map { registry in
+                SyncCoordinator(store: store, registry: registry, ownerPrefix: "app", appVersion: producer.appVersion,
                                 settings: LocationService.settings,
+                                formatUploader: store.makeFormatUploader(bundle: formatBundle(log: store.log),
+                                                                         adapterFor: { try registry.adapter(for: $0) }),
                                 isConstrained: { NetworkStatus.shared.isExpensive })
             }
             return .success(AppEnvironment(processKind: processKind, storeRoot: storeRoot, producer: producer,
@@ -94,6 +99,31 @@ struct AppEnvironment: Sendable {
             log.error("\("store_open_failed", privacy: .public)")
             return .failure(.storeUnavailable)
         }
+    }
+
+    /// The format documents and schemas the app ships (`project.yml` copies them into the Hippo target). Nil when
+    /// they are not there, in which case nothing is uploaded and the app is otherwise unaffected.
+    private static func formatBundle(log: ActivityLog) -> FormatBundle? {
+        let bundle: FormatBundle? = Bundle.main.resourceURL.flatMap { resources in
+            try? FormatBundle.load(docsDirectory: resources,
+                                   schemaDirectory: resources.appendingPathComponent("schema", isDirectory: true))
+        }
+        // One fixed line, no path or error text, so a build that lost its resources is not silent.
+        if bundle == nil { log.append(LogEvent(event: .formatUploadFailed, code: "bundle_missing")) }
+        return bundle
+    }
+
+    /// Both processes read the same App Group settings. Location authorization is read, never requested.
+    private static func captureContextHooks() -> CaptureContextHooks {
+        CaptureContextHooks(
+            enabledGroups: {
+                let settings = LocationService.settings
+                let status = CLLocationManager().authorizationStatus
+                let authorized = status == .authorizedWhenInUse || status == .authorizedAlways
+                return (settings.deviceContextEnabled, settings.locationEnabled && authorized)
+            },
+            lastSaved: { LocationService.settings.lastSaved },
+            recordSaved: { LocationService.settings.lastSaved = $0 })
     }
 
     #if !HIPPO_SHARE_EXTENSION

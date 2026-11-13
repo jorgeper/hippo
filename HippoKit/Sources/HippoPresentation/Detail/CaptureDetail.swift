@@ -56,6 +56,8 @@ public struct CaptureDetail: Equatable, Sendable {
     public var sharedText: String?
     public var links: [URL]
     public var captured: [DetailRow]
+    /// Detail's Context section: capture-time and looked-up signals, in words. Empty when nothing was recorded.
+    public var context: [DetailRow] = []
     public var attachments: [[DetailRow]]
     public var sync: [SyncRow]
     /// The destination's verdict on this capture; shown first among the sync-layer rows. Nil when there is nothing to say.
@@ -94,6 +96,7 @@ public struct CaptureDetail: Equatable, Sendable {
                             accountName: (String) -> String? = { _ in nil },
                             isEnabled: (FacetKind) -> Bool = { _ in true }, isOnline: Bool = true,
                             goldArrivedAt: Date? = nil, comments: [CaptureComment] = [],
+                            deviceDocument: EnrichmentDocument? = nil,
                             destination: (String) -> Destination?, now: Date,
                             locale: Locale, calendar: Calendar) -> CaptureDetail {
         let files: [(Attachment, URL)] = m.attachments.compactMap { a in
@@ -132,6 +135,7 @@ public struct CaptureDetail: Equatable, Sendable {
             sharedTitle: nonEmpty(m.sharedTitle), sharedText: nonEmpty(m.sharedText),
             links: links,
             captured: capturedRows(m, enrichment: enrichment, locale: locale, calendar: calendar),
+            context: ContextRows.rows(metadata: m, device: deviceDocument, locale: locale),
             attachments: m.attachments.enumerated().map {
                 attachmentRows($1, number: $0 + 1, place: enrichment.places[$1.attachmentID],
                                placeFromServer: enrichment.fromServer.places.contains($1.attachmentID), locale: locale,

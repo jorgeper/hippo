@@ -57,10 +57,12 @@ public final class HippoStore: Sendable {
     private let leaseWaitLimit: Duration
     /// The clock `delete` checks upload leases against. Replaced only by tests.
     private let now: @Sendable () -> Date
+    private let context: CaptureContextHooks?
 
     private init(layout: StoreLayout, db: Database, producer: Producer, process: LogProcess,
-                 leaseWaitLimit: Duration, now: @escaping @Sendable () -> Date) {
+                 leaseWaitLimit: Duration, now: @escaping @Sendable () -> Date, context: CaptureContextHooks?) {
         self.layout = layout
+        self.context = context
         self.db = db
         self.leaseWaitLimit = leaseWaitLimit
         self.now = now
@@ -79,19 +81,22 @@ public final class HippoStore: Sendable {
 
     /// Opens (creating if needed) the store at `root`. Does not run recovery: call `recover()` at launch.
     /// `process` says who writes this store's log lines: the app or the share extension.
-    public static func open(root: URL, producer: Producer, process: LogProcess = .app) throws -> HippoStore {
-        try open(root: root, producer: producer, process: process, leaseWaitLimit: defaultLeaseWaitLimit)
+    /// With `context`, every capture gets a `context.enabled` entry (and `context.burst` when device context is on).
+    public static func open(root: URL, producer: Producer, process: LogProcess = .app,
+                            context: CaptureContextHooks? = nil) throws -> HippoStore {
+        try open(root: root, producer: producer, process: process, leaseWaitLimit: defaultLeaseWaitLimit, context: context)
     }
 
     /// `leaseWaitLimit` is shortened, and `now` (the clock `delete` checks leases against) replaced, only by tests.
     static func open(root: URL, producer: Producer, process: LogProcess = .app,
-                     leaseWaitLimit: Duration, now: @escaping @Sendable () -> Date = Date.init) throws -> HippoStore {
+                     leaseWaitLimit: Duration, now: @escaping @Sendable () -> Date = Date.init,
+                     context: CaptureContextHooks? = nil) throws -> HippoStore {
         let layout = StoreLayout(root: root)
         for dir in [root, layout.stagingDir, layout.capturesDir, layout.thumbnailsDir, layout.transfersDir] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return HippoStore(layout: layout, db: try Database(url: layout.databaseURL), producer: producer,
-                          process: process, leaseWaitLimit: leaseWaitLimit, now: now)
+                          process: process, leaseWaitLimit: leaseWaitLimit, now: now, context: context)
     }
 
     /// Startup recovery (spec §4), then the enrichment steps (design §6.2, §9): enrichment staging
@@ -116,9 +121,22 @@ public final class HippoStore: Sendable {
     /// not reported (only logged, as a fixed category), and the next `recover()` registers and binds
     /// the package.
     public func capture(_ d: CaptureDraft, partialPolicy: PartialPolicy = .rejectPartial) async throws -> CommittedPackage {
+        var d = d
+        if let context {
+            let groups = context.enabledGroups()
+            var added = [ContextObservations.enabled(deviceContext: groups.deviceContext, location: groups.location)]
+            if groups.deviceContext,
+               let burst = ContextObservations.burst(previous: context.lastSaved(), capturedAt: d.startedAt) {
+                added.append(burst)
+            }
+            for entry in added where !d.observations.contains(where: { $0.key == entry.key }) {
+                d.observations.append(entry)
+            }
+        }
         let package: CommittedPackage
         do {
             package = try await writer.commit(d, partialPolicy: partialPolicy)
+            context?.recordSaved(LastSaved(captureID: package.metadata.captureID, capturedAt: d.startedAt))
         } catch {
             log.append(LogEvent(event: .captureSaveFailed, code: Self.saveFailureCode(error)))
             throw error
@@ -250,6 +268,13 @@ public final class HippoStore: Sendable {
         -> LogUploader {
         LogUploader(layout: layout, log: log, destinations: destinations, installID: installID, adapterFor: adapterFor,
                     isConstrained: isConstrained)
+    }
+
+    /// Uploads the format documents and README to the active destination. A nil `bundle` makes it a no-op.
+    public func makeFormatUploader(bundle: FormatBundle?,
+                                   adapterFor: @escaping @Sendable (Destination) throws -> any StorageAdapter)
+        -> FormatUploader {
+        FormatUploader(layout: layout, log: log, destinations: destinations, bundle: bundle, adapterFor: adapterFor)
     }
 
     /// Pulls gold enrichment from the active destination's `enrichments/server/` tree, with the default clock.

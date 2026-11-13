@@ -21,12 +21,15 @@ final class ShareViewController: UIViewController {
             })
         case .success(let environment):
             LocationService.shared.beginSessionFix()
+            ContextReader.traitSource = view
+            CaptureContextService.shared.begin()
             let input = ShareInput.from(extensionContext?.inputItems as? [NSExtensionItem] ?? [])
             // A store read error means "no destination": the sheet then says it only saves on the iPhone.
             let destinationName = (try? environment.store.destinations.active())?.displayName
             let model = ShareSessionModel(
                 store: environment.store, intake: environment.intake, input: input, destinationName: destinationName,
-                location: { LocationService.shared.location(startedAt: $0) })
+                location: { LocationService.shared.location(startedAt: $0) },
+                context: { CaptureContextService.shared.observations(startedAt: $0) })
             host = UIHostingController(rootView: CaptureSheetView(
                 model: model,
                 voice: nil,

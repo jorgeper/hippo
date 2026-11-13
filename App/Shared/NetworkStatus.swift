@@ -1,4 +1,5 @@
 import Foundation
+import CaptureCore
 import Network
 import os
 
@@ -13,12 +14,21 @@ final class NetworkStatus: @unchecked Sendable {
     private let online = OSAllocatedUnfairLock(initialState: true)
 
     private let expensive = OSAllocatedUnfairLock(initialState: false)
+    private let latest = OSAllocatedUnfairLock<ContextSnapshot.Network?>(initialState: nil)
     private let handler = OSAllocatedUnfairLock<(@Sendable (Bool) -> Void)?>(initialState: nil)
 
     private init() {
-        monitor.pathUpdateHandler = { [online, expensive, handler] path in
+        monitor.pathUpdateHandler = { [online, expensive, latest, handler] path in
             let nowOnline = path.status == .satisfied
             expensive.withLock { $0 = path.isExpensive || path.isConstrained }
+            let interface = path.status != .satisfied ? "none"
+                : path.usesInterfaceType(.wifi) ? "wifi"
+                : path.usesInterfaceType(.cellular) ? "cellular"
+                : path.usesInterfaceType(.wiredEthernet) ? "wired" : "other"
+            latest.withLock {
+                $0 = ContextSnapshot.Network(interface: interface, expensive: path.isExpensive,
+                                             constrained: path.isConstrained)
+            }
             let flipped = online.withLock { value in defer { value = nowOnline }; return value != nowOnline }
             if flipped { handler.withLock { $0 }?(nowOnline) }
         }
@@ -28,6 +38,8 @@ final class NetworkStatus: @unchecked Sendable {
     var isOnline: Bool { online.withLock { $0 } }
     /// Cellular, a personal hotspot, or Low Data Mode.
     var isExpensive: Bool { expensive.withLock { $0 } }
+    /// The last delivered path; nil until the first one arrives.
+    var current: ContextSnapshot.Network? { latest.withLock { $0 } }
     /// Called, off the main thread, with the new state whenever `isOnline` flips. Set once at launch.
     var onChange: (@Sendable (Bool) -> Void)? {
         get { handler.withLock { $0 } }

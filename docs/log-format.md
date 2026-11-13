@@ -89,6 +89,9 @@ Global (no `capture_id`):
 | `enrich.pass` | An enrichment pass started or ended (`phase`, `count`, `code` = why it stopped) |
 | `sync.pass` | A sync pass started or ended (`phase`, `trigger`, `count`, `code`) |
 | `bg.task` | A background task started, expired or ended (`phase`) |
+| `format.uploaded` | The format documents and README were written to the destination's `format/` folder and root (`dest`, `count` of files written) |
+| `format.upload_failed` | That upload failed and will be retried on a later pass (`dest`, `code`). Code `bundle_missing` (no `dest`): the app build holds no format files, so nothing is uploaded; logged once at launch of the main app |
+| `format.readme_skipped` | The destination's own `README.md` was left alone (`dest`, `code` `readme_foreign`); not retried until the bundled files change |
 | `gold.pull` | A gold pull ended (`count` applied, `code`, `on` if the change cursor was reset) |
 | `remote.review` | Deletes found in the destination were not applied and wait for review (`count` captures, `dest`); `code` is `threshold` (too many at once, or removing them from this phone failed), `root_missing` (the `captures/` folder is gone) or `cursor_reset` (the change cursor was reset and a full listing missed them) |
 | `trim.run` | Save space ended (`count` files trimmed, `bytes` freed, `code` = the last skip or stop reason, if any) |
@@ -97,7 +100,7 @@ Global (no `capture_id`):
 | `auth.disconnected` | The destination was disconnected in Settings (`dest`) |
 | `auth.refresh_failed` | An upload found the destination's sign-in expired or revoked, so its job waits for Reconnect (`dest`) |
 | `app.launch` | The app launched (`code` = version-build) |
-| `settings.changed` | A switch changed (`kind`, `on`); never values such as folder names |
+| `settings.changed` | A switch changed (`kind`, `on`; `kind` is `location`, `device_context`, `camera_saves_to_photos`, `layer_stripes`, `developer_mode`, or an enrichment facet kind such as `motion_activity` or `weather`); never values such as folder names |
 | `log.truncated` | A segment reached its size cap; later events in it were dropped |
 | `log.cleared` | The user cleared the log on the phone |
 

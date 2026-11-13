@@ -84,7 +84,7 @@ public struct CommentWriter: Sendable {
                 captureID: package.metadata.captureID, commentID: commentID, addedAt: addedAt,
                 localDatetime: PackagePath.localDatetimeString(addedAt, tz: timeZone),
                 timezoneIdentifier: timeZone.identifier, utcOffsetSeconds: timeZone.secondsFromGMT(for: addedAt),
-                producer: producer, text: text, audio: audio)
+                producer: producer, text: text, audio: audio, schemaMinor: FormatVersion.minor)
             let stagedJSON = staging.appendingPathComponent("\(commentID).json")
             try PackageWriter.writeDurably(try PackageWriter.io("encode comment") { try HippoJSON.encode(comment) },
                                            to: stagedJSON, step: "comment")

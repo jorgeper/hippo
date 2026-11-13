@@ -1,6 +1,21 @@
-# Hippo capture package format, version 1
+# Hippo capture package format, version 1.1
 
-For developers building a reader (the desktop app). Machine-readable definitions: `schema/capture-metadata-v1.schema.json`, `schema/complete-v1.schema.json` and `schema/capture-comment-v1.schema.json`. Worked examples: `fixtures/packages/`. The reference writer and validator are `PackageWriter` and `PackageValidator` in `HippoKit/Sources/CaptureCore`.
+For developers building a reader (the desktop app). The signals added in 1.1 are listed in one table in `context-signals.md`. Machine-readable definitions: `schema/capture-metadata-v1.schema.json`, `schema/complete-v1.schema.json` and `schema/capture-comment-v1.schema.json`. Worked examples: `fixtures/packages/` in the repository (package 7 carries every 1.1 signal). In a synced Hippo folder this document is `format/package-format.md` and the schemas are in `format/schema/`. The reference writer and validator are `PackageWriter` and `PackageValidator` in `HippoKit/Sources/CaptureCore`.
+
+## Versioning
+
+The format version has two parts, written "major.minor". This document is version 1.1.
+
+| Part | Where | Rule |
+|---|---|---|
+| major | `schema_version`, an integer | Changes only when an existing field changes meaning or type, a required field is removed, or the directory layout changes. This document is major 1. A reader rejects a major it does not know, in any file, with an "unsupported version" error. |
+| minor | `schema_minor`, an optional integer >= 0 | Counts additive releases: a new optional field, observation key, facet kind, or known value of an open set. A missing `schema_minor` means 0. A reader accepts any minor, reads what it knows and ignores the rest. A writer writes the minor of the format it implements. |
+
+- `schema_minor` sits beside `schema_version` in `metadata.json`, `complete.json`, each `comments/<comment-id>.json` and `enrichment.json`.
+- There is no patch number. A documentation fix changes no file.
+- Neither part is a string such as `"1.1"`. Both are integers.
+- A facet's own `version` field describes that facet's payload shape and is independent of the format version.
+- Everything written before format 1.1 is 1.0 and has no `schema_minor`. It stays valid and unchanged.
 
 ## Layout
 
@@ -27,7 +42,7 @@ captures/YYYY/MM/DD/<capture-id>/
 - Omission rule: an unavailable optional field is omitted. It is never `null` and never an empty string; unknown is not a guess. Treat a missing key as unknown.
 - Open sets: `capture_method`, `content_types` and the `source`/`provenance`/`representation_source` strings may take values you do not know. Accept and preserve them.
 - Unknown additional keys, anywhere, must be ignored.
-- `schema_version` is an integer. This document is version 1. Reject any other value (in any of these files) with a clear "unsupported version" error rather than guessing.
+- `schema_version` is an integer. This document is major version 1. Reject any other value (in any of these files) with a clear "unsupported version" error rather than guessing. Accept any `schema_minor` (see Versioning).
 
 ## `metadata.json`
 
@@ -57,7 +72,19 @@ Optional (omitted when unknown):
 | `shared_title` | string | Title supplied by the sharing app. |
 | `shared_text` | string | Text supplied by the sharing app. |
 | `source_application` | string | |
-| `capture_location` | object | `latitude`, `longitude` (degrees), `horizontal_accuracy_meters`, `observed_at` (RFC 3339 UTC), `provenance`. |
+| `schema_minor` | integer | Format minor of the writer (1.1 writes `1`). Missing means 0. |
+| `capture_location` | object | `latitude`, `longitude` (degrees), `horizontal_accuracy_meters`, `observed_at` (RFC 3339 UTC), `provenance`, and the optional extras below. |
+
+`capture_location` extras (format 1.1). All optional. A value and its accuracy are dropped together: if the value is invalid (not finite, a negative speed, a course outside 0-360) or its accuracy is invalid (negative or not finite), both fields of that pair are omitted. A valid value with no accuracy is kept without it. The location itself is always kept. A single fix often has no speed or course; they are then absent.
+
+| Field | Type / units | Notes |
+|---|---|---|
+| `altitude_meters` | number, meters | Above sea level; negative below. |
+| `vertical_accuracy_meters` | number, meters | |
+| `speed_meters_per_second` | number, m/s | |
+| `speed_accuracy_meters_per_second` | number, m/s | |
+| `course_degrees` | number, degrees | Clockwise from true north, 0-360. |
+| `course_accuracy_degrees` | number, degrees | |
 
 Attachment object:
 
@@ -77,10 +104,70 @@ Attachment object:
 
 A typed note's body is its first `public.utf8-plain-text` (or `public.plain-text`) attachment; a URL-only capture has no attachments and keeps its URL in `urls`.
 
+## Context observations
+
+Format 1.1 adds five `metadata_observations` entries. Each is `{key, value, provenance}` and `value` is an object. A field that could not be read is omitted. If no field could be read, the whole entry is omitted. Strings are at most 100 characters. They are facts, never conclusions: nothing here says "in a car", only the audio route, the motion samples and the speed that suggest it. The registry of every signal is `context-signals.md`.
+
+Absent means "not read that time". To tell that from "not collected", see `context.enabled`.
+
+### `context.audio_route` (provenance `av_audio_session`)
+
+Read from the current audio route without starting or changing an audio session.
+
+| Field | Type | Notes |
+|---|---|---|
+| `outputs` | array | At most 8 ports. Omitted when empty. |
+| `inputs` | array | At most 8 ports. Omitted when empty. |
+
+Port: `{port_type, port_name?}`. `port_type` is an open set. Known values: `built_in_speaker`, `built_in_receiver`, `built_in_mic`, `headphones`, `headset_mic`, `bluetooth_a2dp`, `bluetooth_hfp`, `bluetooth_le`, `car_audio`, `airplay`, `hdmi`, `usb_audio`, `line_out`, `line_in`. Any other port is the raw system port string. `port_name` is the system's name for the port; for a Bluetooth device it is the accessory's own name, so it can be a personal name.
+
+### `context.device` (provenance `device_state`)
+
+| Field | Type / units | Notes |
+|---|---|---|
+| `battery_level` | number, 0 to 1 | Rounded to two decimals. Omitted when unknown. |
+| `battery_state` | string | `unplugged`, `charging`, `full`. |
+| `low_power_mode` | boolean | |
+| `thermal_state` | string | `nominal`, `fair`, `serious`, `critical`. |
+| `interface_style` | string | `light`, `dark`. |
+| `orientation` | string | `portrait`, `portrait_upside_down`, `landscape_left`, `landscape_right`, `face_up`, `face_down`. Often absent for a capture made in the share sheet. |
+| `locale` | string | For example `en_US`. |
+| `uses_24_hour_clock` | boolean | |
+
+### `context.network` (provenance `nw_path`)
+
+| Field | Type | Notes |
+|---|---|---|
+| `interface` | string | `wifi`, `cellular`, `wired`, `other`, `none` (no usable path). |
+| `expensive` | boolean | |
+| `constrained` | boolean | Low Data Mode. |
+
+Taken from the most recent network path the process had received. The snapshot is taken when the capture begins, and a network value read then is kept. Only when the snapshot has no network value (no path had arrived yet, or the snapshot was too old) is the path read at save time instead. If no path had arrived at either moment, the entry is omitted.
+
+### `context.burst` (provenance `last_saved`)
+
+| Field | Type / units | Notes |
+|---|---|---|
+| `previous_capture_id` | UUID string | The capture saved most recently before this one on this phone, whatever its age. |
+| `seconds_since_previous` | number, seconds | Difference between the two `captured_at` values, one decimal. |
+
+Omitted when there is no previous capture or the gap is negative. Written only when device context was on. You can also work out bursts from `captured_at` across packages; this entry saves the scan.
+
+### `context.enabled` (provenance `settings`)
+
+`{"groups": ["device_context", "location"]}`: the capture-time signal groups that were switched on when the capture was saved.
+
+| Group | Meaning |
+|---|---|
+| `device_context` | The "Save device context with captures" switch was on. `context.audio_route`, `context.device`, `context.network` and `context.burst` were attempted. |
+| `location` | The location switch was on and permission was granted. |
+
+`groups` may be empty (`[]`). A build that knows this format writes `context.enabled` on every capture, even with everything off. If it is missing, the capture was written by a build without these signals (format 1.0), and nothing can be said about what was collected. The snapshot is used if it was taken at most 120 seconds from the capture start; otherwise the route and device entries are omitted.
+
 ## `complete.json` (the marker)
 
 ```json
-{ "schema_version": 1, "capture_id": "<uuid>",
+{ "schema_version": 1, "schema_minor": 1, "capture_id": "<uuid>",
   "files": [ { "relative_path": "metadata.json", "byte_count": 665, "sha256": "<hex>" }, ... ] }
 ```
 
@@ -92,7 +179,7 @@ The package digest is the SHA-256 (lowercase hex) of the exact bytes of `complet
 
 ## Comments
 
-A comment the user adds after the capture is a new file in `comments/`; the manifest never lists it, `metadata.json` and `complete.json` are never rewritten, and the package digest does not change. `comments/<comment-id>.json`, schema version 1:
+A comment the user adds after the capture is a new file in `comments/`; the manifest never lists it, `metadata.json` and `complete.json` are never rewritten, and the package digest does not change. `comments/<comment-id>.json`, schema version 1 (comments written by format 1.1 also carry `schema_minor`):
 
 | Field | Required | Notes |
 |---|---|---|
@@ -107,19 +194,28 @@ A comment the user adds after the capture is a new file in `comments/`; the mani
 
 Exactly one of `text` or `audio` is present. The json is the comment's own marker: it is written after its audio file, on the phone (staging, then rename) and on the destination (audio uploaded first). An interrupted save can leave an audio file in `comments/` with no json beside it; no json means no comment, so ignore it (readers and the phone's uploader list `comments/*.json` only). A json whose audio file is missing, or does not match `byte_count` and `sha256`, is a pending comment, exactly like a package whose manifest entry has not arrived yet: retry on later scans. A `schema_version` other than 1 is unsupported; unknown keys are ignored. Deleting a package deletes its comments with it.
 
+## Format history
+
+| Format | Dates | Changes |
+|---|---|---|
+| 1.0 | 2026-11-07 to 2026-11-10 | Packages, enrichment, comments, the `camera` capture method. No `schema_minor`. |
+| 1.1 | 2026-11-10 | `schema_minor`; the `context.*` observations; the six `capture_location` extras; the facet kinds `motion_activity`, `weather`, `barcodes`, `language`, `sound_classification`, `screenshot`. |
+
+Every later minor adds a row here.
+
 ## Reader algorithm
 
 Follows the spec's future desktop-reader contract. Locate the configured Hippo root inside the provider-synced folder, watch it, and rescan periodically; never rely on filesystem event order.
 
 1. For each directory `captures/YYYY/MM/DD/<capture-id>/`, skip it unless `complete.json` exists.
-2. Decode `complete.json`. If `schema_version` is not 1, reject it as unsupported (report; do not retry). Otherwise ignore unknown keys.
+2. Decode `complete.json`. If `schema_version` is not 1, reject it as unsupported (report; do not retry). Otherwise accept any `schema_minor` (missing is 0) and ignore unknown keys.
 3. Check every manifest `relative_path` is safe: relative, not empty, no `.` or `..` segment, no backslash, no NUL, and either `metadata.json` or under `content/`. Any unsafe path means corrupt. The manifest must include `metadata.json`.
 4. For each manifest entry, the file must exist and match `byte_count` and `sha256`. A missing or mismatched file means the package is incomplete or still syncing: leave it pending and retry on later scans. Only after repeated failures over a reasonable period surface it as corrupt.
-5. Decode `metadata.json` (version 1, unknown keys ignored). `metadata.capture_id` must equal the marker's and the directory name, and every attachment `relative_path` must be in the manifest; otherwise corrupt.
+5. Decode `metadata.json` (major 1, any minor, unknown keys and unknown observation keys ignored). `metadata.capture_id` must equal the marker's and the directory name, and every attachment `relative_path` must be in the manifest; otherwise corrupt.
 6. Index by `capture_id` plus package digest. The same pair already indexed means nothing to do for the package; the same ID with a new digest replaces the entry. This makes rescans idempotent.
 7. List `comments/*.json` (ignore any other file there) and index the package's comments by the set of comment ids: a comment id already indexed means nothing to do, a new one is added. A comment whose audio is missing or mismatched is pending.
 
-Keep your search/SQLite/vector indexes outside the synced folder; they must be rebuildable from packages alone. Store derived (AI) output separately, keyed by `capture_id`; see [`enrichment-format.md`](enrichment-format.md) for the format the phone and a server use for it. Never modify a package.
+Keep your search/SQLite/vector indexes outside the synced folder; they must be rebuildable from packages alone. Store derived (AI) output separately, keyed by `capture_id`; see `enrichment-format.md` for the format the phone and a server use for it. Never modify a package.
 
 ## Dropbox and online-only placeholders
 

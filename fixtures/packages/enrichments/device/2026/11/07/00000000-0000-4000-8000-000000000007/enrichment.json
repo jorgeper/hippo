@@ -1,0 +1,152 @@
+{
+  "capture_id" : "00000000-0000-4000-8000-000000000007",
+  "facets" : {
+    "barcodes" : {
+      "data" : {
+        "items" : [
+          {
+            "attachment_id" : "00000000-0000-4000-8000-000700000001",
+            "payload" : "https://example.com/hippo",
+            "symbology" : "qr",
+            "url" : "https://example.com/hippo"
+          }
+        ]
+      },
+      "generated_at" : "2026-11-07T17:37:00.000Z",
+      "provenance" : "vision",
+      "status" : "ok",
+      "version" : 1
+    },
+    "language" : {
+      "data" : {
+        "items" : [
+          {
+            "confidence" : 0.98,
+            "language" : "en",
+            "source" : "user_note"
+          }
+        ]
+      },
+      "generated_at" : "2026-11-07T17:37:00.000Z",
+      "provenance" : "natural_language",
+      "status" : "ok",
+      "version" : 1
+    },
+    "motion_activity" : {
+      "data" : {
+        "at_capture" : {
+          "activities" : [
+            "automotive"
+          ],
+          "confidence" : "high",
+          "started_at" : "2026-11-07T17:03:00.000Z"
+        },
+        "segments" : [
+          {
+            "activities" : [
+              "walking"
+            ],
+            "confidence" : "medium",
+            "started_at" : "2026-11-07T16:57:00.000Z"
+          },
+          {
+            "activities" : [
+              "automotive"
+            ],
+            "confidence" : "high",
+            "started_at" : "2026-11-07T17:03:00.000Z"
+          },
+          {
+            "activities" : [
+              "automotive",
+              "stationary"
+            ],
+            "confidence" : "high",
+            "started_at" : "2026-11-07T17:10:00.000Z"
+          },
+          {
+            "activities" : [
+              "walking"
+            ],
+            "confidence" : "medium",
+            "started_at" : "2026-11-07T17:14:00.000Z"
+          }
+        ],
+        "window_end" : "2026-11-07T17:17:00.000Z",
+        "window_start" : "2026-11-07T16:57:00.000Z"
+      },
+      "generated_at" : "2026-11-07T17:37:00.000Z",
+      "provenance" : "core_motion",
+      "status" : "ok",
+      "version" : 1
+    },
+    "screenshot" : {
+      "data" : {
+        "items" : [
+          {
+            "attachment_id" : "00000000-0000-4000-8000-000700000001",
+            "reason" : "screen_size_match"
+          }
+        ]
+      },
+      "generated_at" : "2026-11-07T17:37:00.000Z",
+      "provenance" : "heuristic",
+      "status" : "ok",
+      "version" : 1
+    },
+    "sound_classification" : {
+      "data" : {
+        "items" : [
+          {
+            "attachment_id" : "00000000-0000-4000-8000-000700000002",
+            "labels" : [
+              {
+                "confidence" : 0.62,
+                "label" : "speech"
+              },
+              {
+                "confidence" : 0.41,
+                "label" : "music"
+              }
+            ]
+          }
+        ]
+      },
+      "generated_at" : "2026-11-07T17:37:00.000Z",
+      "provenance" : "sound_analysis",
+      "status" : "ok",
+      "version" : 1
+    },
+    "weather" : {
+      "data" : {
+        "apparent_temperature_celsius" : 12.9,
+        "cloud_cover_percent" : 100,
+        "condition" : "rain",
+        "is_day" : true,
+        "observed_hour" : "2026-11-07T17:00:00.000Z",
+        "precipitation_millimeters" : 0.4,
+        "relative_humidity_percent" : 81,
+        "requested_latitude" : 37.77,
+        "requested_longitude" : -122.42,
+        "source" : "open-meteo.com",
+        "temperature_celsius" : 14.2,
+        "weather_code" : 61,
+        "wind_speed_meters_per_second" : 3.1
+      },
+      "generated_at" : "2026-11-07T17:37:00.000Z",
+      "provenance" : "open_meteo",
+      "status" : "ok",
+      "version" : 1
+    }
+  },
+  "generated_at" : "2026-11-07T17:37:00.000Z",
+  "layer" : "device",
+  "package_digest" : "45356e03a90b4c77c1c4f27fbc46aed5f15e1c16d3f48b6ce082532d341504e2",
+  "producer" : {
+    "build" : "1",
+    "name" : "hippo-fixtures",
+    "version" : "1"
+  },
+  "schema_minor" : 1,
+  "schema_version" : 1
+}

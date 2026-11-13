@@ -60,7 +60,7 @@ public struct StatusLine: Equatable, Sendable {
 
     private static func reasonText(_ code: String) -> String? {
         switch code {
-        case "http_4xx", "http_5xx": "the page didn't respond"
+        case "http_4xx", "http_429", "http_5xx": "the page didn't respond"
         case "too_large": "the file is too large"
         case "bad_url": "the link isn't valid"
         default: nil

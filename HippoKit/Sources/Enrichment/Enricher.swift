@@ -1,5 +1,6 @@
 import Foundation
 import CaptureCore
+import UniformTypeIdentifiers
 
 /// What an enricher gets for one capture.
 public struct EnricherInput: Sendable {
@@ -45,6 +46,9 @@ public enum EnrichmentError: Error, Sendable, Equatable {
     case transient(code: String)
     /// Will never work for this capture at this version.
     case permanent(code: String)
+    /// This capture has nothing for this enricher (for example, history that expired). Recorded exactly as
+    /// `applies(to:)` returning false: terminal, no facet, no attempt counted, never retried.
+    case notApplicable(code: String)
 }
 
 /// Derives one facet kind from a capture (design §5). Runs at most once per (capture, kind, version).
@@ -75,4 +79,14 @@ extension Enricher {
     public var readsAttachmentBytes: Bool { false }
     public var readsCommentAudio: Bool { false }
     public func applies(to m: CaptureMetadata, comments: [CaptureComment]) -> Bool { applies(to: m) }
+}
+
+extension Attachment {
+    /// Whether the attachment's type conforms to `public.image` (shared by the image enrichers).
+    var isImage: Bool { UTType(uti)?.conforms(to: .image) ?? false }
+}
+
+extension Attachment {
+    /// Whether the attachment's type conforms to `public.audio`.
+    var isAudio: Bool { UTType(uti)?.conforms(to: .audio) ?? false }
 }

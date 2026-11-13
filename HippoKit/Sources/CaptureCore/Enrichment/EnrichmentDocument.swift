@@ -24,6 +24,12 @@ public struct FacetKind: RawRepresentable, Codable, Hashable, Sendable {
     public static let sourceAppGuess = FacetKind(rawValue: "source_app_guess")
     public static let summary = FacetKind(rawValue: "summary")
     public static let tags = FacetKind(rawValue: "tags")
+    public static let motionActivity = FacetKind(rawValue: "motion_activity")
+    public static let weather = FacetKind(rawValue: "weather")
+    public static let barcodes = FacetKind(rawValue: "barcodes")
+    public static let language = FacetKind(rawValue: "language")
+    public static let soundClassification = FacetKind(rawValue: "sound_classification")
+    public static let screenshot = FacetKind(rawValue: "screenshot")
 }
 
 /// Outcome of producing a facet. Open: readers accept values added by future versions.
@@ -90,6 +96,7 @@ public struct Facet: Codable, Sendable, Equatable {
 /// Contents of `enrichment.json` (schema v1).
 public struct EnrichmentDocument: Codable, Sendable, Equatable {
     public var schemaVersion: Int
+    public var schemaMinor: Int?
     public var captureID: String
     public var layer: EnrichmentLayer
     public var packageDigest: String
@@ -98,14 +105,14 @@ public struct EnrichmentDocument: Codable, Sendable, Equatable {
     public var facets: [String: Facet]
 
     public init(schemaVersion: Int, captureID: String, layer: EnrichmentLayer, packageDigest: String,
-                producer: EnrichmentProducer, generatedAt: Date, facets: [String: Facet]) {
-        self.schemaVersion = schemaVersion; self.captureID = captureID; self.layer = layer
+                producer: EnrichmentProducer, generatedAt: Date, facets: [String: Facet], schemaMinor: Int? = nil) {
+        self.schemaVersion = schemaVersion; self.schemaMinor = schemaMinor; self.captureID = captureID; self.layer = layer
         self.packageDigest = packageDigest; self.producer = producer; self.generatedAt = generatedAt
         self.facets = facets
     }
 
     enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version", captureID = "capture_id", layer
+        case schemaVersion = "schema_version", schemaMinor = "schema_minor", captureID = "capture_id", layer
         case packageDigest = "package_digest", producer, generatedAt = "generated_at", facets
     }
 

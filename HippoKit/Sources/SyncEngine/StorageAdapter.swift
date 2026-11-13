@@ -138,6 +138,22 @@ public enum StorageError: Error, Sendable, Equatable {
     case permanent(code: String)
 }
 
+/// Which destination paths an adapter's `replaceFile` may overwrite. Every adapter calls this, so the set is
+/// defined once. Exact and case-sensitive.
+public enum ReplacePolicy {
+    private static let prefixes = ["enrichments/", "logs/", "format/"]
+
+    /// True for the prefixes `enrichments/`, `logs/` and `format/` (with the slash, so `format` alone and
+    /// `formatting/a.md` are refused) and the exact path `README.md`. A path that is empty, starts with `/`
+    /// or has an empty, `.` or `..` component is refused.
+    public static func allows(_ relativePath: String) -> Bool {
+        guard !relativePath.isEmpty, !relativePath.hasPrefix("/") else { return false }
+        let parts = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { return false }
+        return relativePath == "README.md" || prefixes.contains { relativePath.hasPrefix($0) }
+    }
+}
+
 public protocol StorageAdapter: Sendable {
     var capabilities: StorageCapabilities { get }
     func validateDestination() async throws
@@ -151,8 +167,7 @@ public protocol StorageAdapter: Sendable {
     func uploadFile(localURL: URL, relativePath: String, expected: FileIntegrity, checkpoint: UploadCheckpoint?,
                     saveCheckpoint: @Sendable (UploadCheckpoint) async throws -> Void) async throws -> UploadReceipt
 
-    /// Atomic overwrite. Throws `.permanent(code: "replace_not_allowed")` unless `relativePath` starts with
-    /// `enrichments/` or `logs/`. A provider's overwrite-capable upload (Plan 3) must allow both prefixes.
+    /// Atomic overwrite. Throws `.permanent(code: "replace_not_allowed")` unless `ReplacePolicy.allows(relativePath)`.
     func replaceFile(localURL: URL, relativePath: String, expected: FileIntegrity) async throws -> UploadReceipt
     /// A nil cursor returns every file under `prefix` as `.upserted`; otherwise the changes since `cursor`.
     /// A `.deleted` entry may name a folder (the whole subtree is gone) or a file; implementations may

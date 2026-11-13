@@ -26,6 +26,8 @@ private struct Harness {
     init(faults: FaultPlan = FaultPlan(), adapter: (@Sendable (Destination) -> any StorageAdapter)? = nil,
          permission: @escaping () async -> Bool = { true }, online: Bool = true,
          onEnrichmentEnabled: @escaping @Sendable (FacetKind) async -> Void = { _ in },
+         motion: @escaping () async -> Bool = { false }, motionDenied: @escaping () -> Bool = { false },
+         motionNotDetermined: @escaping () -> Bool = { false },
          random: @escaping @Sendable () -> Double = { .random(in: 0...1) }) throws {
         t = try TestStore()
         remote = t.base.appendingPathComponent("Remote", isDirectory: true)
@@ -38,7 +40,9 @@ private struct Harness {
         coordinator = SyncCoordinator(store: t.store, registry: registry, ownerPrefix: "test", appVersion: "0.1.0",
                                       settings: settings, random: random)
         model = SettingsModel(store: t.store, registry: registry, coordinator: coordinator, settings: settings,
-                              requestLocationPermission: permission, onEnrichmentEnabled: onEnrichmentEnabled,
+                              requestLocationPermission: permission, requestMotionPermission: motion, motionDenied: motionDenied,
+                              motionNotDetermined: motionNotDetermined,
+                              onEnrichmentEnabled: onEnrichmentEnabled,
                               isOnline: { online }, now: { Date(timeIntervalSince1970: 1_800_000_000) }, locale: Locale(identifier: "en_US"))
     }
 
@@ -747,6 +751,24 @@ struct SettingsTests {
         for item in SettingsModel.enrichmentSwitches { #expect(settings.isEnrichmentEnabled(item.kind)) }
     }
 
+    @Test func contextKindsDefaults() throws {
+        let suite = "hippo-defaults-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        #expect(AppSettings.enrichmentKindsOffByDefault == [.motionActivity, .weather])
+        #expect(settings.isEnrichmentEnabled(.motionActivity) == false)
+        #expect(settings.isEnrichmentEnabled(.weather) == false)
+        for kind in [FacetKind.barcodes, .language, .soundClassification, .screenshot,
+                     .linkPreview, .place, .textRecognition, .transcript, .dataDetection, .sourceAppGuess] {
+            #expect(settings.isEnrichmentEnabled(kind))
+        }
+        settings.setEnrichmentEnabled(.weather, true)
+        #expect(settings.isEnrichmentEnabled(.weather))
+        settings.setEnrichmentEnabled(.barcodes, false)
+        #expect(settings.isEnrichmentEnabled(.barcodes) == false)
+    }
+
     @Test func turningOnTriggersBackfill() async throws {
         let calls = Mutex<[String]>([])
         let h = try Harness(onEnrichmentEnabled: { kind in calls.withLock { $0.append(kind.rawValue) } })
@@ -762,9 +784,204 @@ struct SettingsTests {
     @Test func switchCopyExact() {
         #expect(SettingsModel.enrichmentSwitches.map(\.title) == [
             "Link previews", "Place names", "Text in images", "Voice note transcripts",
-            "Dates, phone numbers and addresses", "App guesses"])
+            "Dates, phone numbers and addresses", "App guesses",
+            "Barcodes and QR codes", "Language", "Sounds in recordings", "Screenshots"])
         #expect(SettingsModel.enrichmentSwitches.map(\.kind) == [
-            .linkPreview, .place, .textRecognition, .transcript, .dataDetection, .sourceAppGuess])
+            .linkPreview, .place, .textRecognition, .transcript, .dataDetection, .sourceAppGuess,
+            .barcodes, .language, .soundClassification, .screenshot])
         #expect(SettingsModel.enrichmentFooter == "Link previews fetch the page title and picture from the website. Place names are looked up with Apple Maps. Everything else runs on this iPhone.")
+    }
+
+    // MARK: Context section
+
+    private func changes(_ h: Harness) -> [(kind: String?, on: Bool?)] {
+        h.t.store.log.globalEvents(limit: 20, before: nil).filter { $0.event == .settingsChanged }.reversed().map { ($0.kind, $0.on) }
+    }
+
+    @Test func contextDefaults() throws {
+        let h = try Harness(); defer { h.cleanup() }
+        #expect(h.model.deviceContextEnabled)
+        #expect(!h.model.motionEnabled)
+        #expect(!h.model.weatherEnabled)
+        #expect(!h.model.motionDenied)
+    }
+
+    @Test func deviceContextToggleWritesSharedDefaults() throws {
+        let h = try Harness(); defer { h.cleanup() }
+        h.model.setDeviceContextEnabled(false)
+        #expect(!h.settings.deviceContextEnabled)
+        #expect(!h.model.deviceContextEnabled)
+        let c = changes(h)
+        #expect(c.count == 1)
+        #expect(c.first?.kind == "device_context")
+        #expect(c.first?.on == false)
+    }
+
+    @Test func motionGrantedTurnsOn() async throws {
+        let calls = Mutex<[String]>([])
+        let h = try Harness(onEnrichmentEnabled: { k in calls.withLock { $0.append(k.rawValue) } }, motion: { true })
+        defer { h.cleanup() }
+        await h.model.setMotionEnabled(true)
+        #expect(h.model.motionEnabled)
+        #expect(!h.model.motionDenied)
+        #expect(h.settings.isEnrichmentEnabled(.motionActivity))
+        #expect(calls.withLock { $0 } == ["motion_activity"])
+        #expect(changes(h).map(\.kind) == ["motion_activity"])
+    }
+
+    @Test func motionRefusedStaysOff() async throws {
+        let calls = Mutex<[String]>([])
+        let h = try Harness(onEnrichmentEnabled: { k in calls.withLock { $0.append(k.rawValue) } }, motion: { false })
+        defer { h.cleanup() }
+        await h.model.setMotionEnabled(true)
+        #expect(!h.model.motionEnabled)
+        #expect(h.model.motionDenied)
+        #expect(!h.settings.isEnrichmentEnabled(.motionActivity))
+        #expect(calls.withLock { $0 }.isEmpty)
+    }
+
+    @Test func motionOffNeverAsksAndLogsOnce() async throws {
+        let asked = Mutex(0)
+        let calls = Mutex<[String]>([])
+        let h = try Harness(onEnrichmentEnabled: { k in calls.withLock { $0.append(k.rawValue) } },
+                            motion: { asked.withLock { $0 += 1 }; return true })
+        defer { h.cleanup() }
+        await h.model.setMotionEnabled(true)
+        await h.model.setMotionEnabled(false)
+        #expect(asked.withLock { $0 } == 1)
+        #expect(!h.model.motionEnabled)
+        #expect(!h.settings.isEnrichmentEnabled(.motionActivity))
+        #expect(calls.withLock { $0 } == ["motion_activity"])
+        let c = changes(h)
+        #expect(c.map(\.on) == [true, false])
+    }
+
+    @Test func motionRequestInFlightDoesNotAskTwice() async throws {
+        let asked = Mutex(0)
+        let gate = AsyncStream<Void>.makeStream()
+        let h = try Harness(motion: {
+            asked.withLock { $0 += 1 }
+            for await _ in gate.stream { break }
+            return true
+        })
+        defer { h.cleanup() }
+        let first = Task { @MainActor in await h.model.setMotionEnabled(true) }
+        while asked.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(1)) }
+        await h.model.setMotionEnabled(true)
+        #expect(asked.withLock { $0 } == 1)
+        gate.continuation.yield()
+        await first.value
+        #expect(h.model.motionEnabled)
+        #expect(asked.withLock { $0 } == 1)
+    }
+
+    @Test func undeterminedMotionSwitchIsTurnedOffQuietly() async throws {
+        let asked = Mutex(0)
+        let h = try Harness(motion: { asked.withLock { $0 += 1 }; return true }, motionNotDetermined: { true })
+        defer { h.cleanup() }
+        h.settings.setEnrichmentEnabled(.motionActivity, true)   // e.g. restored to a new iPhone
+        await h.model.refresh()
+        #expect(h.model.motionEnabled)
+        await h.model.reconcileMotion()
+        #expect(!h.model.motionEnabled)
+        #expect(!h.settings.isEnrichmentEnabled(.motionActivity))
+        #expect(!h.model.motionDenied)
+        #expect(asked.withLock { $0 } == 0)
+        // Nothing left to reconcile: no second change is logged.
+        await h.model.reconcileMotion()
+        #expect(changes(h).map(\.kind) == ["motion_activity"])
+    }
+
+    @Test func authorizedOrSwitchedOffMotionIsLeftAlone() async throws {
+        let h = try Harness(motionNotDetermined: { false })
+        defer { h.cleanup() }
+        h.settings.setEnrichmentEnabled(.motionActivity, true)
+        await h.model.refresh()
+        await h.model.reconcileMotion()
+        #expect(h.model.motionEnabled)
+        let off = try Harness(motionNotDetermined: { true })
+        defer { off.cleanup() }
+        await off.model.reconcileMotion()
+        #expect(changes(off).isEmpty)
+    }
+
+    @Test func undeterminedMotionIsNotReconciledWhileARequestIsInFlight() async throws {
+        let asked = Mutex(0)
+        let gate = AsyncStream<Void>.makeStream()
+        let h = try Harness(motion: {
+            asked.withLock { $0 += 1 }
+            for await _ in gate.stream { break }
+            return true
+        }, motionNotDetermined: { true })
+        defer { h.cleanup() }
+        h.settings.setEnrichmentEnabled(.motionActivity, true)
+        await h.model.refresh()
+        let first = Task { @MainActor in await h.model.setMotionEnabled(true) }
+        while asked.withLock({ $0 }) == 0 { try await Task.sleep(for: .milliseconds(1)) }
+        await h.model.reconcileMotion()
+        #expect(h.model.motionEnabled)
+        gate.continuation.yield()
+        await first.value
+        #expect(h.model.motionEnabled)
+    }
+
+    @Test func motionDeniedIsRefreshedOnReload() async throws {
+        let denied = Mutex(true)
+        let h = try Harness(motionDenied: { denied.withLock { $0 } })
+        defer { h.cleanup() }
+        #expect(h.model.motionDenied)
+        denied.withLock { $0 = false }
+        await h.model.refresh()
+        #expect(!h.model.motionDenied)
+        denied.withLock { $0 = true }
+        await h.model.refresh()
+        #expect(h.model.motionDenied)
+    }
+
+    @Test func motionGrantClearsEarlierRefusal() async throws {
+        let grant = Mutex(false)
+        let h = try Harness(motion: { grant.withLock { $0 } })
+        defer { h.cleanup() }
+        await h.model.setMotionEnabled(true)
+        #expect(h.model.motionDenied)
+        grant.withLock { $0 = true }
+        await h.model.setMotionEnabled(true)
+        #expect(h.model.motionEnabled)
+        #expect(!h.model.motionDenied)
+    }
+
+    @Test func weatherToggle() async throws {
+        let calls = Mutex<[String]>([])
+        let h = try Harness(onEnrichmentEnabled: { k in calls.withLock { $0.append(k.rawValue) } })
+        defer { h.cleanup() }
+        h.model.setWeatherEnabled(true)
+        #expect(h.model.weatherEnabled)
+        #expect(h.settings.isEnrichmentEnabled(.weather))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while calls.withLock({ $0 }).isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(calls.withLock { $0 } == ["weather"])
+        h.model.setWeatherEnabled(false)
+        #expect(!h.model.weatherEnabled)
+        #expect(!h.settings.isEnrichmentEnabled(.weather))
+        #expect(changes(h).map(\.kind) == ["weather", "weather"])
+        #expect(changes(h).map(\.on) == [true, false])
+    }
+
+    @Test func enrichmentSwitchesAreTen() {
+        let kinds = SettingsModel.enrichmentSwitches.map(\.kind)
+        #expect(kinds.count == 10)
+        #expect(!kinds.contains(.motionActivity))
+        #expect(!kinds.contains(.weather))
+        #expect(SettingsModel.enrichmentSwitches.suffix(4).map(\.title) ==
+                ["Barcodes and QR codes", "Language", "Sounds in recordings", "Screenshots"])
+    }
+
+    @Test func footersVerbatim() {
+        #expect(SettingsModel.deviceContextFooter == "Records the audio route (speaker, headphones, car), battery, network and the time since your last capture. Nothing leaves this iPhone except with your captures.")
+        #expect(SettingsModel.weatherFooter == "Looks up the weather where and when you captured, for all your captures with a location. Sends an approximate location and the time to Open-Meteo.com. Weather data by Open-Meteo.com.")
+        #expect(SettingsModel.motionFooter == "Records whether you were still, walking, running, cycling or in a vehicle around each capture. Needs Motion & Fitness access. iOS keeps about seven days of history, so open Hippo within a week of a capture.")
+        #expect(SettingsModel.motionDeniedFooter == "Motion & Fitness access is off for Hippo. Turn it on in iOS Settings.")
     }
 }
