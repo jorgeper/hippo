@@ -74,6 +74,7 @@ Per capture (carry `capture_id`):
 | `remote.delete` | "Delete everywhere": no `outcome` when queued, `ok` once removed in the destination, `failed` with `code` (`dest`) |
 | `remote.changed` | A file of the capture is missing or different in the destination, so it is marked changed (`dest`); `code` `unverified` when the capture's package or marker is gone there but its upload isn't verified, so it was not removed; `code` `remove_failed` when it was deleted there but removing it from this phone failed, so it waits for review instead (a `remote.review` with `threshold` follows) |
 | `attachment.restored` | A trimmed file was downloaded back (`dest`); `ok`, or `failed` with `code` |
+| `camera.library_save` | "Also save to Photos" was on, so the camera photo or video was added to the Photos library after it was saved: `ok`, or `failed` with `code` (`denied`: Photos access is not allowed; `failed`: the library refused the file; `lookup_failed`: the saved file couldn't be found). The capture itself is unaffected |
 | `download.capture` | "Download from <destination>" handled the capture (`dest`): `ok` when it was downloaded and indexed as synced; `skipped` with `code` (`outside_window`: its `captured_at` is before the window; `already_present`: it is on this phone already, or a package is in its place that doesn't validate); `failed` with `code` (`incomplete_package`: a file is missing, over the light limit or doesn't match the manifest; `invalid_package`: the marker or metadata is unusable or the capture is in another date's folder; `index_failed`: it couldn't be indexed or its synced job or trimmed records couldn't be written, so it was undone; `download_failed`: a local file operation failed; `offline` or `needs_authentication`, which also end the run; or another adapter code such as `transient:<code>`) |
 | `gold.applied`, `gold.removed`, `gold.skipped` | Server enrichment applied, removed, or skipped (`code`) |
 
@@ -81,7 +82,7 @@ Global (no `capture_id`):
 
 | Event | Meaning |
 |---|---|
-| `capture.save_failed` | A save failed, so there is no capture to attach it to (`code` names the failure) |
+| `capture.save_failed` | A save failed, so there is no capture to attach it to (`code` names the failure; `pending_missing` with `count`: shares handed off to the app whose files were missing were removed instead of shown; `pending_already_committed` with `count`: shares handed off to the app that were already saved, because the app stopped before it cleared them, were removed instead of shown again) |
 | `enrich.scheduled` | Tasks were queued for a kind (`kind`, `count`) |
 | `enrich.pass` | An enrichment pass started or ended (`phase`, `count`, `code` = why it stopped) |
 | `sync.pass` | A sync pass started or ended (`phase`, `trigger`, `count`, `code`) |

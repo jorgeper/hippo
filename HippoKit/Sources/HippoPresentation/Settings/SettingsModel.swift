@@ -22,6 +22,8 @@ public final class SettingsModel {
     public private(set) var locationEnabled: Bool
     /// Whether stripes show where details came from.
     public private(set) var showsLayerStripes: Bool
+    /// Whether camera shots are also saved to Photos.
+    public private(set) var cameraSavesToPhotos: Bool
     /// Whether Activity and the Log screen are shown.
     public private(set) var developerMode: Bool
     /// True after a failed `refresh()`; cleared by the next successful one. A failed refresh keeps the
@@ -86,6 +88,7 @@ public final class SettingsModel {
         locationEnabled = settings.locationEnabled
         showsLayerStripes = settings.showsLayerStripes
         developerMode = settings.developerMode
+        cameraSavesToPhotos = settings.cameraSavesToPhotos
     }
 
     public static let enrichmentSwitches: [EnrichmentSwitch] = [
@@ -99,6 +102,14 @@ public final class SettingsModel {
 
     public static let enrichmentFooter = "Link previews fetch the page title and picture from the website. Place names are looked up with Apple Maps. Everything else runs on this iPhone."
     public static let layerStripesFooter = "Bronze: what you captured. Silver: added on this iPhone. Gold: added by your server."
+
+    public static let cameraFooter = "Pictures and videos you take in Hippo stay only in Hippo unless this is on."
+
+    public func setCameraSavesToPhotos(_ on: Bool) {
+        settings.cameraSavesToPhotos = on
+        cameraSavesToPhotos = on
+        store.log.append(LogEvent(event: .settingsChanged, kind: "camera_saves_to_photos", on: on))
+    }
 
     public func setShowsLayerStripes(_ on: Bool) {
         settings.showsLayerStripes = on

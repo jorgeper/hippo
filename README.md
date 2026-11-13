@@ -4,6 +4,7 @@ Hippo is a fast, local-first iPhone capture app that replaces emailing yourself 
 
 - Spec: [`hippo-v0-spec.md`](hippo-v0-spec.md)
 - Design (where it differs from the spec, it wins): [`docs/superpowers/specs/2026-11-07-hippo-v0-design.md`](docs/superpowers/specs/2026-11-07-hippo-v0-design.md)
+- Roadmap (what comes next, decided and considered): [`docs/roadmap.md`](docs/roadmap.md)
 
 **Status:** `HippoKit` (the core Swift package) and the iPhone app with its Share Extension exist. The app saves captures locally and syncs them to Dropbox (when an app key is configured; see [Dropbox](#dropbox)) and, in DEBUG builds, to a Developer folder. Release builds upload to Dropbox.
 
@@ -52,6 +53,16 @@ Device scenarios to run by hand are in [`docs/acceptance.md`](docs/acceptance.md
 
 Debug builds offer a "Developer folder" destination in Settings. It "uploads" into `HippoDevRemote/` next to the store in the App Group container, so the full sync path can be exercised without an account. Release builds do not include it. The UI tests launch with `-HippoResetStore YES` (DEBUG only), which wipes the store and this folder first.
 
+### Camera and voice comments
+
+The Camera button on the timeline opens the system camera. A photo or video you take becomes one capture (method `camera`, saved as HEIC or QuickTime), and the capture sheet opens so you can add a typed note and a voice comment before saving. The camera sheet records the comment in place.
+
+The share sheet can take a voice comment too, but iOS does not let a Share Extension use the microphone. So tapping the mic there saves what you have so far as a pending share, shows "Open Hippo to record your comment", and tries to open Hippo (`hippo://pending`). Hippo may not open by itself. If it does not, the share waits in Hippo and appears when you open the app. Hippo then shows the capture sheet with the mic recording at once. Saving makes one capture that keeps the time of the share. "Save without comment" drops the voice recording and keeps any typed note. If a share cannot be saved right now (for example, the iPhone is out of space), the sheet offers "Later": the share stays in Hippo and comes back the next time you open the app. There is no way to discard a share from the app.
+
+Settings → Camera → "Also save to Photos" is off by default. When it is on, photos and videos you take in Hippo are also added to your Photos library (Hippo asks for add-only access the first time). If that save fails, Hippo only writes a `camera.library_save` line to its log.
+
+The app declares four usage strings: camera, Photos (add only), microphone, and location.
+
 ### Location is opt-in
 
 Hippo saves a location with a capture only if you turn on "Save location with captures" in Settings and allow the iOS permission. It is read at the moment you save, never in the background.
@@ -64,6 +75,7 @@ Hippo saves a location with a capture only if you turn on "Save location with ca
 - Uploads are a copy, not a backup policy. Deleting the app deletes local captures that have not been uploaded.
 - A new install starts empty; Settings → Download from Dropbox brings recent captures back in light form.
 - Background upload timing is up to iOS.
+- A pending share waits while another sheet or the camera is open. It appears when the Note, Record, camera, review or filter sheet closes, and otherwise on the next launch or activation.
 
 ## Dropbox
 

@@ -2,14 +2,26 @@ import SwiftUI
 import ImageIO
 import HippoPresentation
 
-/// The Share Extension's sheet: Cancel / Hippo / Save, a preview of what was shared, an optional comment
-/// and the line saying where it goes. The controller supplies the actions.
-struct ShareSheetView: View {
+/// The capture sheet: Cancel / Hippo / Save, a preview of the capture, an optional comment, the voice
+/// comment and the line saying where it goes. The Share Extension shows it with the mic handing off to
+/// the app; the app shows it (camera, pending share) with the mic recording in place. The host supplies
+/// the actions.
+struct CaptureSheetView: View {
+    enum Voice {
+        /// Share Extension: the mic hands the draft off to the app.
+        case handoff(() -> Void)
+        /// App: the mic records the voice comment in place.
+        case record(RecordingSession)
+    }
+
     let model: ShareSessionModel
-    /// Saves inside a background-activity assertion; the controller owns that.
+    let voice: Voice
+    /// Saves inside a background-activity assertion; the host owns that.
     let save: (_ acceptPartial: Bool) async -> Void
+    /// For a pending share the view never calls this: its left button reads "Save without comment" and
+    /// calls `save(false)` instead.
     let cancel: () -> Void
-    /// Called about a second after "Saved", to close the sheet.
+    /// Called about a second after "Saved" or the hand-off message, to close the sheet.
     let finish: () -> Void
 
     @FocusState private var commentFocused: Bool
@@ -18,16 +30,16 @@ struct ShareSheetView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if model.state == .saved {
-                savedConfirmation
-            } else {
-                content
+            switch model.state {
+            case .saved: centered("✓ Saved on this iPhone")
+            case .deferred: centered(ShareSessionModel.handoffMessage)
+            default: content
             }
         }
         .background(Color(.systemBackground))
         .task { await model.prepare() }
-        .task(id: model.state == .saved) {
-            guard model.state == .saved else { return }
+        .task(id: isClosing) {
+            guard isClosing else { return }
             // A cancelled task (the view went away) throws here, so it never calls `finish()`.
             do { try await Task.sleep(for: .seconds(1)) } catch { return }
             finish()
@@ -38,6 +50,9 @@ struct ShareSheetView: View {
             Button("Cancel", role: .cancel) {}
         }
     }
+
+    /// Saved, or handed off to the app: either way the sheet closes after a second.
+    private var isClosing: Bool { model.state == .saved || model.state == .deferred }
 
     private var partialAlertShown: Binding<Bool> {
         Binding(get: { partialMessage != nil },
@@ -50,14 +65,24 @@ struct ShareSheetView: View {
 
     private var header: some View {
         HStack {
-            Button("Cancel", action: cancel)
-                .disabled(model.state == .saving || model.state == .saved)
+            if model.isPendingShare {
+                // A pending share has no discard: the left button saves it without the voice comment.
+                Button("Save without comment") {
+                    if case .record(let session) = voice { session.discard() }
+                    Task { await save(false) }
+                }
+                .disabled(!canSave)
+            } else {
+                Button("Cancel", action: cancel)
+                    .disabled(model.state == .saving || isClosing)
+            }
             Spacer()
             Text("Hippo").font(.headline)
             Spacer()
             Button("Save") { Task { await save(false) } }
                 .fontWeight(.semibold)
                 .disabled(!canSave)
+                .accessibilityIdentifier("capture-sheet-save")
         }
         .padding(.horizontal)
         .padding(.vertical, 12)
@@ -68,6 +93,14 @@ struct ShareSheetView: View {
         case .ready: true
         case .failed(_, let canSave): canSave
         default: false
+        }
+    }
+
+    /// Nothing can start a recording or a hand-off unless the sheet is editable.
+    private var voiceDisabled: Bool {
+        switch model.state {
+        case .ready, .confirmPartial: false
+        default: true
         }
     }
 
@@ -96,6 +129,12 @@ struct ShareSheetView: View {
                     .padding(12)
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                     .disabled(model.state == .saving)
+                VoiceCommentControl(voice: voice, disabled: voiceDisabled)
+                if model.handoffFailed {
+                    Text(ShareSessionModel.handoffFailedMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
+                }
                 Text(model.destinationLine)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -113,12 +152,13 @@ struct ShareSheetView: View {
         }
     }
 
-    private var savedConfirmation: some View {
+    private func centered(_ message: String) -> some View {
         VStack {
             Spacer()
-            Text("✓ Saved on this iPhone").font(.title3.weight(.semibold))
+            Text(message).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
             Spacer()
         }
+        .padding()
         .frame(maxWidth: .infinity)
     }
 }
@@ -162,22 +202,5 @@ private struct SharePreviewThumbnail: View {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return UIImage(cgImage: cg)
-    }
-}
-
-/// Shown instead of the sheet when the shared store can't be opened.
-struct ShareStartupFailureView: View {
-    let message: String
-    let close: () -> Void
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("Hippo").font(.headline)
-            Text(message).multilineTextAlignment(.center).foregroundStyle(.secondary)
-            Button("Close", action: close).buttonStyle(.borderedProminent)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
     }
 }

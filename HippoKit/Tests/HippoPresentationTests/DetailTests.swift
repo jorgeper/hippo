@@ -243,6 +243,11 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(make(meta(method: CaptureMethod(rawValue: "other"))).captured.map(\.label) == ["When"])
     }
 
+    @Test func cameraCaptureHowRow() {
+        let rows = make(meta(method: .camera)).captured
+        #expect(rows.contains(DetailRow(label: "How", value: "Camera")))
+    }
+
     @Test func whereRowFormatsAccuracyAndAge() {
         func whereRow(_ ago: TimeInterval, acc: Double = 12.4) -> String? {
             let l = CaptureLocation(latitude: 37.7749, longitude: -122.4194, horizontalAccuracyMeters: acc,

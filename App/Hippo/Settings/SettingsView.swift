@@ -52,6 +52,7 @@ struct SettingsView: View {
             storageSection
             syncSection
             locationSection
+            cameraSection
             enrichmentSection
             onThisPhoneSection
             aboutSection
@@ -228,6 +229,20 @@ struct SettingsView: View {
             } else {
                 Text("Uses your location only at the moment you save. Never in the background.")
             }
+        }
+    }
+
+    // MARK: Camera
+
+    private var cameraSection: some View {
+        Section {
+            Toggle("Also save to Photos", isOn: Binding(
+                get: { model.cameraSavesToPhotos },
+                set: { model.setCameraSavesToPhotos($0) }))
+        } header: {
+            Text("Camera")
+        } footer: {
+            Text(SettingsModel.cameraFooter)
         }
     }
 

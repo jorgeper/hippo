@@ -3,7 +3,7 @@ import Foundation
 /// Temporary files gathered before a capture is committed. They live under the store root so the
 /// package writer's copy is a same-volume clone.
 public struct IntakeDirectory: Sendable {
-    private let root: URL
+    let root: URL
 
     /// `<storeRoot>/intake`
     public init(storeRoot: URL) {
@@ -24,13 +24,14 @@ public struct IntakeDirectory: Sendable {
         try? FileManager.default.removeItem(at: directory(for: captureID))
     }
 
-    /// Removes every intake entry last modified more than `olderThan` seconds before `now`.
+    /// Removes every intake entry (except pending captures) last modified more than `olderThan` seconds before `now`.
     public func sweep(olderThan: TimeInterval, now: Date) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey])
         else { return }
         let cutoff = now.addingTimeInterval(-olderThan)
         for entry in entries {
+            if fm.fileExists(atPath: entry.appendingPathComponent(Self.pendingFileName).path) { continue }
             guard let modified = try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
                   modified < cutoff else { continue }
             try? fm.removeItem(at: entry)

@@ -28,7 +28,7 @@
     "capture_method": {
       "type": "string",
       "minLength": 1,
-      "examples": ["share_extension", "typed_note", "file_import", "voice_recording"],
+      "examples": ["share_extension", "typed_note", "file_import", "voice_recording", "camera"],
       "description": "Open set: readers accept values they do not know."
     },
     "content_types": {
@@ -111,7 +111,7 @@
         "representation_source": {
           "type": "string",
           "minLength": 1,
-          "examples": ["item_provider_file", "item_provider_data", "typed_note", "recording"]
+          "examples": ["item_provider_file", "item_provider_data", "typed_note", "recording", "camera"]
         },
         "media": {
           "type": "object",

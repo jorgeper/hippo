@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
+import UniformTypeIdentifiers
 import CaptureCore
 import ShareIntake
 import SyncEngine
@@ -11,18 +12,34 @@ import HippoTestSupport
 private let t0 = Date(timeIntervalSince1970: 1_794_070_860)
 private let la = TimeZone(identifier: "America/Los_Angeles")!
 
+private let fix = CaptureLocation(latitude: 47.6205, longitude: -122.3493, horizontalAccuracyMeters: 5,
+                                  observedAt: t0, provenance: "test")
+
 @MainActor
 private struct Rig {
     let ts: TestStore
     let intake: IntakeDirectory
     let model: ShareSessionModel
+    let recorder = FakeRecorder()
 
-    init(_ providers: [FakeProvider], text: String? = nil, destination: String? = "Dropbox") throws {
+    init(_ providers: [FakeProvider], text: String? = nil, destination: String? = "Dropbox",
+         location: CaptureLocation? = nil) throws {
         ts = try TestStore()
         intake = IntakeDirectory(storeRoot: ts.base.appendingPathComponent("Hippo"))
         let input = ShareInput(title: nil, contentText: text, providers: providers, userInfoKeys: [])
         model = ShareSessionModel(store: ts.store, intake: intake, input: input, destinationName: destination,
-                                  location: { _ in nil }, now: { t0 }, timeZone: la)
+                                  location: { _ in location }, now: { t0 }, timeZone: la)
+    }
+
+    /// A draft already on disk (camera or pending share) with a voice session. The location is never re-read.
+    init(isPendingShare: Bool = false, prepared: (IntakeDirectory) throws -> PreparedCapture) throws {
+        ts = try TestStore()
+        intake = IntakeDirectory(storeRoot: ts.base.appendingPathComponent("Hippo"))
+        let voice = RecordingSession(intake: intake, recorder: recorder, permission: { .granted }, now: { t0 })
+        model = ShareSessionModel(store: ts.store, intake: intake, prepared: try prepared(intake),
+                                  isPendingShare: isPendingShare, destinationName: "Dropbox", voice: voice,
+                                  location: { _ in Issue.record("a prepared capture re-read the location"); return nil },
+                                  now: { t0 })
     }
 
     var captureDirectories: [URL] {
@@ -53,6 +70,24 @@ private final class SlowProvider: ItemProviding {
     func loadText() async throws -> String { "" }
 }
 private let unsupported = FakeProvider(types: ["com.example.unknown"])
+private func jpeg() throws -> FakeProvider {
+    FakeProvider(types: ["public.jpeg"], suggestedName: "a", fileBytes: try MediaMaker.imageData(width: 8, height: 8))
+}
+
+/// A camera photo staged in `intake/<capture-id>/`, as the camera flow leaves it. `missingFile` skips writing it.
+private func stagedPhoto(_ intake: IntakeDirectory, method: CaptureMethod = .camera,
+                         missingFile: Bool = false) throws -> PreparedCapture {
+    let id = UUID()
+    let dir = intake.directory(for: id)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("photo.heic")
+    let bytes = try MediaMaker.imageData(width: 8, height: 8, type: .heic)
+    if !missingFile { try bytes.write(to: url) }
+    let draft = CaptureDraft(captureID: id, startedAt: t0, timeZone: la, method: method,
+                             attachments: [AttachmentSource(body: .file(url), uti: "public.heic", mimeType: "image/heic",
+                                                            representationSource: "camera")])
+    return PreparedCapture(draft: draft, previewImageURL: missingFile ? nil : url, totalBytes: Int64(bytes.count))
+}
 
 @MainActor
 @Suite struct ShareSessionTests {
@@ -225,5 +260,177 @@ private let unsupported = FakeProvider(types: ["com.example.unknown"])
         #expect(ShareSessionModel.partialMessage(unsupported: 1, loadFailed: 2) == "1 item can't be saved and 2 couldn't be copied.")
         #expect(ShareSessionModel.message(for: .attachmentsFailed([AttachmentFailure(index: 0, reason: "x")]))
                 == "1 item couldn't be saved.")
+    }
+    // MARK: - Capture sheet: prepared drafts, voice comment, hand-off
+
+    @Test func preparedStartsReadyWithSummary() async throws {
+        var staged: PreparedCapture?
+        let rig = try Rig { intake in
+            let p = try stagedPhoto(intake)
+            staged = p
+            return p
+        }
+        defer { rig.ts.cleanup() }
+        let prepared = try #require(staged)
+        #expect(rig.model.state == .ready)
+        let size = ByteCountFormatter.string(fromByteCount: prepared.totalBytes, countStyle: .file)
+        #expect(rig.model.summary == "1 photo · \(size)")
+        #expect(rig.model.previewSymbol == "photo")
+        #expect(rig.model.previewImageURL == prepared.previewImageURL)
+        #expect(rig.model.partialNotice == nil)
+        #expect(rig.model.isPendingShare == false)
+        await rig.model.prepare() // no-op
+        #expect(rig.model.state == .ready)
+    }
+
+    @Test func saveAppendsVoiceComment() async throws {
+        let rig = try Rig { try stagedPhoto($0) }
+        defer { rig.ts.cleanup() }
+        let voice = try #require(rig.model.voice)
+        await voice.start()
+        voice.stop()
+        let recording = try #require(voice.pending?.url)
+        await rig.model.save()
+        #expect(rig.model.state == .saved)
+        let rows = try rig.committed()
+        #expect(rows.count == 1)
+        #expect(rows[0].captureMethod == .camera)
+        #expect(rows[0].attachments.count == 2)
+        #expect(rows[0].attachments.last?.uti == "com.apple.m4a-audio")
+        #expect(rows[0].attachments.last?.mimeType == "audio/mp4")
+        #expect(rows[0].attachments.last?.representationSource == "recording")
+        #expect(!FileManager.default.fileExists(atPath: recording.path))
+        #expect(rig.captureDirectories.isEmpty)
+    }
+
+    @Test func saveStopsRunningRecordingAndAttachesIt() async throws {
+        let rig = try Rig { try stagedPhoto($0) }
+        defer { rig.ts.cleanup() }
+        let voice = try #require(rig.model.voice)
+        await voice.start()
+        await rig.model.save()
+        #expect(rig.recorder.stopCount == 1)
+        #expect(rig.model.state == .saved)
+        let rows = try rig.committed()
+        #expect(rows.count == 1)
+        #expect(rows[0].attachments.map(\.representationSource) == ["camera", "recording"])
+        #expect(rig.captureDirectories.isEmpty)
+    }
+
+    @Test func saveWithoutVoiceHasOneAttachment() async throws {
+        let rig = try Rig { try stagedPhoto($0) }
+        defer { rig.ts.cleanup() }
+        rig.model.comment = " on the way home "
+        await rig.model.save()
+        #expect(rig.model.state == .saved)
+        let rows = try rig.committed()
+        #expect(rows.count == 1)
+        #expect(rows[0].attachments.count == 1)
+        #expect(rows[0].attachments[0].uti == "public.heic")
+        #expect(rows[0].userNote == "on the way home")
+        #expect(rig.captureDirectories.isEmpty)
+    }
+
+    @Test func deferWritesPendingWithCommentAndLocation() async throws {
+        let rig = try Rig([try jpeg()], location: fix)
+        defer { rig.ts.cleanup() }
+        #expect(rig.model.voice == nil)
+        await rig.model.prepare()
+        rig.model.comment = "  hello "
+        await rig.model.deferForVoiceComment()
+        #expect(rig.model.state == .deferred)
+        #expect(rig.model.handoffFailed == false)
+        let loaded = rig.intake.pendingCaptures()
+        #expect(loaded.dropped == 0)
+        let pending = try #require(loaded.captures.first)
+        #expect(loaded.captures.count == 1)
+        #expect(pending.draft.userNote == "hello")
+        #expect(pending.draft.location == fix)
+        #expect(rig.captureDirectories.map(\.lastPathComponent) == [pending.draft.captureID.uuidString.lowercased()])
+        #expect(pending.draft.attachments.count == 1)
+        for attachment in pending.draft.attachments {
+            guard case .file(let url) = attachment.body else { Issue.record("expected a file body"); continue }
+            #expect(FileManager.default.fileExists(atPath: url.path))
+        }
+        #expect(pending.previewImageURL.map { FileManager.default.fileExists(atPath: $0.path) } == true)
+        // Deferred: Save does nothing; the app commits it.
+        await rig.model.save()
+        #expect(rig.model.state == .deferred)
+        #expect(try rig.committed().isEmpty)
+    }
+
+    @Test func deferFailureKeepsReadyAndFlags() async throws {
+        let rig = try Rig([try jpeg()], location: fix)
+        defer { rig.ts.cleanup() }
+        await rig.model.prepare()
+        let dir = try #require(rig.captureDirectories.first)
+        let fm = FileManager.default
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        await rig.model.deferForVoiceComment()
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        #expect(rig.model.handoffFailed)
+        #expect(rig.model.state == .ready)
+        #expect(rig.intake.pendingCaptures().captures.isEmpty)
+        #expect(ShareSessionModel.handoffFailedMessage == "Hippo couldn't hand this off. Save without a comment, or try again.")
+        #expect(ShareSessionModel.handoffMessage == "Open Hippo to record your comment")
+    }
+
+    @Test func pendingSaveRemovesPendingFileAfterCommit() async throws {
+        let rig = try Rig(isPendingShare: true) { intake in
+            var staged = try stagedPhoto(intake, method: .shareExtension)
+            staged.draft.userNote = "typed in the extension"
+            staged.draft.location = fix
+            try intake.savePending(PendingCapture(draft: staged.draft, previewImageURL: staged.previewImageURL,
+                                                  totalBytes: staged.totalBytes, savedAt: t0))
+            return PreparedCapture(try #require(intake.pendingCaptures().captures.first))
+        }
+        defer { rig.ts.cleanup() }
+        #expect(rig.model.isPendingShare)
+        #expect(rig.model.comment == "typed in the extension")
+        let id = try #require(rig.captureDirectories.first.flatMap { UUID(uuidString: $0.lastPathComponent) })
+        #expect(rig.intake.isPending(captureID: id))
+        await rig.model.save()
+        #expect(rig.model.state == .saved)
+        let rows = try rig.committed()
+        #expect(rows.count == 1)
+        #expect(rows[0].userNote == "typed in the extension")
+        #expect(rows[0].captureLocation != nil)
+        #expect(!rig.intake.isPending(captureID: id))
+        #expect(rig.captureDirectories.isEmpty)
+        await rig.model.save()
+        #expect(try rig.committed().count == 1)
+    }
+
+    @Test func cancelKeepsPendingShare() async throws {
+        let rig = try Rig(isPendingShare: true) { intake in
+            let staged = try stagedPhoto(intake, method: .shareExtension)
+            try intake.savePending(PendingCapture(draft: staged.draft, previewImageURL: staged.previewImageURL,
+                                                  totalBytes: staged.totalBytes, savedAt: t0))
+            return PreparedCapture(try #require(intake.pendingCaptures().captures.first))
+        }
+        defer { rig.ts.cleanup() }
+        rig.model.cancel()
+        #expect(rig.intake.pendingCaptures().captures.count == 1)
+    }
+
+    @Test func rejectedCommitKeepsRecordingForRetry() async throws {
+        let rig = try Rig { try stagedPhoto($0, missingFile: true) }
+        defer { rig.ts.cleanup() }
+        let voice = try #require(rig.model.voice)
+        await voice.start()
+        voice.stop()
+        let recording = try #require(voice.pending?.url)
+        await rig.model.save()
+        #expect(rig.model.state == .confirmPartial(message: "1 item couldn't be saved."))
+        #expect(try rig.committed().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: recording.path))
+        #expect(voice.pending?.url == recording)
+        await rig.model.save(acceptPartial: true)
+        #expect(rig.model.state == .saved)
+        let rows = try rig.committed()
+        #expect(rows.count == 1)
+        #expect(rows[0].attachments.map(\.uti) == ["com.apple.m4a-audio"])
+        #expect(!FileManager.default.fileExists(atPath: recording.path))
+        #expect(rig.captureDirectories.isEmpty)
     }
 }

@@ -138,6 +138,9 @@ public struct LogLine: Equatable, Sendable, Identifiable {
             let d = destination(e.dest).map { " from \($0)" } ?? ""
             if e.outcome == .failed { return join(["Download failed", e.code]) }
             return "Downloaded a file" + d
+        case .cameraLibrarySave:
+            if e.outcome == .failed { return join(["Couldn't save to Photos", e.code]) }
+            return "Saved to Photos"
         case .downloadRun:
             let n = e.count ?? 0
             let d = destination(e.dest).map { " from \($0)" } ?? ""

@@ -15,7 +15,7 @@ struct TimelineView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     private enum Compose: String, Identifiable {
-        case note, record
+        case note, camera, record
         var id: String { rawValue }
     }
 
@@ -61,21 +61,28 @@ struct TimelineView: View {
                     }
                 }
             }
-            .sheet(isPresented: $reviewing) {
+            .sheet(isPresented: $reviewing, onDismiss: presentationClosed) {
                 RemoteReviewSheet(store: environment.store, coordinator: environment.coordinator)
             }
-            .sheet(isPresented: $showingFilters) {
+            .sheet(isPresented: $showingFilters, onDismiss: presentationClosed) {
                 FiltersSheet(filters: $model.filter.sheet)
                     .presentationDetents([.medium, .large])
             }
-            .sheet(item: $presented, onDismiss: { Task { await model.reload() } }) { compose in
+            .sheet(item: sheetCompose, onDismiss: { presentationClosed(); Task { await model.reload() } }) { compose in
                 switch compose {
                 case .note:
                     NoteEditorView(environment: environment, location: LocationService.shared)
                 case .record:
                     RecorderView(environment: environment, location: LocationService.shared)
                         .presentationDetents([.medium])
+                case .camera:
+                    // Never shown: `sheetCompose` maps the camera to nil; it has the cover below.
+                    EmptyView()
                 }
+            }
+            // The camera needs the whole screen; its capture sheet follows inside the same cover.
+            .fullScreenCover(isPresented: cameraPresented, onDismiss: { presentationClosed(); Task { await model.reload() } }) {
+                CameraCaptureView(environment: environment, location: LocationService.shared)
             }
             .task {
                 await model.reload()
@@ -122,6 +129,10 @@ struct TimelineView: View {
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("note-button")
             Spacer()
+            Button { presented = .camera } label: { Label("Camera", systemImage: "camera") }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("camera-button")
+            Spacer()
             Button { presented = .record } label: { Label("Record", systemImage: "record.circle") }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
@@ -131,6 +142,20 @@ struct TimelineView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    /// A pending share that arrived while a sheet was up is presented once it closes.
+    private func presentationClosed() {
+        NotificationCenter.default.post(name: RootView.presentationClosed, object: nil)
+    }
+
+    /// Note and Record show as sheets; the camera as a full-screen cover.
+    private var sheetCompose: Binding<Compose?> {
+        Binding(get: { presented == .camera ? nil : presented }, set: { presented = $0 })
+    }
+
+    private var cameraPresented: Binding<Bool> {
+        Binding(get: { presented == .camera }, set: { if !$0 { presented = nil } })
     }
 
     private var searchText: Binding<String> {
@@ -190,7 +215,7 @@ struct TimelineView: View {
                 }
             } else {
                 ContentUnavailableView("No captures yet", systemImage: "tray",
-                                       description: Text("Share something to Hippo from any app, or tap Note or Record."))
+                                       description: Text("Share something to Hippo from any app, or tap Note, Camera or Record."))
             }
         }
     }

@@ -15,6 +15,7 @@ public struct CaptureMethod: RawRepresentable, Codable, Hashable, Sendable {
     public static let typedNote = CaptureMethod(rawValue: "typed_note")
     public static let fileImport = CaptureMethod(rawValue: "file_import")
     public static let voiceRecording = CaptureMethod(rawValue: "voice_recording")
+    public static let camera = CaptureMethod(rawValue: "camera")
 }
 
 /// Kind of content in a capture. Open: readers accept values added by future versions.

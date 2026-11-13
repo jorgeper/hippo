@@ -88,6 +88,16 @@ struct LogLineTests {
         #expect(line(LogEvent(event: .settingsChanged, kind: "odd_thing", on: true)).text == "odd_thing turned on")
     }
 
+    @Test func photoLibrarySaveLines() {
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .ok)).text == "Saved to Photos")
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "denied")).text
+                == "Couldn't save to Photos · denied")
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "failed")).text
+                == "Couldn't save to Photos · failed")
+        #expect(line(LogEvent(event: .cameraLibrarySave, captureID: "c1", outcome: .failed, code: "lookup_failed")).text
+                == "Couldn't save to Photos · lookup_failed")
+    }
+
     @Test func clockIgnoresTwelveHourLocale() {
         var e = LogEvent(event: .appLaunch)
         e.t = now

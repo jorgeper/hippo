@@ -5,8 +5,25 @@ import CaptureCore
 import ShareIntake
 import SyncEngine
 
-/// State machine behind the Share Extension sheet: gathers the shared items, takes an optional comment
-/// and commits one capture.
+/// A draft already on disk: from the camera or a pending share.
+public struct PreparedCapture: Sendable {
+    public var draft: CaptureDraft
+    public var previewImageURL: URL?
+    public var totalBytes: Int64
+
+    public init(draft: CaptureDraft, previewImageURL: URL?, totalBytes: Int64) {
+        self.draft = draft; self.previewImageURL = previewImageURL; self.totalBytes = totalBytes
+    }
+
+    /// The sheet's comment starts as `pending.draft.userNote`.
+    public init(_ pending: PendingCapture) {
+        self.init(draft: pending.draft, previewImageURL: pending.previewImageURL, totalBytes: pending.totalBytes)
+    }
+}
+
+/// State machine behind the capture sheet: the Share Extension (gathers the shared items; the mic hands
+/// off to the app), the in-app camera, and a pending share shown in the app. Takes an optional comment
+/// and voice comment, and commits one capture.
 @MainActor @Observable
 public final class ShareSessionModel {
     public enum State: Equatable {
@@ -16,10 +33,14 @@ public final class ShareSessionModel {
         case saving
         case saved
         case failed(message: String, canSave: Bool)
+        /// The draft was handed off to the app as a pending capture.
+        case deferred
     }
 
     static let nothingSavableMessage = "Nothing Hippo can save was shared."
     static let genericFailureMessage = "Hippo couldn't save this. Nothing was saved."
+    public static let handoffFailedMessage = "Hippo couldn't hand this off. Save without a comment, or try again."
+    public static let handoffMessage = "Open Hippo to record your comment"
 
     public private(set) var state: State
     public var comment: String = ""
@@ -29,6 +50,12 @@ public final class ShareSessionModel {
     public private(set) var partialNotice: String?
     /// SF Symbol for the preview when there is no thumbnail.
     public private(set) var previewSymbol: String = "doc"
+    /// Records the voice comment in place (camera, pending share). Nil in the extension, which hands off.
+    public let voice: RecordingSession?
+    /// The draft came from a pending share: the sheet offers "Save without comment" instead of Cancel.
+    public let isPendingShare: Bool
+    /// The last hand-off write failed; the sheet shows `handoffFailedMessage` under the mic.
+    public private(set) var handoffFailed = false
 
     public var destinationLine: String {
         if let destinationName {
@@ -40,27 +67,53 @@ public final class ShareSessionModel {
 
     private let store: HippoStore
     private let intake: IntakeDirectory
-    private let input: ShareInput
+    /// Nil for a prepared capture, which carries its location and never re-reads it.
+    private let input: ShareInput?
     private let destinationName: String?
     private let location: (Date) -> CaptureLocation?
     private let now: () -> Date
     private let timeZone: TimeZone
-    private let captureID = UUID()
+    private let captureID: UUID
 
     private var draft: CaptureDraft?
+    private var totalBytes: Int64 = 0
     private var cancelled = false
 
+    /// Share Extension: `prepare()` copies the shared items in.
     public init(store: HippoStore, intake: IntakeDirectory, input: ShareInput,
                 destinationName: String?, location: @escaping (Date) -> CaptureLocation?,
                 now: @escaping () -> Date = Date.init, timeZone: TimeZone = .current) {
         self.store = store; self.intake = intake; self.input = input
         self.destinationName = destinationName; self.location = location; self.now = now; self.timeZone = timeZone
+        captureID = UUID()
+        voice = nil
+        isPendingShare = false
         state = .preparing(done: 0, total: input.providers.count)
+    }
+
+    /// Camera or pending share. State starts `.ready`; `prepare()` is a no-op. `isPendingShare` is true
+    /// when the draft came from a pending share (the sheet then offers "Save without comment").
+    public init(store: HippoStore, intake: IntakeDirectory, prepared: PreparedCapture, isPendingShare: Bool,
+                destinationName: String?, voice: RecordingSession?,
+                location: @escaping (Date) -> CaptureLocation?, now: @escaping () -> Date = Date.init) {
+        self.store = store; self.intake = intake; input = nil
+        self.destinationName = destinationName; self.location = location; self.now = now
+        timeZone = prepared.draft.timeZone
+        captureID = prepared.draft.captureID
+        self.voice = voice
+        self.isPendingShare = isPendingShare
+        draft = prepared.draft
+        totalBytes = prepared.totalBytes
+        comment = prepared.draft.userNote ?? ""
+        previewImageURL = prepared.previewImageURL
+        summary = Self.summary(for: prepared.draft, totalBytes: prepared.totalBytes)
+        previewSymbol = Self.symbol(for: prepared.draft)
+        state = .ready
     }
 
     /// Copies the shared items into the intake directory. Call once, when the sheet appears.
     public func prepare() async {
-        guard draft == nil, case .preparing = state else { return }
+        guard let input, draft == nil, case .preparing = state else { return }
         let result = await ShareIntake(directory: intake).prepare(input, captureID: captureID, startedAt: now(), timeZone: timeZone) { [weak self] done, total in
             Task { @MainActor in
                 // Progress can land after the result; it never moves the state backwards.
@@ -77,6 +130,7 @@ public final class ShareSessionModel {
             return
         }
         draft = d
+        totalBytes = result.totalBytes
         previewImageURL = result.firstImageURL
         summary = Self.summary(for: d, totalBytes: result.totalBytes)
         let unsupported = result.failures.filter { $0.kind == .unsupported }.count
@@ -86,35 +140,59 @@ public final class ShareSessionModel {
         state = .ready
     }
 
-    /// Commits the capture. Without `acceptPartial`, items the intake couldn't take ask for confirmation first.
+    /// Commits the capture, with the voice comment (stopped first if still recording) as the last
+    /// attachment. Without `acceptPartial`, items the intake couldn't take ask for confirmation first.
     public func save(acceptPartial: Bool = false) async {
-        guard !cancelled, var draft else { return }
+        guard !cancelled, draft != nil else { return }
         switch state {
         case .ready, .confirmPartial, .failed(_, canSave: true): break
         default: return
         }
+        if let voice, case .recording = voice.state { voice.stop() }
         if let partialNotice, !acceptPartial {
             state = .confirmPartial(message: partialNotice)
             return
         }
+        guard var draft = finishedDraft() else { return }
         state = .saving
-        let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft.userNote = trimmed.isEmpty ? nil : trimmed
-        draft.location = location(draft.startedAt)
+        let recording = voice?.takePending()
+        if let recording {
+            draft.attachments.append(AttachmentSource(body: .file(recording.url), uti: "com.apple.m4a-audio",
+                                                      mimeType: "audio/mp4", representationSource: "recording"))
+        }
         do {
             _ = try await store.capture(draft, partialPolicy: acceptPartial ? .acceptPartial : .rejectPartial)
             intake.discard(captureID: captureID)
+            if let recording { try? FileManager.default.removeItem(at: recording.url) }
             state = .saved
-        } catch let error as CaptureError {
+        } catch {
+            // The recording stays on disk so Save can be tried again.
+            if let recording { voice?.restorePending(recording) }
+            fail(error)
+        }
+    }
+
+    private func fail(_ error: Error) {
+        switch error {
+        case let error as CaptureError:
             if case .attachmentsFailed = error {
                 state = .confirmPartial(message: Self.message(for: error))
             } else {
                 state = .failed(message: Self.message(for: error), canSave: false)
             }
-        } catch {
+        default:
             // Only `CaptureError` comes out of the store; a retry wouldn't change anything.
             state = .failed(message: Self.genericFailureMessage, canSave: false)
         }
+    }
+
+    /// The draft with the trimmed comment and, for shared items, the location fix for its start time.
+    private func finishedDraft() -> CaptureDraft? {
+        guard var draft else { return nil }
+        let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.userNote = trimmed.isEmpty ? nil : trimmed
+        if input != nil { draft.location = location(draft.startedAt) }
+        return draft
     }
 
     /// The user declined the "save the rest" question: back to editing, nothing saved.
@@ -123,10 +201,29 @@ public final class ShareSessionModel {
         state = .ready
     }
 
-    /// Removes the intake files, now or when a running `prepare()` returns. The sheet closes afterwards.
+    /// Removes the intake files, now or when a running `prepare()` returns, and any voice comment. The
+    /// sheet closes afterwards. A pending share or a handed-off draft keeps its intake files: the app owns them.
     public func cancel() {
         cancelled = true
+        voice?.discard()
+        guard !isPendingShare, state != .deferred else { return }
         intake.discard(captureID: captureID)
+    }
+
+    // MARK: - Hand-off
+
+    /// Extension only: writes the pending draft (comment + location now) and sets `.deferred`. On failure
+    /// the state stays `.ready` and `handoffFailed` is set.
+    public func deferForVoiceComment() async {
+        guard !cancelled, state == .ready, let draft = finishedDraft() else { return }
+        do {
+            try intake.savePending(PendingCapture(draft: draft, previewImageURL: previewImageURL,
+                                                  totalBytes: totalBytes, savedAt: now()))
+            handoffFailed = false
+            state = .deferred
+        } catch {
+            handoffFailed = true
+        }
     }
 
     // MARK: - Copy
