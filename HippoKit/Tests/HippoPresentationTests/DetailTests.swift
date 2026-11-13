@@ -821,3 +821,101 @@ private func resolved(places: [String: PlaceItem] = [:], detections: [Detection]
         #expect(model.detail != nil)
     }
 }
+
+// MARK: Format 1.2 server kinds
+
+private let packagesRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    .appendingPathComponent("fixtures/packages", isDirectory: true)
+private let id7 = "00000000-0000-4000-8000-000000000007"
+
+/// Capture 7's metadata, read from the tracked fixtures (nothing is written).
+private func capture7() throws -> CaptureMetadata {
+    try HippoJSON.decodeMetadata(Data(contentsOf: packagesRoot.appendingPathComponent(
+        "captures/2026/11/07/\(id7)/metadata.json")))
+}
+
+/// Capture 7's device document merged with its server document, or with none.
+private func enrichment7(server: Bool = true) throws -> ResolvedEnrichment {
+    func doc(_ layer: EnrichmentLayer) throws -> EnrichmentDocument {
+        try EnrichmentJSON.decode(Data(contentsOf: packagesRoot.appendingPathComponent(
+            "enrichments/\(layer.rawValue)/2026/11/07/\(id7)/enrichment.json")))
+    }
+    return ResolvedEnrichment.make(device: try doc(.device), server: server ? try doc(.server) : nil,
+                                   assetURL: { _, a in URL(fileURLWithPath: "/assets/\(a.relativePath)") })
+}
+
+@Suite struct DetailServerKindsTests {
+    @Test func capture7ShowsEveryNewKind() throws {
+        let d = make(try capture7(), enrichment: try enrichment7())
+        #expect(d.title == "Cafe menu with specials code" && d.titleLayer == .gold)
+        #expect(d.topic == "food" && d.topicLayer == .gold)
+        #expect(d.imageDescriptions.count == 1)
+        #expect(d.imageDescriptions.first?.title == "Attachment 1" && d.imageDescriptions.first?.layer == .gold)
+        #expect(d.imageDescriptions.first?.text.hasPrefix("A printed cafe menu") == true)
+        #expect(d.people == [PersonRow(id: "ana", name: "Ana", foundIn: "In your note", layer: .gold)])
+        #expect(d.likely.map(\.text) == ["In a car", "Several captures in a row", "In daylight"])
+        #expect(d.likely.first?.confidence == "High confidence")
+        #expect(d.likely.first?.evidence.count == 3)
+        #expect(d.likely.map(\.id) == ["in_car", "in_a_burst", "daylight"])
+        #expect(d.likely.allSatisfy { $0.layer == .gold })
+    }
+
+    @Test func noServerDocumentShowsNoneOfThem() throws {
+        let d = make(try capture7(), enrichment: try enrichment7(server: false))
+        #expect(d.title == nil && d.topic == nil)
+        #expect(d.imageDescriptions.isEmpty && d.people.isEmpty && d.likely.isEmpty)
+    }
+
+    @Test func personFoundInNamesWhereTheNameWas() {
+        let a2 = CaptureCore.Attachment(attachmentID: "a2", relativePath: "content/a2.bin", originalFilename: "b.jpg",
+                                        uti: "public.jpeg", mimeType: "image/jpeg", byteCount: 1, sha256: "x",
+                                        representationSource: "r", media: nil)
+        let comment = CaptureComment(captureID: "c1", commentID: "k1", addedAt: now,
+                                     localDatetime: "2026-11-07T12:00:00-08:00", timezoneIdentifier: "America/Los_Angeles",
+                                     utcOffsetSeconds: -28800, producer: Producer(appVersion: "1", build: "1", osVersion: "t"),
+                                     text: "Ask Rui")
+        var e = ResolvedEnrichment.empty
+        e.people = [PersonItem(name: "Ana", source: "user_note"), PersonItem(name: "Bea", source: "shared_text"),
+                    PersonItem(name: "Cy", source: "shared_title"), PersonItem(name: "Dee", source: "a2"),
+                    PersonItem(name: "Rui", source: "k1"), PersonItem(name: "Eve Long", source: "elsewhere")]
+        let d = CaptureDetail.make(metadata: meta(attachments: [att(), a2]), packageURL: pkg, noteBody: nil, jobs: [],
+                                   enrichment: e, comments: [comment], destination: { _ in nil }, now: now,
+                                   locale: locale, calendar: calendar)
+        #expect(d.people.map(\.foundIn) == ["In your note", "In the shared text", "In the shared title",
+                                            "In attachment 2", "In a comment", ""])
+        #expect(d.people.map(\.id) == ["ana", "bea", "cy", "dee", "rui", "eve long"])
+        #expect(d.people.allSatisfy { $0.layer == .silver })
+    }
+
+    @Test func unknownLabelIsShownAsWritten() {
+        var e = ResolvedEnrichment.empty
+        e.circumstances = [CircumstanceItem(label: "on_a_boat", confidence: "low")]
+        e.fromServer.circumstances = true
+        let d = make(meta(), enrichment: e)
+        #expect(d.likely == [LikelyRow(id: "on_a_boat", text: "on_a_boat", confidence: "Low confidence",
+                                       evidence: [], layer: .gold)])
+    }
+
+    // The resolver cannot see the attachments: a description for an ID the capture does not have gives no row.
+    @Test func descriptionForUnknownAttachmentGivesNoRow() {
+        var e = ResolvedEnrichment.empty
+        e.imageDescriptions = ["a1": "a cat", "zz": "not in this capture"]
+        e.title = "T"
+        e.topic = "pets"
+        let d = make(meta(attachments: [att()]), enrichment: e)
+        #expect(d.imageDescriptions == [TitledText(title: "Attachment 1", text: "a cat", layer: .silver)])
+        #expect(d.titleLayer == .silver && d.topicLayer == .silver)
+    }
+
+    // Rows are Identifiable by name and label: a repeat keeps the first, so the list's identities stay unique.
+    @Test func repeatedNamesAndLabelsKeepTheFirst() {
+        var e = ResolvedEnrichment.empty
+        e.people = [PersonItem(name: "Ana", source: "user_note"), PersonItem(name: "ana", source: "shared_text")]
+        e.circumstances = [CircumstanceItem(label: "dark", confidence: "low"),
+                           CircumstanceItem(label: "dark", confidence: "high")]
+        let d = make(meta(), enrichment: e)
+        #expect(d.people.map(\.foundIn) == ["In your note"])
+        #expect(d.likely.map(\.confidence) == ["Low confidence"])
+    }
+}
