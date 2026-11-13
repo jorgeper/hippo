@@ -18,6 +18,8 @@ public final class CaptureIndex: Sendable {
         let types = "," + m.contentTypes.map(\.rawValue).joined(separator: ",") + ","
         let hasLocation = m.captureLocation != nil || m.attachments.contains { $0.media?.embeddedLocation != nil }
         let note = m.userNote.flatMap { $0.isEmpty ? nil : $0 }
+        let commentTexts = p.comments.compactMap(\.text).filter { !$0.isEmpty }
+        let excerptSource = note ?? commentTexts.last
         let shared = [m.sharedText, noteBody].compactMap { $0 }.joined(separator: "\n")
         let now = Self.ms(Date())
 
@@ -28,21 +30,43 @@ public final class CaptureIndex: Sendable {
             try tx.execute("""
                 INSERT INTO captures(capture_id, captured_at_ms, local_day, method, content_types, title, note_excerpt,
                   has_comment, has_location, attachment_count, primary_attachment_path, relative_directory,
-                  package_digest, registered_at_ms, utc_offset_seconds) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  package_digest, registered_at_ms, utc_offset_seconds, comment_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, [.text(m.captureID), .int(Self.ms(m.capturedAt)), .text(String(m.localDatetime.prefix(10))),
                       .text(m.captureMethod.rawValue), .text(types), .text(title),
-                      note.map { .text(String($0.prefix(120))) } ?? .null,
-                      .int(note == nil ? 0 : 1), .int(hasLocation ? 1 : 0), .int(Int64(m.attachments.count)),
+                      excerptSource.map { .text(String($0.prefix(120))) } ?? .null,
+                      .int(note == nil && p.comments.isEmpty ? 0 : 1), .int(hasLocation ? 1 : 0), .int(Int64(m.attachments.count)),
                       Self.primaryPath(m).map { .text($0) } ?? .null, .text(p.relativeDirectory),
-                      .text(digest), .int(now), .int(Int64(m.utcOffsetSeconds))])
+                      .text(digest), .int(now), .int(Int64(m.utcOffsetSeconds)), .int(Int64(p.comments.count))])
             try tx.execute("""
                 INSERT INTO captures_fts(capture_id, title, user_note, shared_text, urls, filenames, enrichment)
                   VALUES (?,?,?,?,?,?,'')
-                """, [.text(m.captureID), .text(title), .text(m.userNote ?? ""), .text(shared),
+                """, [.text(m.captureID), .text(title),
+                      .text(([m.userNote ?? ""] + commentTexts).joined(separator: " ")), .text(shared),
                       .text(m.urls.map(\.url).joined(separator: " ")),
                       .text(m.attachments.compactMap(\.originalFilename).joined(separator: " "))])
             return true
         }
+    }
+
+    /// has_comment = 1, comment_count += 1, text appended to the FTS `user_note`, and, when `replacesExcerpt`
+    /// (the capture has no note), the first 120 characters of the text become `note_excerpt`.
+    public func recordComment(captureID: String, _ c: CaptureComment, replacesExcerpt: Bool) throws {
+        try db.transaction { tx in
+            try tx.execute("UPDATE captures SET has_comment = 1, comment_count = comment_count + 1 WHERE capture_id = ?",
+                           [.text(captureID)])
+            guard let text = c.text else { return }
+            if replacesExcerpt {
+                try tx.execute("UPDATE captures SET note_excerpt = ? WHERE capture_id = ?",
+                               [.text(String(text.prefix(120))), .text(captureID)])
+            }
+            try tx.execute("UPDATE captures_fts SET user_note = COALESCE(user_note, '') || ' ' || ? WHERE capture_id = ?",
+                           [.text(text), .text(captureID)])
+        }
+    }
+
+    public func commentCount(captureID: String) throws -> Int {
+        Int(try db.query("SELECT comment_count FROM captures WHERE capture_id = ?", [.text(captureID)]).first?
+            .int("comment_count") ?? 0)
     }
 
     public func remove(captureID: String) throws {
@@ -174,7 +198,8 @@ public final class CaptureIndex: Sendable {
                 primaryAttachmentPath: r.string("primary_attachment_path"),
                 relativeDirectory: r.string("relative_directory") ?? "",
                 syncBucket: SyncBucket(rawValue: r.string("sync_bucket") ?? "") ?? .notSynced,
-                utcOffsetSeconds: r.int("utc_offset_seconds").map(Int.init))
+                utcOffsetSeconds: r.int("utc_offset_seconds").map(Int.init),
+                commentCount: Int(r.int("comment_count") ?? 0))
         }
     }
 

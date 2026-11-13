@@ -53,6 +53,7 @@ public final class HippoStore: Sendable {
     public let log: ActivityLog
     private let db: Database
     private let writer: PackageWriter
+    private let commentWriter: CommentWriter
     private let leaseWaitLimit: Duration
     /// The clock `delete` checks upload leases against. Replaced only by tests.
     private let now: @Sendable () -> Date
@@ -70,7 +71,9 @@ public final class HippoStore: Sendable {
         enrichmentTasks = EnrichmentTaskStore(db: db)
         remoteState = RemoteStateStore(db: db)
         trims = TrimStore(db: db)
-        writer = PackageWriter(layout: layout, producer: producer)
+        let space = VolumeSpaceChecker()
+        writer = PackageWriter(layout: layout, producer: producer, space: space)
+        commentWriter = CommentWriter(layout: layout, producer: producer, space: space)
         log = ActivityLog(layout: layout, process: process)
     }
 
@@ -145,6 +148,80 @@ public final class HippoStore: Sendable {
         case .io: "io"
         case nil: "unknown"
         }
+    }
+
+    /// `saveFailureCode`, with the two refusals of `addComment` named apart from real I/O errors.
+    private static func commentFailureCode(_ error: Error) -> String {
+        switch error as? CaptureError {
+        case .io(commentCaptureMissing)?: "capture_missing"
+        case .io(commentPackageInvalid)?: "local_package_invalid"
+        default: saveFailureCode(error)
+        }
+    }
+
+    /// `CaptureError.io` payload when `addComment` finds no indexed capture (logged as `capture_missing`).
+    public static let commentCaptureMissing = "capture missing"
+    /// `CaptureError.io` payload when `addComment` finds a package that doesn't validate
+    /// (logged as `local_package_invalid`).
+    public static let commentPackageInvalid = "package invalid"
+
+    /// Adds a comment to a saved capture (comments design §5.3). Loads the package (throwing
+    /// `CaptureError.io(Self.commentCaptureMissing)` when the capture isn't indexed,
+    /// `.io(Self.commentPackageInvalid)` when its package doesn't validate), writes the comment into its
+    /// `comments/` folder, records it in the index, requeues the capture's synced uploads, forgets the transcript
+    /// task for an audio comment, and logs `comment.added`. A failure before the comment is written logs
+    /// `comment.save_failed` and is thrown.
+    /// Once the comment is written it is saved: it is on disk and shown from the package. Index, requeue and
+    /// task failures are only logged (as fixed categories); the next comment, or an upload-again, catches the
+    /// upload up.
+    /// Trimmed attachments don't stop a comment: their originals are in the destination.
+    public func addComment(captureID: String, _ draft: CommentDraft, now: Date = Date(),
+                           timeZone: TimeZone = .current) async throws -> CaptureComment {
+        let isText: Bool
+        switch draft {
+        case .text: isText = true
+        case .audio: isText = false
+        }
+        let kind = isText ? "text" : "audio"
+        let package: CommittedPackage
+        let comment: CaptureComment
+        do {
+            guard let directory = try index.relativeDirectory(captureID: captureID) else {
+                throw CaptureError.io(Self.commentCaptureMissing)
+            }
+            guard let loaded = CommittedPackage.load(directory: layout.packageURL(relativeDirectory: directory),
+                                                     layout: layout, trimmed: try trims.trimmedPaths(captureID: captureID))
+            else { throw CaptureError.io(Self.commentPackageInvalid) }
+            package = loaded
+            comment = try commentWriter.add(draft, to: package, now: now, timeZone: timeZone)
+        } catch {
+            log.append(LogEvent(event: .commentSaveFailed, captureID: captureID, kind: kind,
+                                code: Self.commentFailureCode(error)))
+            throw error
+        }
+        log.append(LogEvent(event: .commentAdded, captureID: captureID, kind: kind))
+        do {
+            // The timeline excerpt is user_note; without one, the newest typed comment.
+            try index.recordComment(captureID: captureID, comment,
+                                    replacesExcerpt: isText && (package.metadata.userNote ?? "").isEmpty)
+        } catch {
+            Self.osLog.error("\("comment_index_failed", privacy: .public)")
+        }
+        do {
+            // A job that isn't synced yet picks the comment up on its own (the worker compares comment counts).
+            _ = try jobs.requeueSynced(captureID: captureID)
+        } catch {
+            Self.osLog.error("\("comment_requeue_failed", privacy: .public)")
+        }
+        if !isText {
+            do {
+                // The next enrichment schedule re-evaluates the capture and transcribes the new audio.
+                try enrichmentTasks.forget(captureID: captureID, kind: .transcript)
+            } catch {
+                Self.osLog.error("\("comment_task_forget_failed", privacy: .public)")
+            }
+        }
+        return comment
     }
 
     /// A sync worker over this store's database and files, with the default retry policy and clock.

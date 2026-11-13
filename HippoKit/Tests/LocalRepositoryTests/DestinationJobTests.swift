@@ -363,6 +363,71 @@ private struct Stores {
         #expect(try s.jobs.activeLeaseExists(captureID: id, now: t0) == false)
     }
 
+    @Test func markSyncedIfCommentsUnchanged() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        let id = try await s.capture()
+        let job = try #require(try s.jobs.claimNext(owner: "w1", now: t0, lease: 60))
+        #expect(try s.jobs.markSyncedIfCommentsUnchanged(jobID: job.jobID, owner: "w1", captureID: id, commentCount: 0))
+        #expect(try s.jobs.jobs(captureID: id)[0].state == .synced)
+
+        try s.h.db.execute("UPDATE jobs SET state = 'pending'")
+        let job2 = try #require(try s.jobs.claimNext(owner: "w1", now: t0, lease: 60))
+        try s.h.db.execute("UPDATE captures SET comment_count = 1 WHERE capture_id = ?", [.text(id)])
+        #expect(try !s.jobs.markSyncedIfCommentsUnchanged(jobID: job2.jobID, owner: "w1", captureID: id, commentCount: 0))
+        #expect(try s.jobs.jobs(captureID: id)[0].state == .pending)
+        let l = try s.lease(job2.jobID)
+        #expect(l.owner == nil && l.expires == nil)
+        #expect(throws: JobError.leaseLost) {
+            try s.jobs.markSyncedIfCommentsUnchanged(jobID: job2.jobID, owner: "w2", captureID: id, commentCount: 1)
+        }
+    }
+
+    @Test func requeueSyncedOnlyTouchesSyncedJobs() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        _ = try s.destinations.connect(destination("dest-b", account: "b"))
+        let id = try await s.capture()
+        try s.h.db.execute("""
+            INSERT INTO jobs(job_id, capture_id, destination_id, state, updated_at_ms)
+            VALUES ('job-extra', ?, ?, 'pending', 0)
+            """, [.text(id), .text(try s.jobs.jobs(captureID: id)[0].destinationID == "dest-a" ? "dest-b" : "dest-a")])
+        let jobs = try s.jobs.jobs(captureID: id)
+        #expect(jobs.count == 2)
+        // Both destinations live, so only the job's state decides.
+        try s.h.db.execute("UPDATE destinations SET status = 'active'")
+        try s.h.db.execute("UPDATE jobs SET state = 'synced' WHERE job_id = ?", [.text(jobs[0].jobID)])
+        try s.h.db.execute("UPDATE jobs SET state = 'blocked' WHERE job_id = ?", [.text(jobs[1].jobID)])
+        #expect(try s.jobs.requeueSynced(captureID: id) == 1)
+        let after = Dictionary(uniqueKeysWithValues: try s.jobs.jobs(captureID: id).map { ($0.jobID, $0.state) })
+        #expect(after[jobs[0].jobID] == .pending)
+        #expect(after[jobs[1].jobID] == .blocked)
+        #expect(try s.jobs.requeueSynced(captureID: id) == 0)
+    }
+
+    @Test func requeueSyncedSkipsDisabledDestination() async throws {
+        let s = try Stores(); defer { s.h.cleanup() }
+        _ = try s.destinations.connect(destination("dest-a", account: "a"))
+        _ = try s.destinations.connect(destination("dest-b", account: "b"))
+        #expect(try s.status("dest-a") == "disabled")
+        let id = try await s.capture()
+        try s.h.db.execute("""
+            INSERT INTO jobs(job_id, capture_id, destination_id, state, updated_at_ms)
+            VALUES ('job-old', ?, 'dest-a', 'synced', 0)
+            """, [.text(id)])
+        try s.h.db.execute("UPDATE jobs SET state = 'synced' WHERE capture_id = ?", [.text(id)])
+        #expect(try s.jobs.requeueSynced(captureID: id) == 1)
+        let after = Dictionary(uniqueKeysWithValues: try s.jobs.jobs(captureID: id).map { ($0.destinationID, $0.state) })
+        #expect(after["dest-a"] == .synced)
+        #expect(after["dest-b"] == .pending)
+
+        // A signed-out destination's job is requeued too: it is claimed once the account is back.
+        try s.h.db.execute("UPDATE jobs SET state = 'synced' WHERE capture_id = ?", [.text(id)])
+        try s.destinations.signOut(destinationID: "dest-b")
+        #expect(try s.jobs.requeueSynced(captureID: id) == 1)
+        #expect(try s.jobs.jobs(captureID: id).first { $0.destinationID == "dest-b" }?.state == .pending)
+    }
+
     @Test func leaseLostRejectsStaleOwner() async throws {
         let s = try Stores(); defer { s.h.cleanup() }
         _ = try s.destinations.connect(destination("dest-a", account: "a"))

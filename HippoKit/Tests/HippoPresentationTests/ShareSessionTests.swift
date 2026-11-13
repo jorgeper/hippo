@@ -31,13 +31,13 @@ private struct Rig {
                                   location: { _ in location }, now: { t0 }, timeZone: la)
     }
 
-    /// A draft already on disk (camera or pending share) with a voice session. The location is never re-read.
-    init(isPendingShare: Bool = false, prepared: (IntakeDirectory) throws -> PreparedCapture) throws {
+    /// A draft already on disk (camera) with a voice session. The location is never re-read.
+    init(prepared: (IntakeDirectory) throws -> PreparedCapture) throws {
         ts = try TestStore()
         intake = IntakeDirectory(storeRoot: ts.base.appendingPathComponent("Hippo"))
         let voice = RecordingSession(intake: intake, recorder: recorder, permission: { .granted }, now: { t0 })
         model = ShareSessionModel(store: ts.store, intake: intake, prepared: try prepared(intake),
-                                  isPendingShare: isPendingShare, destinationName: "Dropbox", voice: voice,
+                                  destinationName: "Dropbox", voice: voice,
                                   location: { _ in Issue.record("a prepared capture re-read the location"); return nil },
                                   now: { t0 })
     }
@@ -261,7 +261,7 @@ private func stagedPhoto(_ intake: IntakeDirectory, method: CaptureMethod = .cam
         #expect(ShareSessionModel.message(for: .attachmentsFailed([AttachmentFailure(index: 0, reason: "x")]))
                 == "1 item couldn't be saved.")
     }
-    // MARK: - Capture sheet: prepared drafts, voice comment, hand-off
+    // MARK: - Capture sheet: prepared drafts, voice comment
 
     @Test func preparedStartsReadyWithSummary() async throws {
         var staged: PreparedCapture?
@@ -278,7 +278,6 @@ private func stagedPhoto(_ intake: IntakeDirectory, method: CaptureMethod = .cam
         #expect(rig.model.previewSymbol == "photo")
         #expect(rig.model.previewImageURL == prepared.previewImageURL)
         #expect(rig.model.partialNotice == nil)
-        #expect(rig.model.isPendingShare == false)
         await rig.model.prepare() // no-op
         #expect(rig.model.state == .ready)
     }
@@ -329,88 +328,6 @@ private func stagedPhoto(_ intake: IntakeDirectory, method: CaptureMethod = .cam
         #expect(rows[0].attachments[0].uti == "public.heic")
         #expect(rows[0].userNote == "on the way home")
         #expect(rig.captureDirectories.isEmpty)
-    }
-
-    @Test func deferWritesPendingWithCommentAndLocation() async throws {
-        let rig = try Rig([try jpeg()], location: fix)
-        defer { rig.ts.cleanup() }
-        #expect(rig.model.voice == nil)
-        await rig.model.prepare()
-        rig.model.comment = "  hello "
-        await rig.model.deferForVoiceComment()
-        #expect(rig.model.state == .deferred)
-        #expect(rig.model.handoffFailed == false)
-        let loaded = rig.intake.pendingCaptures()
-        #expect(loaded.dropped == 0)
-        let pending = try #require(loaded.captures.first)
-        #expect(loaded.captures.count == 1)
-        #expect(pending.draft.userNote == "hello")
-        #expect(pending.draft.location == fix)
-        #expect(rig.captureDirectories.map(\.lastPathComponent) == [pending.draft.captureID.uuidString.lowercased()])
-        #expect(pending.draft.attachments.count == 1)
-        for attachment in pending.draft.attachments {
-            guard case .file(let url) = attachment.body else { Issue.record("expected a file body"); continue }
-            #expect(FileManager.default.fileExists(atPath: url.path))
-        }
-        #expect(pending.previewImageURL.map { FileManager.default.fileExists(atPath: $0.path) } == true)
-        // Deferred: Save does nothing; the app commits it.
-        await rig.model.save()
-        #expect(rig.model.state == .deferred)
-        #expect(try rig.committed().isEmpty)
-    }
-
-    @Test func deferFailureKeepsReadyAndFlags() async throws {
-        let rig = try Rig([try jpeg()], location: fix)
-        defer { rig.ts.cleanup() }
-        await rig.model.prepare()
-        let dir = try #require(rig.captureDirectories.first)
-        let fm = FileManager.default
-        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
-        await rig.model.deferForVoiceComment()
-        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
-        #expect(rig.model.handoffFailed)
-        #expect(rig.model.state == .ready)
-        #expect(rig.intake.pendingCaptures().captures.isEmpty)
-        #expect(ShareSessionModel.handoffFailedMessage == "Hippo couldn't hand this off. Save without a comment, or try again.")
-        #expect(ShareSessionModel.handoffMessage == "Open Hippo to record your comment")
-    }
-
-    @Test func pendingSaveRemovesPendingFileAfterCommit() async throws {
-        let rig = try Rig(isPendingShare: true) { intake in
-            var staged = try stagedPhoto(intake, method: .shareExtension)
-            staged.draft.userNote = "typed in the extension"
-            staged.draft.location = fix
-            try intake.savePending(PendingCapture(draft: staged.draft, previewImageURL: staged.previewImageURL,
-                                                  totalBytes: staged.totalBytes, savedAt: t0))
-            return PreparedCapture(try #require(intake.pendingCaptures().captures.first))
-        }
-        defer { rig.ts.cleanup() }
-        #expect(rig.model.isPendingShare)
-        #expect(rig.model.comment == "typed in the extension")
-        let id = try #require(rig.captureDirectories.first.flatMap { UUID(uuidString: $0.lastPathComponent) })
-        #expect(rig.intake.isPending(captureID: id))
-        await rig.model.save()
-        #expect(rig.model.state == .saved)
-        let rows = try rig.committed()
-        #expect(rows.count == 1)
-        #expect(rows[0].userNote == "typed in the extension")
-        #expect(rows[0].captureLocation != nil)
-        #expect(!rig.intake.isPending(captureID: id))
-        #expect(rig.captureDirectories.isEmpty)
-        await rig.model.save()
-        #expect(try rig.committed().count == 1)
-    }
-
-    @Test func cancelKeepsPendingShare() async throws {
-        let rig = try Rig(isPendingShare: true) { intake in
-            let staged = try stagedPhoto(intake, method: .shareExtension)
-            try intake.savePending(PendingCapture(draft: staged.draft, previewImageURL: staged.previewImageURL,
-                                                  totalBytes: staged.totalBytes, savedAt: t0))
-            return PreparedCapture(try #require(intake.pendingCaptures().captures.first))
-        }
-        defer { rig.ts.cleanup() }
-        rig.model.cancel()
-        #expect(rig.intake.pendingCaptures().captures.count == 1)
     }
 
     @Test func rejectedCommitKeepsRecordingForRetry() async throws {

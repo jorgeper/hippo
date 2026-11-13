@@ -24,14 +24,13 @@ public struct IntakeDirectory: Sendable {
         try? FileManager.default.removeItem(at: directory(for: captureID))
     }
 
-    /// Removes every intake entry (except pending captures) last modified more than `olderThan` seconds before `now`.
+    /// Removes every intake entry last modified more than `olderThan` seconds before `now`.
     public func sweep(olderThan: TimeInterval, now: Date) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey])
         else { return }
         let cutoff = now.addingTimeInterval(-olderThan)
         for entry in entries {
-            if fm.fileExists(atPath: entry.appendingPathComponent(Self.pendingFileName).path) { continue }
             guard let modified = try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
                   modified < cutoff else { continue }
             try? fm.removeItem(at: entry)

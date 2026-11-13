@@ -23,6 +23,7 @@ public struct TranscriptEnricher: Enricher {
     public var version: Int { 1 }
     public var usesNetwork: Bool { false }
     public var readsAttachmentBytes: Bool { true }
+    public var readsCommentAudio: Bool { true }
     public var inputs: Set<FacetKind> { [] }
 
     private let transcriber: any Transcribing
@@ -34,22 +35,48 @@ public struct TranscriptEnricher: Enricher {
 
     public func applies(to m: CaptureMetadata) -> Bool { m.attachments.contains(where: Self.isAudio) }
 
+    public func applies(to m: CaptureMetadata, comments: [CaptureComment]) -> Bool {
+        applies(to: m) || comments.contains { $0.audio != nil }
+    }
+
     private static func isAudio(_ a: Attachment) -> Bool { UTType(a.uti)?.conforms(to: .audio) ?? false }
 
+    /// Transcribes each audio attachment and audio comment, keyed by attachment or comment ID. An ID that
+    /// already has an item in the current `ok` transcript facet (same version) keeps it without running the
+    /// recognizer again, so a new comment doesn't re-transcribe the capture. An attachment whose file is
+    /// absent (trimmed by Save space) and has no such item is skipped.
     public func run(_ input: EnricherInput) async throws -> EnricherOutput {
+        var known: [String: TranscriptItem] = [:]
+        if let facet = input.current?[.transcript], facet.status == .ok, facet.version == version,
+           let data = facet.decodeData(TranscriptData.self) {
+            for item in data.items where known[item.attachmentID] == nil { known[item.attachmentID] = item }
+        }
         var items: [TranscriptItem] = []
-        for a in input.metadata.attachments where Self.isAudio(a) {
+        func transcribe(_ relativePath: String, id: String, duration: Double?) async throws {
             try Task.checkCancellation()
-            if let d = a.media?.durationSeconds, d > Self.maxSeconds { continue }
-            let url = input.packageURL.appendingPathComponent(a.relativePath)
+            if let item = known[id] { items.append(item); return }
+            if let d = duration, d > Self.maxSeconds { return }
+            let url = input.packageURL.appendingPathComponent(relativePath)
             let result: (text: String, segments: [TranscriptSegment])
             do { result = try await transcriber.transcribe(fileURL: url, locale: locale) }
             catch let e as EnrichmentError { throw e }
             catch is CancellationError { throw CancellationError() }
             catch { throw EnrichmentError.transient(code: "transcription_failed") }
-            guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            items.append(TranscriptItem(attachmentID: a.attachmentID, text: result.text,
+            guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            items.append(TranscriptItem(attachmentID: id, text: result.text,
                                         locale: locale.identifier, segments: result.segments))
+        }
+        for a in input.metadata.attachments where Self.isAudio(a) {
+            if known[a.attachmentID] == nil,
+               !FileManager.default.fileExists(atPath: input.packageURL.appendingPathComponent(a.relativePath).path) {
+                continue
+            }
+            try await transcribe(a.relativePath, id: a.attachmentID, duration: a.media?.durationSeconds)
+        }
+        // A comment's audio is keyed by its comment ID.
+        for c in input.comments {
+            guard let audio = c.audio else { continue }
+            try await transcribe(audio.relativePath, id: c.commentID, duration: audio.media?.durationSeconds)
         }
         if items.isEmpty { return EnricherOutput(status: .empty, data: nil, provenance: "speech_analyzer") }
         return EnricherOutput(status: .ok, data: try .payload(TranscriptData(items: items)), provenance: "speech_analyzer")

@@ -53,11 +53,11 @@ Device scenarios to run by hand are in [`docs/acceptance.md`](docs/acceptance.md
 
 Debug builds offer a "Developer folder" destination in Settings. It "uploads" into `HippoDevRemote/` next to the store in the App Group container, so the full sync path can be exercised without an account. Release builds do not include it. The UI tests launch with `-HippoResetStore YES` (DEBUG only), which wipes the store and this folder first.
 
-### Camera and voice comments
+### Camera, voice comments and comments on a capture
 
 The Camera button on the timeline opens the system camera. A photo or video you take becomes one capture (method `camera`, saved as HEIC or QuickTime), and the capture sheet opens so you can add a typed note and a voice comment before saving. The camera sheet records the comment in place.
 
-The share sheet can take a voice comment too, but iOS does not let a Share Extension use the microphone. So tapping the mic there saves what you have so far as a pending share, shows "Open Hippo to record your comment", and tries to open Hippo (`hippo://pending`). Hippo may not open by itself. If it does not, the share waits in Hippo and appears when you open the app. Hippo then shows the capture sheet with the mic recording at once. Saving makes one capture that keeps the time of the share. "Save without comment" drops the voice recording and keeps any typed note. If a share cannot be saved right now (for example, the iPhone is out of space), the sheet offers "Later": the share stays in Hippo and comes back the next time you open the app. There is no way to discard a share from the app.
+The share sheet takes a typed comment only. Any capture's screen has a "Comments" section (the note and recording from capture time, then anything added later with when it was added) and a bottom bar with Note and Record buttons that add a comment after the fact. Comments live in `comments/` inside the capture's package, are uploaded with it, are searchable when typed, and are transcribed when they are audio. A comment cannot be edited or deleted; add another instead.
 
 Settings → Camera → "Also save to Photos" is off by default. When it is on, photos and videos you take in Hippo are also added to your Photos library (Hippo asks for add-only access the first time). If that save fails, Hippo only writes a `camera.library_save` line to its log.
 
@@ -75,7 +75,8 @@ Hippo saves a location with a capture only if you turn on "Save location with ca
 - Uploads are a copy, not a backup policy. Deleting the app deletes local captures that have not been uploaded.
 - A new install starts empty; Settings → Download from Dropbox brings recent captures back in light form.
 - Background upload timing is up to iOS.
-- A pending share waits while another sheet or the camera is open. It appears when the Note, Record, camera, review or filter sheet closes, and otherwise on the next launch or activation.
+- Comments can't be edited or deleted.
+- Download from Dropbox brings back captures without their comments; the comments stay in Dropbox.
 
 ## Dropbox
 
@@ -221,7 +222,7 @@ On the phone the store lives in the App Group container, under `Library/` so tha
 
 ```
 <App Group>/Library/Application Support/Hippo/
-  captures/YYYY/MM/DD/<capture-id>/   committed packages (metadata.json, content/, complete.json), immutable
+  captures/YYYY/MM/DD/<capture-id>/   committed packages (metadata.json, content/, complete.json, and comments/ once any are added), immutable apart from appended comments
   staging/                            in-progress commits and packages being deleted; leftovers removed at launch
   hippo.sqlite                        index, upload jobs and destinations (WAL; shared by app and extension)
   diagnostics.json                    redacted counts, safe error codes and versions; no content, IDs or locations

@@ -29,6 +29,17 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(open.count == 3)
     }
 
+    @Test func forgetRemovesRow() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let tasks = EnrichmentTaskStore(db: h.db)
+        let a = try await h.add(at: t0, note: "a").metadata.captureID
+        try tasks.set(captureID: a, kind: .transcript, version: 1, status: "ok", now: t0)
+        #expect(try tasks.capturesNeeding(kind: .transcript, version: 1, limit: 10).isEmpty)
+        try tasks.forget(captureID: a, kind: .transcript)
+        #expect(try tasks.task(captureID: a, kind: .transcript) == nil)
+        #expect(try tasks.capturesNeeding(kind: .transcript, version: 1, limit: 10) == [a])
+    }
+
     @Test func taskStoreClaimOrder() async throws {
         let h = try IndexHarness(); defer { h.cleanup() }
         let tasks = EnrichmentTaskStore(db: h.db)

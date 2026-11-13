@@ -121,6 +121,43 @@ public final class JobStore: Sendable {
             """, [])
     }
 
+    /// Marks synced only if captures.comment_count still equals `commentCount`; otherwise requeues (pending)
+    /// and returns false. Throws `leaseLost` / `notFound` like `markSynced`.
+    public func markSyncedIfCommentsUnchanged(jobID: String, owner: String, captureID: String,
+                                              commentCount: Int) throws -> Bool {
+        let outcome: Bool = try db.transaction { tx in
+            let updated = try tx.query("""
+                UPDATE jobs SET state = 'synced', last_error_code = NULL, next_attempt_at_ms = NULL,
+                  lease_owner = NULL, lease_expires_at_ms = NULL, updated_at_ms = ?
+                WHERE job_id = ? AND lease_owner = ?
+                  AND (SELECT comment_count FROM captures WHERE capture_id = ?) = ? RETURNING job_id
+                """, [.int(Self.ms(Date())), .text(jobID), .text(owner), .text(captureID), .int(Int64(commentCount))])
+            if !updated.isEmpty { return true }
+            if try tx.query("SELECT 1 FROM jobs WHERE job_id = ?", [.text(jobID)]).isEmpty { throw JobError.notFound }
+            if try tx.query("SELECT 1 FROM jobs WHERE job_id = ? AND lease_owner = ?", [.text(jobID), .text(owner)]).isEmpty {
+                throw JobError.leaseLost
+            }
+            try tx.execute("""
+                UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at_ms = NULL,
+                  next_attempt_at_ms = NULL, updated_at_ms = ? WHERE job_id = ?
+                """, [.int(Self.ms(Date())), .text(jobID)])
+            return false
+        }
+        return outcome
+    }
+
+    /// Requeues the capture's synced jobs whose destination is `active` or `signed_out` (claimed again once it
+    /// is active); returns how many. A job on a `disabled` destination (a previous account) stays synced: it would
+    /// never be claimed, and the capture would wait to upload for good.
+    public func requeueSynced(captureID: String) throws -> Int {
+        try db.query("""
+            UPDATE jobs SET state = 'pending', lease_owner = NULL, lease_expires_at_ms = NULL,
+              next_attempt_at_ms = NULL, updated_at_ms = ? WHERE capture_id = ? AND state = 'synced'
+              AND destination_id IN (SELECT destination_id FROM destinations WHERE status IN ('active', 'signed_out'))
+            RETURNING job_id
+            """, [.int(Self.ms(Date())), .text(captureID)]).count
+    }
+
     /// Records a failed attempt: increments `attempt_count` and releases the lease. `state` must be a
     /// failure state (`retryableFailure`, `needsAuthentication`, `blocked` or `paused`), otherwise
     /// it throws `JobError.invalidState` and changes nothing.

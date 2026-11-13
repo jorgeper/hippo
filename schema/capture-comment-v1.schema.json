@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hippo.invalid/schema/capture-comment-v1.schema.json",
+  "title": "Hippo capture comment (comments/<comment-id>.json), schema version 1",
+  "description": "One comment added to a package after capture. Append-only: never listed in complete.json. Written after its audio file, so the json is the comment's marker. Unknown additional properties must be ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version", "capture_id", "comment_id", "added_at", "local_datetime", "timezone_identifier",
+    "utc_offset_seconds", "producer"
+  ],
+  "oneOf": [
+    { "required": ["text"], "not": { "required": ["audio"] } },
+    { "required": ["audio"], "not": { "required": ["text"] } }
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "capture_id": { "$ref": "#/$defs/uuid" },
+    "comment_id": { "$ref": "#/$defs/uuid" },
+    "added_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 UTC instant, millisecond precision, e.g. 2026-11-07T18:04:00.000Z."
+    },
+    "local_datetime": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{2}:[0-9]{2}$",
+      "description": "Wall-clock time where the comment was added, whole seconds, numeric offset."
+    },
+    "timezone_identifier": { "type": "string", "minLength": 1, "description": "IANA zone, e.g. America/Los_Angeles." },
+    "utc_offset_seconds": { "type": "integer", "description": "Seconds east of UTC at added_at." },
+    "producer": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["app_version", "build", "os_version"],
+      "properties": {
+        "app_version": { "type": "string" },
+        "build": { "type": "string" },
+        "os_version": { "type": "string" }
+      }
+    },
+    "text": { "type": "string", "minLength": 1, "description": "The typed comment, trimmed, non-empty." },
+    "audio": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["relative_path", "uti", "byte_count", "sha256"],
+      "properties": {
+        "relative_path": { "type": "string", "pattern": "^comments/[0-9a-f-]{36}\\.[a-z0-9]{1,10}$" },
+        "uti": { "type": "string", "minLength": 1 },
+        "mime_type": { "type": "string" },
+        "byte_count": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "media": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": { "duration_seconds": { "type": "number", "minimum": 0 } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

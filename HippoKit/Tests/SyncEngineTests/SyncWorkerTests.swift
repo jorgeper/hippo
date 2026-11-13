@@ -636,3 +636,165 @@ private func expectByteIdentical(_ h: SyncHarness, _ pkg: CommittedPackage) thro
         #expect(failed.dest == "filesystem")
     }
 }
+
+// MARK: - Comments (comments design §5.3, §6)
+
+extension SyncHarness {
+    var commentWriter: CommentWriter {
+        CommentWriter(layout: layout, producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"))
+    }
+
+    /// Writes a comment into the package and records it in the index, as `HippoStore.addComment` does.
+    @discardableResult
+    func comment(_ draft: CommentDraft, on pkg: CommittedPackage) throws -> CaptureComment {
+        let c = try commentWriter.add(draft, to: pkg, now: t0, timeZone: TimeZone(identifier: "UTC")!)
+        try index.recordComment(captureID: pkg.metadata.captureID, c, replacesExcerpt: false)
+        _ = try jobs.requeueSynced(captureID: pkg.metadata.captureID)
+        return c
+    }
+
+    func audioDraft(bytes: Int = 3_000) throws -> CommentDraft {
+        var data = Data(count: bytes)
+        for i in 0..<bytes { data[i] = UInt8(truncatingIfNeeded: i &* 17 &+ 3) }
+        let url = root.deletingLastPathComponent().appendingPathComponent("rec-\(UUID().uuidString).m4a")
+        try data.write(to: url)
+        return .audio(fileURL: url, uti: "com.apple.m4a-audio", mimeType: "audio/mp4", durationSeconds: 1.5)
+    }
+}
+
+extension SyncWorkerTests {
+    @Test func uploadsCommentFilesAfterMarkerAudioFirst() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        let c = try h.comment(try h.audioDraft(), on: pkg)
+        let audioPath = try #require(c.audio).relativePath
+
+        let result = await h.worker().runOnce()
+
+        #expect(result == SyncPassResult(synced: 1, failed: 0, idle: false))
+        let job = try h.job(pkg)
+        #expect(job.state == .synced)
+        let dir = pkg.relativeDirectory
+        #expect(h.uploads == ["upload \(pkg.metadataPath)", "upload \(pkg.attachmentPath)", "upload \(pkg.markerPath)",
+                              "upload \(dir)/\(audioPath)", "upload \(dir)/\(c.relativePath)"])
+        #expect(h.faults.operations.filter { $0 == "ensure \(dir)/comments" }.count == 1)
+        #expect(try h.jobs.receipts(jobID: job.jobID).map(\.relativePath).sorted()
+                == (pkg.marker.files.map(\.relativePath) + ["complete.json", audioPath, c.relativePath]).sorted())
+        try expectByteIdentical(h, pkg)
+        // The manifest never lists comments: the remote package still validates.
+        #expect(isComplete(PackageValidator.validate(directory: h.remoteURL(pkg))))
+    }
+
+    @Test func commentAddedAfterSyncUploadsOnlyTheCommentFiles() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        #expect(await h.worker().runOnce().synced == 1)
+        let uploadsBefore = h.uploads.count
+
+        let c = try h.comment(.text("added later"), on: pkg)
+        #expect(try h.job(pkg).state == .pending)
+        #expect(await h.worker().runOnce().synced == 1)
+
+        #expect(Array(h.uploads.dropFirst(uploadsBefore)) == ["upload \(pkg.relativeDirectory)/\(c.relativePath)"])
+        #expect(try h.job(pkg).state == .synced)
+    }
+
+    // The race of design §6: a comment lands after the worker listed comments/ but before it marks the job
+    // synced. The package is already synced and has one comment; the first comment upload adds a second one.
+    @Test func commentAddedDuringUploadKeepsJobPending() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        #expect(await h.worker().runOnce().synced == 1)
+        let first = try h.comment(.text("first"), on: pkg)
+        #expect(try h.job(pkg).state == .pending)
+
+        let calls = Counter()
+        let added = HookBox<CaptureComment>()
+        let (writer, index, jobs) = (h.commentWriter, h.index, h.jobs)
+        let adapter = HookedAdapter(inner: h.adapter, beforeUpload: { _ in
+            guard calls.next() == 1 else { return }
+            let c = try writer.add(.text("second"), to: pkg, now: t0.addingTimeInterval(1), timeZone: TimeZone(identifier: "UTC")!)
+            try index.recordComment(captureID: pkg.metadata.captureID, c, replacesExcerpt: false)
+            _ = try jobs.requeueSynced(captureID: pkg.metadata.captureID)
+            added.value = c
+        })
+
+        // One job per pass, so the requeued job is observed before the loop reclaims it.
+        let pass = await h.worker(adapter).runOnce(maxJobs: 1)
+
+        #expect(pass == SyncPassResult(synced: 0, failed: 0, idle: false))
+        let second = try #require(added.value)
+        let job = try h.job(pkg)
+        #expect(job.state == .pending)
+        #expect(try h.db.query("SELECT lease_owner FROM jobs WHERE job_id = ?", [.text(job.jobID)])[0]
+                    .string("lease_owner") == nil)
+        #expect(job.lastErrorCode == nil)
+        let receipted = Set(try h.jobs.receipts(jobID: job.jobID).map(\.relativePath))
+        #expect(receipted.isSuperset(of: Set(pkg.marker.files.map(\.relativePath) + ["complete.json", first.relativePath])))
+        #expect(!receipted.contains(second.relativePath))
+        #expect(!h.uploads.contains("upload \(pkg.relativeDirectory)/\(second.relativePath)"))
+
+        // The next pass uploads the second comment and marks the job synced.
+        #expect(await h.worker(adapter).runOnce() == SyncPassResult(synced: 1, failed: 0, idle: false))
+        #expect(h.uploads.last == "upload \(pkg.relativeDirectory)/\(second.relativePath)")
+        #expect(try h.job(pkg).state == .synced)
+        #expect(try Set(h.jobs.receipts(jobID: job.jobID).map(\.relativePath)).contains(second.relativePath))
+        try expectByteIdentical(h, pkg)
+    }
+
+    // The same race with the default `maxJobs`: the job the mark sent back to pending is reclaimed and finished
+    // within the one pass.
+    @Test func commentAddedDuringUploadIsReclaimedInTheSamePass() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        #expect(await h.worker().runOnce().synced == 1)
+        let first = try h.comment(.text("first"), on: pkg)
+
+        let calls = Counter()
+        let added = HookBox<CaptureComment>()
+        let (writer, index, jobs) = (h.commentWriter, h.index, h.jobs)
+        let adapter = HookedAdapter(inner: h.adapter, beforeUpload: { _ in
+            guard calls.next() == 1 else { return }
+            let c = try writer.add(.text("second"), to: pkg, now: t0.addingTimeInterval(1), timeZone: TimeZone(identifier: "UTC")!)
+            try index.recordComment(captureID: pkg.metadata.captureID, c, replacesExcerpt: false)
+            _ = try jobs.requeueSynced(captureID: pkg.metadata.captureID)
+            added.value = c
+        })
+
+        #expect(await h.worker(adapter).runOnce() == SyncPassResult(synced: 1, failed: 0, idle: false))
+
+        let second = try #require(added.value)
+        #expect(calls.next() == 3)  // two uploads in the pass (first's json, then second's json)
+        let job = try h.job(pkg)
+        #expect(job.state == .synced)
+        let receipted = Set(try h.jobs.receipts(jobID: job.jobID).map(\.relativePath))
+        #expect(receipted.isSuperset(of: [first.relativePath, second.relativePath]))
+        try expectByteIdentical(h, pkg)
+    }
+
+    @Test func pendingCommentIsSkipped() async throws {
+        let h = try SyncHarness(); defer { h.cleanup() }
+        let pkg = try await h.capture()
+        let c = try h.comment(try h.audioDraft(), on: pkg)
+        // The json without its audio file is a pending comment (a partial copy, say): it is not uploaded.
+        try FileManager.default.removeItem(at: pkg.directoryURL.appendingPathComponent(try #require(c.audio).relativePath))
+
+        let result = await h.worker().runOnce()
+
+        #expect(result == SyncPassResult(synced: 1, failed: 0, idle: false))
+        #expect(try h.job(pkg).state == .synced)
+        #expect(!h.uploads.contains { $0.contains("/comments/") })
+        #expect(!h.faults.operations.contains("ensure \(pkg.relativeDirectory)/comments"))
+        #expect(!FileManager.default.fileExists(atPath: h.remoteURL(pkg).appendingPathComponent("comments").path))
+    }
+}
+
+/// A value set from a `@Sendable` hook and read after it ran.
+private final class HookBox<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: T?
+    var value: T? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}

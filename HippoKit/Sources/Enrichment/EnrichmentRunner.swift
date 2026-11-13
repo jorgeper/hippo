@@ -119,9 +119,12 @@ public actor EnrichmentRunner {
     private func scheduleOne(captureID id: String, _ e: any Enricher) throws -> Bool {
         let t = now()
         let metadata: CaptureMetadata
+        let directory: String
         do {
-            guard let m = try index.metadata(captureID: id, layout: layout) else { return false }  // deleted
+            guard let m = try index.metadata(captureID: id, layout: layout),
+                  let dir = try index.relativeDirectory(captureID: id) else { return false }  // deleted
             metadata = m
+            directory = dir
         } catch let error as DatabaseError {
             throw error
         } catch {
@@ -131,10 +134,14 @@ public actor EnrichmentRunner {
                                     nextAttemptAt: nil, incrementAttempts: true, now: t)
             return false
         }
+        let comments = PackageComments.load(directory: layout.packageURL(relativeDirectory: directory)).comments
         // The local originals are gone, so a kind that reads their bytes can't run; its row keeps its status.
         // A capture with no row for the kind gets a terminal one, and a row at another version moves to this
         // one in place, so it isn't listed again every pass; the restorer clears it after a download.
-        if e.readsAttachmentBytes, !(try trimmedPaths(id)).isEmpty {
+        // An audio comment can still be read (comment files are never trimmed), so it lifts the guard for a
+        // kind that reads comment audio.
+        let readableComment = e.readsCommentAudio && comments.contains { $0.audio != nil }
+        if e.readsAttachmentBytes, !readableComment, !(try trimmedPaths(id)).isEmpty {
             if let existing = try tasks.task(captureID: id, kind: e.kind) {
                 if existing.version != e.version {
                     try tasks.set(captureID: id, kind: e.kind, version: e.version, status: existing.status, now: t)
@@ -144,7 +151,7 @@ public actor EnrichmentRunner {
             }
             return false
         }
-        let applies = e.applies(to: metadata)
+        let applies = e.applies(to: metadata, comments: comments)
         try tasks.set(captureID: id, kind: e.kind, version: e.version, status: applies ? "pending" : "not_applicable",
                       now: t)
         return applies
@@ -272,11 +279,13 @@ public actor EnrichmentRunner {
 
         let metadata: CaptureMetadata
         let packageURL: URL
+        let comments: [CaptureComment]
         do {
             guard let m = try index.metadata(captureID: id, layout: layout),
                   let dir = try index.relativeDirectory(captureID: id) else { return .skipped }  // deleted
             metadata = m
             packageURL = layout.packageURL(relativeDirectory: dir)
+            comments = PackageComments.load(directory: packageURL).comments
         } catch {
             Self.log.error("\("enrichment_metadata_unreadable", privacy: .public)")
             record(task, status: "failed", code: "metadata_unreadable", nextAttemptAt: nil, countsAttempt: true)
@@ -294,7 +303,7 @@ public actor EnrichmentRunner {
         }
 
         let input = EnricherInput(captureID: id, metadata: metadata, packageURL: packageURL, noteBody: noteBody,
-                                  current: attempt.current)
+                                  current: attempt.current, comments: comments)
         let output: EnricherOutput
         log?.append(LogEvent(event: .enrichStarted, captureID: id, kind: task.kind.rawValue,
                              attempt: task.attemptCount + 1))

@@ -1,0 +1,15 @@
+{
+  "added_at" : "2026-11-07T18:04:00.000Z",
+  "capture_id" : "00000000-0000-4000-8000-000000000004",
+  "comment_id" : "00000000-0000-4000-8000-00000000c001",
+  "local_datetime" : "2026-11-07T10:04:00-08:00",
+  "producer" : {
+    "app_version" : "0.1.0",
+    "build" : "1",
+    "os_version" : "fixture"
+  },
+  "schema_version" : 1,
+  "text" : "Bought this one.",
+  "timezone_identifier" : "America/Los_Angeles",
+  "utc_offset_seconds" : -28800
+}

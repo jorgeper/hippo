@@ -1,5 +1,7 @@
 # Hippo: camera button and voice comment — design
 
+> Superseded on 2026-11-10 by `2026-11-10-hippo-comments-design.md` for §3–§4.4 (the share-sheet hand-off was removed). The camera button and the in-sheet voice comment stand.
+
 Date: 2026-11-09. Follows Plan 3 (Dropbox). Roadmap: `docs/roadmap.md`. Jorge approved the behaviour in conversation and asked to build without further questions; the calls marked **(my call)** are mine.
 
 ## 1. Intent

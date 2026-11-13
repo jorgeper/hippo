@@ -2,37 +2,16 @@ import SwiftUI
 import UIKit
 import HippoPresentation
 
-/// The capture sheet's voice comment block: a 56 pt version of the recorder's Record button with a
-/// caption. In `.handoff` mode a tap hands the draft to the app; in `.record` mode it records in place.
+/// The capture sheet's voice comment block: the 56 pt record `CaptureButton` with a caption.
+/// States: idle, recording, stopped (or interrupted), denied and failed.
 struct VoiceCommentControl: View {
-    let voice: CaptureSheetView.Voice
-    let disabled: Bool
-
-    var body: some View {
-        Group {
-            switch voice {
-            case .handoff(let handOff):
-                HStack(spacing: 12) {
-                    MicButton(recording: false, action: handOff)
-                    Text("Record a comment").foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-            case .record(let session):
-                RecordingBlock(session: session)
-            }
-        }
-        .disabled(disabled)
-    }
-}
-
-/// The in-place states: idle, recording, stopped (or interrupted), denied and failed.
-private struct RecordingBlock: View {
     let session: RecordingSession
+    let disabled: Bool
     @State private var confirmingReplace = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            MicButton(recording: isRecording) {
+            CaptureButton(kind: .record(recording: isRecording), identifier: "voice-comment-button") {
                 switch session.state {
                 case .recording: session.stop()
                 case .stopped: confirmingReplace = true
@@ -54,6 +33,7 @@ private struct RecordingBlock: View {
             }
             Button("Keep", role: .cancel) {}
         }
+        .disabled(disabled)
     }
 
     private var isRecording: Bool {
@@ -94,29 +74,5 @@ private struct RecordingBlock: View {
         case .failed(let message):
             Text(message).foregroundStyle(.red)
         }
-    }
-}
-
-/// The recorder's Record button at 56 pt: a red disc in a secondary ring, a red square while recording.
-private struct MicButton: View {
-    let recording: Bool
-    let action: () -> Void
-    @Environment(\.isEnabled) private var isEnabled
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle().strokeBorder(.secondary, lineWidth: 3).frame(width: 56, height: 56)
-                if recording {
-                    RoundedRectangle(cornerRadius: 5).fill(.red).frame(width: 23, height: 23)
-                } else {
-                    Circle().fill(.red).frame(width: 46, height: 46)
-                }
-            }
-            .opacity(isEnabled ? 1 : 0.4)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(recording ? "Stop" : "Record a comment")
-        .accessibilityIdentifier("voice-comment-button")
     }
 }

@@ -98,6 +98,15 @@ struct LogLineTests {
                 == "Couldn't save to Photos · lookup_failed")
     }
 
+    @Test func commentLines() {
+        #expect(line(LogEvent(event: .commentAdded, captureID: "c1", kind: "text")).text == "Comment added")
+        #expect(line(LogEvent(event: .commentAdded, captureID: "c1", kind: "audio")).text == "Comment added · audio")
+        #expect(line(LogEvent(event: .commentSaveFailed, captureID: "c1", kind: "text", code: "local_package_invalid")).text
+                == "Couldn't save comment · local_package_invalid")
+        #expect(line(LogEvent(event: .commentSaveFailed, captureID: "c1", kind: "audio", code: "insufficient_space")).text
+                == "Couldn't save comment · insufficient_space")
+    }
+
     @Test func clockIgnoresTwelveHourLocale() {
         var e = LogEvent(event: .appLaunch)
         e.t = now

@@ -85,6 +85,8 @@ public struct LogLine: Equatable, Sendable, Identifiable {
             }
         case .captureDeleted: return "Deleted from this iPhone"
         case .captureSaveFailed: return join(["Save failed", e.code])
+        case .commentAdded: return join(["Comment added", e.kind == "audio" ? "audio" : nil])
+        case .commentSaveFailed: return join(["Couldn't save comment", e.code])
         case .enrichQueued: return join([kind, "queued"])
         case .enrichStarted: return join([kind, "started", e.attempt.flatMap { $0 > 1 ? "attempt \($0)" : nil }])
         case .enrichFinished:

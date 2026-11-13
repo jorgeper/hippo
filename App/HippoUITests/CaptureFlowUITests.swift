@@ -58,9 +58,28 @@ final class CaptureFlowUITests: XCTestCase {
         confirm.tap()
         XCTAssertTrue(app.buttons["note-button"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["camera-button"].exists)
+        XCTAssertTrue(app.buttons["record-button"].exists)
         let gone = NSPredicate(format: "exists == false")
         let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone, object: row("Delete me"))], timeout: 10)
         XCTAssertEqual(result, .completed, "row still present")
+    }
+
+    /// Detail has the comment bar (Note and Record, no Camera), and a typed comment shows under "Comments".
+    func testDetailHasCommentButtons() throws {
+        createNote("Comment on me")
+        row("Comment on me").tap()
+        XCTAssertTrue(app.buttons["detail-menu"].waitForExistence(timeout: 10))
+        let note = app.buttons["note-button"]
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["record-button"].exists)
+        XCTAssertFalse(app.buttons["camera-button"].exists)
+
+        note.tap()
+        let editor = app.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.typeText("A later thought")
+        app.buttons["note-save"].tap()
+        XCTAssertTrue(app.staticTexts["A later thought"].waitForExistence(timeout: 10))
     }
 
     /// `make uitest` grants the microphone via simctl and sets HIPPO_UITEST_MIC_GRANTED=1 (forwarded with the

@@ -1,7 +1,7 @@
 import SQLite3
 
 enum Migrations {
-    static let currentVersion: Int64 = 4
+    static let currentVersion: Int64 = 5
 
     /// Applies pending migrations up to `target` inside `BEGIN IMMEDIATE`. `user_version` is re-read
     /// after the write lock is held, so two connections opening a fresh file cannot
@@ -25,8 +25,15 @@ enum Migrations {
                 try tx.executeScript(v4)
                 try tx.executeScript("PRAGMA user_version = 4")
             }
+            if version < 5, target >= 5 {
+                try tx.executeScript(v5)
+                try tx.executeScript("PRAGMA user_version = 5")
+            }
         }
     }
+
+    /// Number of comments added to a capture (`has_comment` stays the filter flag).
+    static let v5 = "ALTER TABLE captures ADD COLUMN comment_count INTEGER NOT NULL DEFAULT 0;"
 
     /// Remote-delete tombstones, local-delete records, per-destination change cursors, review items,
     /// "changed in the destination" records and trimmed attachments.

@@ -6,7 +6,7 @@ import SyncEngine
 import HippoPresentation
 import Enrichment
 
-/// One capture's details: preview, comment, shared content, captured and attachment facts, sync state.
+/// One capture's details: preview, comments, shared content, captured and attachment facts, sync state.
 struct CaptureDetailView: View {
     let environment: AppEnvironment
     let captureID: String
@@ -22,10 +22,17 @@ struct CaptureDetailView: View {
     @State private var developerMode = LocationService.settings.developerMode
     @State private var showsStripes = LocationService.settings.showsLayerStripes
     @State private var taskReload: Task<Void, Never>?
+    @State private var compose: Compose?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
     private static let log = Logger(subsystem: "com.jorgeper.hippo", category: "detail-ui")
+
+    /// The comment sheets: a typed comment or a recorded one.
+    private enum Compose: String, Identifiable {
+        case note, record
+        var id: String { rawValue }
+    }
 
     init(environment: AppEnvironment, captureID: String, onDeleted: @escaping () -> Void) {
         self.environment = environment
@@ -46,6 +53,23 @@ struct CaptureDetailView: View {
 
     var body: some View {
         content
+            .safeAreaInset(edge: .bottom) {
+                if model.detail != nil { commentBar }
+            }
+            .sheet(item: $compose, onDismiss: {
+                Task { await model.load() }
+                NotificationCenter.default.post(name: TimelineModel.enrichmentChanged, object: nil)
+            }) { compose in
+                switch compose {
+                case .note:
+                    NoteEditorView(environment: environment, location: LocationService.shared,
+                                   target: .comment(captureID: captureID))
+                case .record:
+                    RecorderView(environment: environment, location: LocationService.shared,
+                                 target: .comment(captureID: captureID))
+                        .presentationDetents([.medium])
+                }
+            }
             .navigationTitle("Capture")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -101,11 +125,54 @@ struct CaptureDetailView: View {
             }
     }
 
-    /// Trimmed attachments the large preview isn't already showing.
+    /// Trimmed attachments the large preview and the comment rows aren't already showing.
     private func otherRemoteOnly(_ detail: CaptureDetail) -> [RemoteOnlyAttachment] {
-        var shown: String?
-        if case .remoteOnly(let first) = detail.preview { shown = first.attachmentID }
-        return detail.remoteOnly.values.filter { $0.attachmentID != shown }.sorted { $0.relativePath < $1.relativePath }
+        var shown = Set(detail.comments.compactMap { $0.remoteOnly?.attachmentID })
+        if case .remoteOnly(let first) = detail.preview { shown.insert(first.attachmentID) }
+        return detail.remoteOnly.values.filter { !shown.contains($0.attachmentID) }
+            .sorted { $0.relativePath < $1.relativePath }
+    }
+
+    /// Note and Record for a comment on this capture: the timeline's bar, without the camera.
+    private var commentBar: some View {
+        HStack {
+            Spacer()
+            CaptureButton(kind: .note) { compose = .note }
+            Spacer()
+            CaptureButton(kind: .record(recording: false)) { compose = .record }
+            Spacer()
+        }
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    /// One comment: its text or player, when it was added, then its transcript as a row of its own so it
+    /// carries its own layer stripe.
+    @ViewBuilder private func commentRows(_ comment: CommentRow) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let remoteOnly = comment.remoteOnly {
+                RemoteOnlyAttachmentView(attachment: remoteOnly, model: model, large: false)
+            } else {
+                switch comment.body {
+                case .text(let text):
+                    Text(text).italic().textSelection(.enabled)
+                case .audio(let url, let durationText):
+                    AudioPlayerRow(url: url, durationText: durationText)
+                }
+            }
+            if let caption = comment.caption {
+                Text(caption).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .layerStripe(.bronze, shown: showsStripes)
+        if let transcript = comment.transcript {
+            Text(transcript)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .listRowSeparator(.hidden, edges: .top)
+                .layerStripe(comment.transcriptLayer ?? .silver, shown: showsStripes)
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -123,9 +190,9 @@ struct CaptureDetailView: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
-                if let comment = detail.comment {
-                    Section("Your comment") {
-                        Text(comment).italic().textSelection(.enabled).layerStripe(.bronze, shown: showsStripes)
+                if !detail.comments.isEmpty {
+                    Section("Comments") {
+                        ForEach(detail.comments) { commentRows($0) }
                     }
                 }
                 EnrichmentSections(detail: detail, showsStripes: showsStripes)

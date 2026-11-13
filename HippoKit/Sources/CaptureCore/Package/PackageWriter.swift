@@ -8,10 +8,14 @@ public struct CommittedPackage: Sendable {
     public var marker: CompletionMarker
     public var relativeDirectory: String
     public var directoryURL: URL
+    /// Complete comments under `comments/`, oldest first. Filled by `load(directory:layout:)`; `[]` otherwise.
+    public var comments: [CaptureComment] = []
 
-    public init(metadata: CaptureMetadata, marker: CompletionMarker, relativeDirectory: String, directoryURL: URL) {
+    public init(metadata: CaptureMetadata, marker: CompletionMarker, relativeDirectory: String, directoryURL: URL,
+                comments: [CaptureComment] = []) {
         self.metadata = metadata; self.marker = marker
         self.relativeDirectory = relativeDirectory; self.directoryURL = directoryURL
+        self.comments = comments
     }
 
     private static let noteBodyLimit = 4096
@@ -253,7 +257,7 @@ public final class PackageWriter: Sendable {
     }
 
     /// Runs `body`, mapping any error to `CaptureError.io` with a message free of paths and content.
-    private static func io<T>(_ step: String, _ body: () throws -> T) throws -> T {
+    static func io<T>(_ step: String, _ body: () throws -> T) throws -> T {
         do {
             return try body()
         } catch let error as CaptureError {
@@ -264,14 +268,14 @@ public final class PackageWriter: Sendable {
         }
     }
 
-    private static func writeDurably(_ data: Data, to url: URL, step: String) throws {
+    static func writeDurably(_ data: Data, to url: URL, step: String) throws {
         try io("write \(step)") { try data.write(to: url, options: .withoutOverwriting) }
         try io("sync \(step)") { try fullSync(url) }
     }
 
     /// Flushes a file or directory to stable storage (R14). `F_FULLFSYNC` also flushes the drive cache;
     /// filesystems that don't support it fall back to `fsync`. Read-only open, so 0444 copies sync too.
-    private static func fullSync(_ url: URL) throws {
+    static func fullSync(_ url: URL) throws {
         let fd = open(url.path, O_RDONLY | O_CLOEXEC)
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { close(fd) }

@@ -40,9 +40,6 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLSchemes: ["db-$(HIPPO_DROPBOX_APP_KEY)"]
             CFBundleURLName: com.jorgeper.hippo.dropbox
-          # The Share Extension opens hippo://pending to hand a share off for a voice comment.
-          - CFBundleURLSchemes: ["hippo"]
-            CFBundleURLName: com.jorgeper.hippo.app
         NSMicrophoneUsageDescription: "Hippo records voice notes and voice comments when you tap Record."
         NSCameraUsageDescription: "Hippo uses the camera to take pictures and record videos as captures."
         NSPhotoLibraryAddUsageDescription: "Hippo can also keep the pictures and videos you take in your Photos library. This is off unless you turn it on in Settings."

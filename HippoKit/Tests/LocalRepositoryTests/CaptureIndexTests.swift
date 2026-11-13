@@ -10,6 +10,67 @@ import HippoTestSupport
     private func date(_ s: Double) -> Date { Date(timeIntervalSince1970: 1_794_070_800 + s) }
     private func ids(_ page: [CaptureSummary]) -> [String] { page.map(\.id) }
 
+
+    private func comment(_ cid: String, _ id: String, text: String? = nil, at: Double = 0) -> CaptureComment {
+        CaptureComment(captureID: cid, commentID: id, addedAt: Date(timeIntervalSince1970: 1_794_070_800 + at),
+                       localDatetime: "2026-11-07T10:00:00", timezoneIdentifier: "America/Los_Angeles", utcOffsetSeconds: -28800,
+                       producer: Producer(appVersion: "0.1.0", build: "1", osVersion: "test"), text: text,
+                       audio: text == nil ? CommentAudio(relativePath: "comments/\(id).m4a", uti: "public.mpeg-4-audio",
+                                                         mimeType: "audio/mp4", byteCount: 1, sha256: "x", media: nil) : nil)
+    }
+
+    @Test func recordCommentSetsFlagsAndExcerpt() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let pkg = try await h.add(attachments: [textAttachment("x")])
+        let cid = pkg.metadata.captureID
+        try h.index.recordComment(captureID: cid, comment(cid, "c1", text: "remember the zebra crossing"), replacesExcerpt: true)
+        let page = try h.index.page(CaptureFilter(), after: nil, limit: 10)
+        #expect(page[0].noteExcerpt == "remember the zebra crossing")
+        #expect(page[0].commentCount == 1)
+        #expect(try h.index.commentCount(captureID: cid) == 1)
+        #expect(ids(try h.index.page(CaptureFilter(hasComment: true), after: nil, limit: 10)) == [cid])
+        #expect(ids(try h.index.page(CaptureFilter(searchText: "zebra"), after: nil, limit: 10)) == [cid])
+    }
+
+    @Test func recordCommentKeepsExistingExcerpt() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let pkg = try await h.add(note: "original note")
+        let cid = pkg.metadata.captureID
+        try h.index.recordComment(captureID: cid, comment(cid, "c1", text: "extra words"), replacesExcerpt: false)
+        let page = try h.index.page(CaptureFilter(), after: nil, limit: 10)
+        #expect(page[0].noteExcerpt == "original note")
+        #expect(page[0].commentCount == 1)
+        #expect(ids(try h.index.page(CaptureFilter(searchText: "original"), after: nil, limit: 10)) == [cid])
+        #expect(ids(try h.index.page(CaptureFilter(searchText: "extra"), after: nil, limit: 10)) == [cid])
+    }
+
+    @Test func recordAudioCommentCountsWithoutExcerpt() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let pkg = try await h.add(attachments: [textAttachment("x")])
+        let cid = pkg.metadata.captureID
+        try h.index.recordComment(captureID: cid, comment(cid, "c1"), replacesExcerpt: true)
+        let page = try h.index.page(CaptureFilter(hasComment: true), after: nil, limit: 10)
+        #expect(page.count == 1)
+        #expect(page[0].noteExcerpt == nil)
+        #expect(page[0].commentCount == 1)
+    }
+
+    @Test func registerCountsPackageComments() async throws {
+        let h = try IndexHarness(); defer { h.cleanup() }
+        let pkg = try await h.writer.commit(CaptureDraft(
+            captureID: UUID(), startedAt: date(0), timeZone: h.zone, method: .shareExtension, userNote: nil,
+            sharedTitle: nil, sharedText: nil, urls: [], attachments: [textAttachment("x")], location: nil))
+        var loaded = pkg
+        let cid = pkg.metadata.captureID
+        loaded.comments = [comment(cid, "c1", text: "first thought", at: 1), comment(cid, "c2", text: "second thought", at: 2)]
+        #expect(try h.index.register(loaded, noteBody: nil) == true)
+        let page = try h.index.page(CaptureFilter(hasComment: true), after: nil, limit: 10)
+        #expect(page.count == 1)
+        #expect(page[0].commentCount == 2)
+        #expect(page[0].noteExcerpt == "second thought")
+        #expect(ids(try h.index.page(CaptureFilter(searchText: "first"), after: nil, limit: 10)) == [cid])
+    }
+
     @Test func registerIsIdempotent() async throws {
         let h = try IndexHarness(); defer { h.cleanup() }
         let pkg = try await h.add(note: "hello world")
@@ -178,7 +239,7 @@ import HippoTestSupport
                 let ms = Int64(1_794_070_800_000 + i * 60_000)
                 let title = "\(words[i % 8]) \(words[(i / 8) % 8]) item \(i)"
                 try tx.execute("""
-                    INSERT INTO captures VALUES(?,?,?,?,?,?,NULL,0,0,1,NULL,?,?,0,NULL,NULL)
+                    INSERT INTO captures VALUES(?,?,?,?,?,?,NULL,0,0,1,NULL,?,?,0,NULL,NULL,0)
                     """, [.text(cid), .int(ms), .text("2026-11-07"), .text("share_extension"),
                           .text(types[i % types.count]), .text(title), .text("captures/\(cid)"), .text("d")])
                 try tx.execute("INSERT INTO captures_fts VALUES(?,?,?,?,?,?,'')",

@@ -9,7 +9,7 @@ What comes after Plan 3 (Dropbox, merged 2026-11-09). Items are not ordered yet;
 ## Decided: capture features
 
 - **Done: Camera button (2026-11-09, [design](superpowers/specs/2026-11-09-hippo-camera-voice-comment-design.md)).** Next to the Record button, a button that opens the camera to take a picture or record a video and saves it as a capture (`capture_method` to be chosen, e.g. `camera`). Same note/comment flow as a recording.
-- **Done: Audio comment on share (2026-11-09, [design](superpowers/specs/2026-11-09-hippo-camera-voice-comment-design.md)).** The share sheet already offers a typed note; add the option to record a voice comment instead of, or in addition to, typing. The recording is an attachment of the shared capture and goes through the same transcript enrichment as a voice note.
+- **Done: Comments on any capture (2026-11-10, [design](superpowers/specs/2026-11-10-hippo-comments-design.md)).** Note or Record on a capture adds a typed or spoken comment after the fact, stored in `comments/` inside the package and synced. The share-sheet mic (hand-off to the app) was built on 2026-11-09, tried, found too clunky and removed.
 - **One-tap intent chips.** Optional chips on the share sheet and in-app capture flows (for example: read later, buy, idea, todo, for someone). Off by default; a Settings toggle turns them on, and the chip set is editable there. Chosen chips are recorded as observations, never required.
 
 ## Decided: capture context (all behind Settings toggles and the relevant permission)
@@ -44,6 +44,9 @@ Dropped for now: Health (heart rate, workout in progress, sleep). Judged too har
 - Dropbox features the design deferred: broader access with a folder picker, a second provider (Google Drive or OneDrive implement `StorageAdapter`), restoring a capture deleted everywhere.
 - Known race: a background upload finishing seconds after "Delete everywhere" leaves a marker-less file in Dropbox (README, Known limits).
 - Enrichment follow-ups: relative dates resolve against enrichment time, stale gold survives a cursor reset, LinkPresentation may fetch subresources uncapped.
+- Editing or deleting a comment.
+- A desktop reader must list `comments/` on rescan (the package digest does not change).
+- Download from Dropbox should also fetch `comments/` so comments come back to a new phone.
 
 ## The desktop reader (separate project)
 

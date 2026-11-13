@@ -29,14 +29,7 @@ final class ShareViewController: UIViewController {
                 location: { LocationService.shared.location(startedAt: $0) })
             host = UIHostingController(rootView: CaptureSheetView(
                 model: model,
-                // The extension can't record audio: the mic writes a pending draft and opens Hippo, which
-                // records the comment and saves. The sheet closes a second later whether or not Hippo opened.
-                voice: .handoff { [weak self] in
-                    Task {
-                        await model.deferForVoiceComment()
-                        if model.state == .deferred { self?.openHippo() }
-                    }
-                },
+                voice: nil,
                 save: { acceptPartial in
                     await BackgroundActivity.run(name: "share-save") { await model.save(acceptPartial: acceptPartial) }
                 },
@@ -61,28 +54,6 @@ final class ShareViewController: UIViewController {
             host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
         host.didMove(toParent: self)
-    }
-
-    /// Best effort: the extension context first, then an `openURL:` up the responder chain. Neither is
-    /// guaranteed for a share extension; the sheet's copy covers the case where Hippo doesn't open.
-    private func openHippo() {
-        guard let url = URL(string: "hippo://pending") else { return }
-        extensionContext?.open(url) { @Sendable [weak self] ok in
-            guard !ok else { return }
-            Task { @MainActor in self?.openThroughResponderChain(url) }
-        }
-    }
-
-    private func openThroughResponderChain(_ url: URL) {
-        let selector = NSSelectorFromString("openURL:")
-        var responder = next
-        while let current = responder {
-            if current.responds(to: selector) {
-                _ = current.perform(selector, with: url)
-                return
-            }
-            responder = current.next
-        }
     }
 
     private func cancelRequest() {

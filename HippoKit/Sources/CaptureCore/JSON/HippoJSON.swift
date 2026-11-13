@@ -36,6 +36,10 @@ public enum HippoJSON {
         try decode(CaptureMetadata.self, from: data)
     }
 
+    public static func decodeComment(_ data: Data) throws -> CaptureComment {
+        try decode(CaptureComment.self, from: data)
+    }
+
     public static func decodeMarker(_ data: Data) throws -> CompletionMarker {
         try decode(CompletionMarker.self, from: data)
     }

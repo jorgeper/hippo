@@ -4,12 +4,12 @@
     {
       "byte_count" : 1100,
       "relative_path" : "metadata.json",
-      "sha256" : "87d28b95bbe7a9b17b517aaf2c2aab7c70dd100e353ff06a288616f7b1b75908"
+      "sha256" : "f52dfd2ae7f394c08de38524594ea5d021e80b35a81db97305bb179540b4f5c5"
     },
     {
-      "byte_count" : 2346,
+      "byte_count" : 2357,
       "relative_path" : "content/00000000-0000-4000-8000-000500000001.mov",
-      "sha256" : "6b08f8bae91df845512bb3f937f1a53de229818dfffedea24666bb6fe32d4d19"
+      "sha256" : "e16f21aa08c95dc2efe01ffa3f5b347d0f762cfd7b9ffdf351f4dad8ba830abb"
     }
   ],
   "schema_version" : 1

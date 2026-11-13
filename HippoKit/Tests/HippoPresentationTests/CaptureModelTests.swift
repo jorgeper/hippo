@@ -221,6 +221,80 @@ private struct Rig {
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
+    @MainActor private func commentRecorder(_ ts: TestStore, captureID: String,
+                                            recorder: FakeRecorder) -> RecorderModel {
+        RecorderModel(store: ts.store, intake: IntakeDirectory(storeRoot: ts.base.appendingPathComponent("Hippo")),
+                      recorder: recorder, permission: { .granted }, location: { _ in nil }, now: { t0 },
+                      target: .comment(captureID: captureID))
+    }
+
+    @MainActor @Test func recorderSavesCommentToTarget() async throws {
+        let ts = try TestStore()
+        defer { ts.cleanup() }
+        let pkg = try await ts.note("Call the plumber", at: t0.addingTimeInterval(-3600))
+        let id = pkg.metadata.captureID
+        let recorder = FakeRecorder()
+        let model = commentRecorder(ts, captureID: id, recorder: recorder)
+        #expect(model.target == .comment(captureID: id))
+        await model.start()
+        model.stop()
+        let url = try #require(recorder.startedURL)
+        await model.save()
+        #expect(model.state == .saved)
+        #expect(try ts.store.index.commentCount(captureID: id) == 1)
+        #expect(try ts.store.index.count() == 1)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        let comments = PackageComments.load(directory: pkg.directoryURL).comments
+        #expect(comments.count == 1)
+        #expect(comments.first?.audio?.uti == "com.apple.m4a-audio")
+        #expect(comments.first?.addedAt == t0)
+    }
+
+    @MainActor @Test func recorderCommentFailureKeepsRecording() async throws {
+        let ts = try TestStore()
+        defer { ts.cleanup() }
+        let recorder = FakeRecorder()
+        let model = commentRecorder(ts, captureID: "no-such-capture", recorder: recorder)
+        await model.start()
+        model.stop()
+        let url = try #require(recorder.startedURL)
+        await model.save()
+        #expect(model.state == .failed(CommentErrorCopy.goneMessage))
+        #expect(model.state == .failed("This capture is gone."))
+        #expect(model.hasPendingRecording)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        #expect(try ts.store.index.count() == 0)
+
+        // Any other failure: the recorder's comment copy, and the recording is still kept.
+        let pkg = try await ts.note("Call the plumber", at: t0)
+        let other = commentRecorder(ts, captureID: pkg.metadata.captureID, recorder: recorder)
+        await other.start()
+        other.stop()
+        let url2 = try #require(recorder.startedURL)
+        try FileManager.default.removeItem(at: url2)   // the writer cannot find its file
+        await other.save()
+        #expect(other.state == .failed(RecorderModel.commentSaveFailedMessage))
+        #expect(other.state == .failed("Hippo couldn't save this comment. It's still here. Try again."))
+        #expect(other.hasPendingRecording)
+        #expect(try ts.store.index.commentCount(captureID: pkg.metadata.captureID) == 0)
+    }
+
+    @Test func noteComposerCommentTrims() {
+        #expect(NoteComposer.comment(text: "  Called them back \n") == .text("Called them back"))
+        for text in ["", "   ", "\n\t \n"] { #expect(NoteComposer.comment(text: text) == nil) }
+    }
+
+    @Test func commentErrorCopy() {
+        let fallback = RecorderModel.commentSaveFailedMessage
+        #expect(CommentErrorCopy.message(for: CaptureError.io(HippoStore.commentPackageInvalid), fallback: fallback)
+                == "This capture is damaged. Hippo can't add a comment to it.")
+        #expect(CommentErrorCopy.message(for: CaptureError.io(HippoStore.commentCaptureMissing), fallback: fallback)
+                == "This capture is gone.")
+        #expect(CommentErrorCopy.message(for: CaptureError.insufficientSpace(requiredBytes: 2, availableBytes: 1), fallback: fallback)
+                == "Not enough space on this iPhone. Nothing was saved.")
+        #expect(CommentErrorCopy.message(for: CaptureError.io("disk"), fallback: fallback) == fallback)
+    }
+
     @MainActor @Test func startFailureIsReportedAndCleansUp() async throws {
         let rig = try Rig()
         defer { rig.ts.cleanup() }

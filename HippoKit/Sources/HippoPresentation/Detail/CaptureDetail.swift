@@ -21,10 +21,37 @@ public struct FoundItem: Equatable, Sendable {
     public init(kind: String, text: String, action: FoundAction?) { self.kind = kind; self.text = text; self.action = action }
 }
 
+/// One entry in Detail's Comments section: the capture-time comment (`user_note`), a capture-time recording, or a
+/// comment added afterwards.
+public struct CommentRow: Equatable, Sendable, Identifiable {
+    public enum Body: Equatable, Sendable {
+        case text(String)
+        case audio(URL, durationText: String?)
+    }
+    /// "user_note", the recording's attachment ID, or the comment ID.
+    public var id: String
+    public var body: Body
+    /// When an after-the-fact comment was added ("Added today, 2:02 PM"); nil for capture-time comments.
+    public var caption: String?
+    /// An audio row's transcript, once enrichment has one.
+    public var transcript: String?
+    public var transcriptLayer: Layer?
+    /// Set when a capture-time recording was trimmed from this iPhone (Save space); its file is in the destination
+    /// only. Always nil for `user_note` and comment rows: comment files are never trimmed.
+    public var remoteOnly: RemoteOnlyAttachment?
+
+    public init(id: String, body: Body, caption: String? = nil, transcript: String? = nil, transcriptLayer: Layer? = nil,
+                remoteOnly: RemoteOnlyAttachment? = nil) {
+        self.id = id; self.body = body; self.caption = caption
+        self.transcript = transcript; self.transcriptLayer = transcriptLayer; self.remoteOnly = remoteOnly
+    }
+}
+
 /// Everything the details screen shows for one capture. Missing values are omitted, never blank.
 public struct CaptureDetail: Equatable, Sendable {
     public var preview: PreviewKind
-    public var comment: String?
+    /// The capture-time comment, capture-time recordings (except a voice recording's own), then later comments.
+    public var comments: [CommentRow]
     public var sharedTitle: String?
     public var sharedText: String?
     public var links: [URL]
@@ -66,7 +93,8 @@ public struct CaptureDetail: Equatable, Sendable {
                             activeDestination: Destination? = nil,
                             accountName: (String) -> String? = { _ in nil },
                             isEnabled: (FacetKind) -> Bool = { _ in true }, isOnline: Bool = true,
-                            goldArrivedAt: Date? = nil, destination: (String) -> Destination?, now: Date,
+                            goldArrivedAt: Date? = nil, comments: [CaptureComment] = [],
+                            destination: (String) -> Destination?, now: Date,
                             locale: Locale, calendar: Calendar) -> CaptureDetail {
         let files: [(Attachment, URL)] = m.attachments.compactMap { a in
             guard (try? PackagePath.validateRelative(a.relativePath)) != nil else { return nil }
@@ -95,9 +123,13 @@ public struct CaptureDetail: Equatable, Sendable {
             : jobs.map { SyncRow.make(job: $0, destinationName: destination($0.destinationID)?.displayName) }
         let steps = EnrichmentProgress.steps(tasks, isEnabled: isEnabled, isOnline: isOnline, now: now)
         let savedZone = TimeZone(identifier: m.timezoneIdentifier) ?? TimeZone(secondsFromGMT: m.utcOffsetSeconds) ?? .gmt
+        let recordings = recordingComments(m, files: files)
         return CaptureDetail(
             preview: preview(metadata: m, files: files, links: links, noteBody: noteBody, remoteOnly: remoteOnly),
-            comment: nonEmpty(m.userNote), sharedTitle: nonEmpty(m.sharedTitle), sharedText: nonEmpty(m.sharedText),
+            comments: commentRows(m, recordings: recordings, comments: comments, packageURL: packageURL,
+                                  enrichment: enrichment, remoteOnly: remoteOnly, now: now, locale: locale,
+                                  calendar: calendar),
+            sharedTitle: nonEmpty(m.sharedTitle), sharedText: nonEmpty(m.sharedText),
             links: links,
             captured: capturedRows(m, enrichment: enrichment, locale: locale, calendar: calendar),
             attachments: m.attachments.enumerated().map {
@@ -116,7 +148,8 @@ public struct CaptureDetail: Equatable, Sendable {
             exportURLs: files.filter { remoteOnly[$0.0.attachmentID] == nil }.map(\.1),
             remoteOnly: remoteOnly,
             linkCards: urls.compactMap { enrichment.links[$0.url] },
-            transcripts: titled(m, enrichment.transcripts.mapValues(\.text), gold: enrichment.fromServer.transcripts),
+            transcripts: titled(m, enrichment.transcripts.mapValues(\.text), gold: enrichment.fromServer.transcripts,
+                                excluding: Set(recordings.map(\.0.attachmentID))),
             recognizedText: titled(m, enrichment.recognizedText, gold: enrichment.fromServer.recognizedText),
             found: enrichment.detections.map { foundItem($0, metadata: m, noteBody: noteBody) },
             summary: nonEmpty(enrichment.summary), tags: enrichment.tags,
@@ -161,12 +194,63 @@ public struct CaptureDetail: Equatable, Sendable {
         return s
     }
 
+    // MARK: Comments
+
+    /// Recording attachments shown as comment rows: every one, except in a voice recording, where the recording is
+    /// the capture itself.
+    private static func recordingComments(_ m: CaptureMetadata, files: [(Attachment, URL)]) -> [(Attachment, URL)] {
+        guard m.captureMethod != .voiceRecording else { return [] }
+        return files.filter { $0.0.representationSource == "recording" }
+    }
+
+    private static func commentRows(_ m: CaptureMetadata, recordings: [(Attachment, URL)], comments: [CaptureComment],
+                                    packageURL: URL, enrichment: ResolvedEnrichment,
+                                    remoteOnly: [String: RemoteOnlyAttachment], now: Date, locale: Locale,
+                                    calendar: Calendar) -> [CommentRow] {
+        func transcript(_ id: String) -> (String?, Layer?) {
+            guard let text = nonEmpty(enrichment.transcripts[id]?.text) else { return (nil, nil) }
+            return (text, enrichment.fromServer.transcripts.contains(id) ? .gold : .silver)
+        }
+        var rows: [CommentRow] = []
+        if let note = nonEmpty(m.userNote) { rows.append(CommentRow(id: "user_note", body: .text(note))) }
+        for (a, url) in recordings {
+            let (text, layer) = transcript(a.attachmentID)
+            rows.append(CommentRow(id: a.attachmentID,
+                                   body: .audio(url, durationText: a.media?.durationSeconds.flatMap(DetailFormat.duration)),
+                                   transcript: text, transcriptLayer: layer, remoteOnly: remoteOnly[a.attachmentID]))
+        }
+        for c in comments {
+            let caption = addedCaption(c.addedAt, now: now, locale: locale, calendar: calendar)
+            if let body = nonEmpty(c.text) {
+                rows.append(CommentRow(id: c.commentID, body: .text(body), caption: caption))
+            } else if let audio = c.audio, PackageComments.isSafeAudioPath(audio.relativePath, commentID: c.commentID) {
+                let (text, layer) = transcript(c.commentID)
+                rows.append(CommentRow(id: c.commentID,
+                                       body: .audio(packageURL.appendingPathComponent(audio.relativePath),
+                                                    durationText: audio.media?.durationSeconds.flatMap(DetailFormat.duration)),
+                                       caption: caption, transcript: text, transcriptLayer: layer))
+            }
+        }
+        return rows
+    }
+
+    /// "Added today, 2:02 PM" when `addedAt` falls on `now`'s day in `calendar`; else "Added Nov 3, 9:15 AM"
+    /// (day and month in `locale`'s order).
+    static func addedCaption(_ addedAt: Date, now: Date, locale: Locale, calendar: Calendar) -> String {
+        let time = addedAt.formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale,
+                                                      calendar: calendar, timeZone: calendar.timeZone))
+        if calendar.isDate(addedAt, inSameDayAs: now) { return "Added today, " + time }
+        let day = addedAt.formatted(Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+            .day().month(.abbreviated))
+        return "Added " + day + ", " + time
+    }
+
     // MARK: Enrichment
 
     private static func titled(_ m: CaptureMetadata, _ texts: [String: String],
-                               gold: Set<String>) -> [TitledText] {
+                               gold: Set<String>, excluding: Set<String> = []) -> [TitledText] {
         m.attachments.enumerated().compactMap { i, a in
-            guard let text = nonEmpty(texts[a.attachmentID]) else { return nil }
+            guard !excluding.contains(a.attachmentID), let text = nonEmpty(texts[a.attachmentID]) else { return nil }
             return TitledText(title: "Attachment \(i + 1)", text: text, layer: gold.contains(a.attachmentID) ? .gold : .silver)
         }
     }

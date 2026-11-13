@@ -1,0 +1,24 @@
+{
+  "added_at" : "2026-11-07T19:04:00.000Z",
+  "audio" : {
+    "byte_count" : 57528,
+    "media" : {
+      "duration_seconds" : 1
+    },
+    "mime_type" : "audio/mp4",
+    "relative_path" : "comments/00000000-0000-4000-8000-00000000c002.m4a",
+    "sha256" : "7666c3c9f2e165527604cba1adfd912bf04e5b8aa75868aacc95b44cb5025247",
+    "uti" : "com.apple.m4a-audio"
+  },
+  "capture_id" : "00000000-0000-4000-8000-000000000004",
+  "comment_id" : "00000000-0000-4000-8000-00000000c002",
+  "local_datetime" : "2026-11-07T11:04:00-08:00",
+  "producer" : {
+    "app_version" : "0.1.0",
+    "build" : "1",
+    "os_version" : "fixture"
+  },
+  "schema_version" : 1,
+  "timezone_identifier" : "America/Los_Angeles",
+  "utc_offset_seconds" : -28800
+}

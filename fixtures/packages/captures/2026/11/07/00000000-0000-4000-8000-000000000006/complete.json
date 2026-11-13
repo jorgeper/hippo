@@ -4,12 +4,12 @@
     {
       "byte_count" : 1021,
       "relative_path" : "metadata.json",
-      "sha256" : "1dbb0a52929fe6d9ce727b508eec6321be8bb7e5f3af7aeac5d49787172821cb"
+      "sha256" : "ff2821a30d7fba9d7f1afb3cfe9b25dc86411a1b13873fa851e35454baecdba9"
     },
     {
       "byte_count" : 57528,
       "relative_path" : "content/00000000-0000-4000-8000-000600000001.m4a",
-      "sha256" : "2f824ffe7f7915dcb0d4013b6fde72c939a4c0e97519411a08d5570c03fd9192"
+      "sha256" : "7666c3c9f2e165527604cba1adfd912bf04e5b8aa75868aacc95b44cb5025247"
     }
   ],
   "schema_version" : 1

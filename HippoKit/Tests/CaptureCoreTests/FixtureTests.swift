@@ -45,4 +45,15 @@ import Foundation
         }
         #expect(seen.count == 6)
     }
+
+    @Test func mixedFixtureHasTwoComments() throws {
+        let directory = Self.fixturesRoot
+            .appendingPathComponent("packages/captures/2026/11/07/00000000-0000-4000-8000-000000000004")
+        let listing = PackageComments.load(directory: directory)
+        #expect(listing.pendingCount == 0)
+        #expect(listing.comments.count == 2)
+        #expect(listing.comments.filter { $0.text != nil }.count == 1)
+        let spoken = try #require(listing.comments.first { $0.audio != nil })
+        #expect(spoken.audio?.media?.durationSeconds != nil)
+    }
 }

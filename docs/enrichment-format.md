@@ -2,7 +2,7 @@
 
 For developers writing or reading enrichment: the desktop reader, and the server that produces gold. Machine-readable definition: `schema/enrichment-v1.schema.json`. Worked examples: `fixtures/packages/enrichments/`. The reference reader and writer are `EnrichmentDocument` and `EnrichmentJSON` in `HippoKit/Sources/CaptureCore/Enrichment`. Read `package-format.md` first: this format follows its conventions and sits beside the capture packages it describes.
 
-Enrichment is derived data (title of a linked page, text recognized in an image, a transcript, a summary). It never changes a capture package. A package is the source of truth and stays immutable.
+Enrichment is derived data (title of a linked page, text recognized in an image, a transcript, a summary). It never changes a capture package's manifested files. A package is the source of truth and stays immutable.
 
 ## Layers and layout
 
@@ -98,6 +98,8 @@ Every payload is an object with an `items` array (or the fields shown). Optional
 Each item: `attachment_id`, `text` (recognized text, reading order), `languages` (array of BCP 47 tags, may be empty).
 
 ### `transcript`: `{items: [...]}`, keyed by `attachment_id`
+
+`attachment_id` names an attachment or, for a comment's audio, the `comment_id` of a `comments/` file.
 
 Each item: `attachment_id`, `text`, `locale` (e.g. `en_US`), `segments` (array of `{start, end, text}`; seconds from the start of the audio; may be empty).
 

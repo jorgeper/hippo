@@ -61,14 +61,14 @@ struct TimelineView: View {
                     }
                 }
             }
-            .sheet(isPresented: $reviewing, onDismiss: presentationClosed) {
+            .sheet(isPresented: $reviewing) {
                 RemoteReviewSheet(store: environment.store, coordinator: environment.coordinator)
             }
-            .sheet(isPresented: $showingFilters, onDismiss: presentationClosed) {
+            .sheet(isPresented: $showingFilters) {
                 FiltersSheet(filters: $model.filter.sheet)
                     .presentationDetents([.medium, .large])
             }
-            .sheet(item: sheetCompose, onDismiss: { presentationClosed(); Task { await model.reload() } }) { compose in
+            .sheet(item: sheetCompose, onDismiss: { Task { await model.reload() } }) { compose in
                 switch compose {
                 case .note:
                     NoteEditorView(environment: environment, location: LocationService.shared)
@@ -81,7 +81,7 @@ struct TimelineView: View {
                 }
             }
             // The camera needs the whole screen; its capture sheet follows inside the same cover.
-            .fullScreenCover(isPresented: cameraPresented, onDismiss: { presentationClosed(); Task { await model.reload() } }) {
+            .fullScreenCover(isPresented: cameraPresented, onDismiss: { Task { await model.reload() } }) {
                 CameraCaptureView(environment: environment, location: LocationService.shared)
             }
             .task {
@@ -125,28 +125,16 @@ struct TimelineView: View {
 
     private var bottomBar: some View {
         HStack {
-            Button { presented = .note } label: { Label("Note", systemImage: "square.and.pencil") }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("note-button")
             Spacer()
-            Button { presented = .camera } label: { Label("Camera", systemImage: "camera") }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("camera-button")
+            CaptureButton(kind: .note) { presented = .note }
             Spacer()
-            Button { presented = .record } label: { Label("Record", systemImage: "record.circle") }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
+            CaptureButton(kind: .camera) { presented = .camera }
+            Spacer()
+            CaptureButton(kind: .record(recording: false)) { presented = .record }
+            Spacer()
         }
-        .labelStyle(.titleAndIcon)
-        .controlSize(.large)
-        .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.bar)
-    }
-
-    /// A pending share that arrived while a sheet was up is presented once it closes.
-    private func presentationClosed() {
-        NotificationCenter.default.post(name: RootView.presentationClosed, object: nil)
     }
 
     /// Note and Record show as sheets; the camera as a full-screen cover.

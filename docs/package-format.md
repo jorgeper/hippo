@@ -1,6 +1,6 @@
 # Hippo capture package format, version 1
 
-For developers building a reader (the desktop app). Machine-readable definitions: `schema/capture-metadata-v1.schema.json` and `schema/complete-v1.schema.json`. Worked examples: `fixtures/packages/`. The reference writer and validator are `PackageWriter` and `PackageValidator` in `HippoKit/Sources/CaptureCore`.
+For developers building a reader (the desktop app). Machine-readable definitions: `schema/capture-metadata-v1.schema.json`, `schema/complete-v1.schema.json` and `schema/capture-comment-v1.schema.json`. Worked examples: `fixtures/packages/`. The reference writer and validator are `PackageWriter` and `PackageValidator` in `HippoKit/Sources/CaptureCore`.
 
 ## Layout
 
@@ -11,12 +11,14 @@ captures/YYYY/MM/DD/<capture-id>/
   metadata.json
   content/<attachment-id>.<ext>      (absent when there are no attachments)
   complete.json
+  comments/<comment-id>.json         (one per comment; absent when there are none)
+  comments/<comment-id>.m4a          (only for an audio comment)
 ```
 
 - `YYYY/MM/DD` is the date part of `local_datetime` (the capture's local calendar date). It never changes, even if the phone later changes time zone. Do not derive it from `captured_at`.
 - `<capture-id>` and `<attachment-id>` are lowercase UUIDs. The directory name equals `capture_id`.
 - Attachment filenames are generated (`content/<uuid>.<ext>`, ext is 1-10 chars of `[a-z0-9]`). Original names are only in metadata.
-- Packages are immutable once `complete.json` exists. Nothing mutable (sync state, provider IDs, upload URLs, credentials) is stored in a package.
+- The manifested files are immutable once `complete.json` exists; `comments/` is append-only (below). Nothing mutable (sync state, provider IDs, upload URLs, credentials) is stored in a package.
 
 ## Conventions
 
@@ -25,7 +27,7 @@ captures/YYYY/MM/DD/<capture-id>/
 - Omission rule: an unavailable optional field is omitted. It is never `null` and never an empty string; unknown is not a guess. Treat a missing key as unknown.
 - Open sets: `capture_method`, `content_types` and the `source`/`provenance`/`representation_source` strings may take values you do not know. Accept and preserve them.
 - Unknown additional keys, anywhere, must be ignored.
-- `schema_version` is an integer. This document is version 1. Reject any other value (in either file) with a clear "unsupported version" error rather than guessing.
+- `schema_version` is an integer. This document is version 1. Reject any other value (in any of these files) with a clear "unsupported version" error rather than guessing.
 
 ## `metadata.json`
 
@@ -82,11 +84,28 @@ A typed note's body is its first `public.utf8-plain-text` (or `public.plain-text
   "files": [ { "relative_path": "metadata.json", "byte_count": 665, "sha256": "<hex>" }, ... ] }
 ```
 
-`files` lists every file in the package except `complete.json`: `metadata.json` first, then each attachment. Each `relative_path` is `metadata.json` or `content/<id>.<ext>`.
+`files` lists every file in the package except `complete.json` and anything under `comments/`: `metadata.json` first, then each attachment. Each `relative_path` is `metadata.json` or `content/<id>.<ext>`.
 
 Marker semantics: the writer finishes and syncs all other files, then writes `complete.json`; the uploader uploads it last. So its presence means "the writer finished", and its manifest says exactly what must be present and intact. A package without it is in progress (or abandoned) and must not be read.
 
 The package digest is the SHA-256 (lowercase hex) of the exact bytes of `complete.json`. It changes whenever any listed file changes.
+
+## Comments
+
+A comment the user adds after the capture is a new file in `comments/`; the manifest never lists it, `metadata.json` and `complete.json` are never rewritten, and the package digest does not change. `comments/<comment-id>.json`, schema version 1:
+
+| Field | Required | Notes |
+|---|---|---|
+| `schema_version` | yes | `1` |
+| `capture_id` | yes | Matches the package. |
+| `comment_id` | yes | Lowercase UUID; equals the file's base name. |
+| `added_at` | yes | RFC 3339 UTC with milliseconds, `Z`. |
+| `local_datetime`, `timezone_identifier`, `utc_offset_seconds` | yes | Same rules as in `metadata.json`. |
+| `producer` | yes | Same object as in `metadata.json`. |
+| `text` | one of | The typed comment, trimmed, non-empty. |
+| `audio` | one of | `{relative_path, uti, mime_type, byte_count, sha256, media: {duration_seconds}}`; `relative_path` is `comments/<comment-id>.<ext>`. |
+
+Exactly one of `text` or `audio` is present. The json is the comment's own marker: it is written after its audio file, on the phone (staging, then rename) and on the destination (audio uploaded first). An interrupted save can leave an audio file in `comments/` with no json beside it; no json means no comment, so ignore it (readers and the phone's uploader list `comments/*.json` only). A json whose audio file is missing, or does not match `byte_count` and `sha256`, is a pending comment, exactly like a package whose manifest entry has not arrived yet: retry on later scans. A `schema_version` other than 1 is unsupported; unknown keys are ignored. Deleting a package deletes its comments with it.
 
 ## Reader algorithm
 
@@ -97,7 +116,8 @@ Follows the spec's future desktop-reader contract. Locate the configured Hippo r
 3. Check every manifest `relative_path` is safe: relative, not empty, no `.` or `..` segment, no backslash, no NUL, and either `metadata.json` or under `content/`. Any unsafe path means corrupt. The manifest must include `metadata.json`.
 4. For each manifest entry, the file must exist and match `byte_count` and `sha256`. A missing or mismatched file means the package is incomplete or still syncing: leave it pending and retry on later scans. Only after repeated failures over a reasonable period surface it as corrupt.
 5. Decode `metadata.json` (version 1, unknown keys ignored). `metadata.capture_id` must equal the marker's and the directory name, and every attachment `relative_path` must be in the manifest; otherwise corrupt.
-6. Index by `capture_id` plus package digest. The same pair already indexed means nothing to do; the same ID with a new digest replaces the entry. This makes rescans idempotent.
+6. Index by `capture_id` plus package digest. The same pair already indexed means nothing to do for the package; the same ID with a new digest replaces the entry. This makes rescans idempotent.
+7. List `comments/*.json` (ignore any other file there) and index the package's comments by the set of comment ids: a comment id already indexed means nothing to do, a new one is added. A comment whose audio is missing or mismatched is pending.
 
 Keep your search/SQLite/vector indexes outside the synced folder; they must be rebuildable from packages alone. Store derived (AI) output separately, keyed by `capture_id`; see [`enrichment-format.md`](enrichment-format.md) for the format the phone and a server use for it. Never modify a package.
 
