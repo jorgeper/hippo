@@ -20,9 +20,15 @@ export interface IndexReport { captures: number; added: number; updated: number;
   thumbFailures: { id: string; reason: string }[];
   /** Captures that could not be indexed this run: skipped, the rest of the pass goes on. One indexed before keeps its earlier rows. */
   failed: { id: string; reason: string }[] }
+/**
+ * Every indexed capture is counted once, in the first of: `failures` (a failure row, even over an older enrichment),
+ * `enriched`, `nothingToDescribe` (nothing to send to the model: no text, link or picture), `notDescribed` (the rest, waiting
+ * for `hippo enrich`). So enriched + nothingToDescribe + notDescribed + failures = total. `pending` captures are not complete
+ * in the folder yet and are not indexed, so they are outside `total`.
+ */
 export interface Status { folder: string; total: number; byKind: Record<Kind, number>; enriched: number;
-  /** Captures not enriched that have nothing to send to the model (no text, link or picture), as of the last index run. */
-  nothingToDescribe: number; pending: number;
+  nothingToDescribe: number; notDescribed: number; pending: number;
+  /** Failure rows for indexed captures (a row for a capture no longer in the folder is left out). */
   failures: { id: string; attempts: number; error: string }[];
   /** The captures the last index run could not index. */
   indexFailures: { id: string; reason: string }[];
@@ -206,8 +212,7 @@ export async function buildIndex(folder: string, opts: { rebuild?: boolean } = {
       }
       setMeta(db, 'folder', path.resolve(folder));
       setMeta(db, 'pending', String(scan.pending.length));
-      const notEnriched = db.raw.prepare('SELECT id FROM captures WHERE enriched = 0').all() as { id: string }[];
-      setMeta(db, 'nothing_to_describe', String(notEnriched.filter(r => empty.has(r.id)).length));
+      setMeta(db, 'nothing_to_describe_ids', JSON.stringify([...empty].sort()));
       setMeta(db, 'index_failures', JSON.stringify(report.failed));
       setMeta(db, 'last_index_at', new Date().toISOString());
       db.raw.exec('COMMIT');
@@ -232,26 +237,40 @@ function indexFailures(json: string | undefined): { id: string; reason: string }
     .map(f => ({ id: f.id, reason: f.reason })) : [];
 }
 
+function idList(json: string | undefined): Set<string> {
+  let v: unknown;
+  try { v = json === undefined ? [] : JSON.parse(json); } catch { return new Set(); }
+  return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+}
+
 export function status(folder: string): Status {
   const byKind = Object.fromEntries(KINDS.map(k => [k, 0])) as Record<Kind, number>;
-  const out: Status = { folder: path.resolve(folder), total: 0, byKind, enriched: 0, nothingToDescribe: 0, pending: 0, failures: [], indexFailures: [] };
+  const out: Status = { folder: path.resolve(folder), total: 0, byKind, enriched: 0, nothingToDescribe: 0, notDescribed: 0, pending: 0,
+    failures: [], indexFailures: [] };
   if (!fs.existsSync(indexPath(folder))) return out;
+  const store = openFailureStore(folder, { readOnly: true });
+  let rows: { capture_id: string; attempts: number; last_error: string }[];
+  try { rows = store.all(); } finally { store.close(); }
+  const failed = new Set(rows.map(f => f.capture_id));
+  const indexed = new Set<string>();
   const db = openIndex(folder);
   try {
-    for (const row of db.raw.prepare('SELECT kind, COUNT(*) AS n, SUM(enriched) AS e FROM captures GROUP BY kind').all() as
-      { kind: string; n: number; e: number }[]) {
-      if (Object.hasOwn(byKind, row.kind)) byKind[row.kind as Kind] = row.n;
-      out.total += row.n; out.enriched += row.e;
+    const empty = idList(getMeta(db, 'nothing_to_describe_ids'));
+    for (const row of db.raw.prepare('SELECT id, kind, enriched FROM captures').all() as { id: string; kind: string; enriched: number }[]) {
+      if (Object.hasOwn(byKind, row.kind)) byKind[row.kind as Kind]++;
+      out.total++;
+      indexed.add(row.id);
+      if (failed.has(row.id)) continue;               // counted with the failures below
+      if (row.enriched) out.enriched++;
+      else if (empty.has(row.id)) out.nothingToDescribe++;
+      else out.notDescribed++;
     }
     const pending = Number(getMeta(db, 'pending'));
     if (Number.isSafeInteger(pending) && pending > 0) out.pending = pending;
-    const nothing = Number(getMeta(db, 'nothing_to_describe'));
-    if (Number.isSafeInteger(nothing) && nothing > 0) out.nothingToDescribe = nothing;
     const lastEnrich = getMeta(db, 'last_enrich_at'); if (lastEnrich) out.lastEnrichAt = lastEnrich;
     const lastIndex = getMeta(db, 'last_index_at'); if (lastIndex) out.lastIndexAt = lastIndex;
     out.indexFailures = indexFailures(getMeta(db, 'index_failures'));
   } finally { db.close(); }
-  const store = openFailureStore(folder, { readOnly: true });
-  try { out.failures = store.all().map(f => ({ id: f.capture_id, attempts: f.attempts, error: f.last_error })); } finally { store.close(); }
+  out.failures = rows.filter(f => indexed.has(f.capture_id)).map(f => ({ id: f.capture_id, attempts: f.attempts, error: f.last_error }));
   return out;
 }

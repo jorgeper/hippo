@@ -12,6 +12,10 @@ import { openFailureStore } from '../src/enrich/state.ts';
 import { fakeProvider } from '../src/providers/fake.ts';
 import { openIndex, getMeta } from '../src/index/db.ts';
 import { buildIndex, status } from '../src/index/build.ts';
+import type { Status } from '../src/index/build.ts';
+import { writeSample } from '../src/index/sample.ts';
+import { hasContent, modelInput } from '../src/enrich/prompt.ts';
+import os from 'node:os';
 
 const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
 const capDir = (folder: string, n: number) => path.join(folder, 'captures/2026/11/07', id(n));
@@ -270,4 +274,48 @@ test('a capture whose metadata.json is valid JSON of the wrong shape is skipped 
   assert.deepEqual(fixed.failed, []);
   assert.equal(fixed.added, 1);
   assert.deepEqual(status(folder).indexFailures, []);
+});
+
+/** Every capture in exactly one place: enriched, nothing to describe, not described yet, failed; pending ones are not indexed. */
+function assertAddsUp(s: Status) {
+  assert.equal(s.enriched + s.nothingToDescribe + s.notDescribed + s.failures.length, s.total, JSON.stringify(s));
+}
+
+test('status accounts for every capture: indexed only, after an enrich, and with one enrichment document deleted', async () => {
+  // (a) a fixtures copy, indexed only.
+  const folder = copyFixtures();
+  await buildIndex(folder);
+  let s = status(folder);
+  assert.deepEqual([s.total, s.enriched, s.nothingToDescribe, s.notDescribed, s.pending, s.failures.length], [7, 0, 2, 5, 0, 0]);
+  assertAddsUp(s);
+  // (b) the same after a fake-provider enrich.
+  await enrichFolder({ folder, provider: fakeProvider(), now });
+  await buildIndex(folder);
+  s = status(folder);
+  assert.deepEqual([s.total, s.enriched, s.nothingToDescribe, s.notDescribed, s.pending, s.failures.length], [7, 5, 2, 0, 0, 0]);
+  assertAddsUp(s);
+  // (c) a sample folder with one capture's enrichment document deleted.
+  const sample = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'hippo-sample-')), 'sample');
+  await writeSample({ out: sample, count: 40, seed: 3, end: '2026-11-12' });
+  const victim = (await scanFolder(sample)).captures.find(c => hasContent(modelInput(c)) && c.server)!;
+  fs.rmSync(victim.serverPath);
+  await buildIndex(sample);
+  s = status(sample);
+  assert.equal(s.total, 40);
+  assert.equal(s.notDescribed, 1);
+  assertAddsUp(s);
+});
+
+test('a capture with a failure is counted once, as a failure, even when an older enrichment is on it', async () => {
+  const folder = copyFixtures();
+  await enrichFolder({ folder, provider: fakeProvider(), now });
+  await buildIndex(folder);
+  const store = openFailureStore(folder);
+  store.record(id(1), 'e'.repeat(64), 'boom', now());                           // enriched before, failed since
+  store.record('00000000-0000-4000-8000-0000000000ff', 'e'.repeat(64), 'gone', now()); // no longer in the folder
+  store.close();
+  const s = status(folder);
+  assert.deepEqual([s.enriched, s.nothingToDescribe, s.notDescribed, s.failures.length, s.total], [4, 2, 0, 1, 7]);
+  assert.deepEqual(s.failures, [{ id: id(1), attempts: 1, error: 'boom' }]);
+  assertAddsUp(s);
 });

@@ -47,6 +47,7 @@ test('hippo enrich runs the index step; hippo status reports it without the SQLi
   assert.match(s.stdout, /^Enriched: 5 of 7$/m);
   // The video and the recording without a transcript have nothing to send: said, so 5 + 2 + 0 failures make the 7.
   assert.match(s.stdout, /^Nothing to describe: 2 \(no text or picture\)$/m);
+  assert.doesNotMatch(s.stdout, /Not described yet/);
   assert.match(s.stdout, /^Pending: 0$/m);
   assert.match(s.stdout, /^Failures: 0$/m);
   assert.match(s.stdout, /^Last enrich: \d{4}-\d\d-\d\dT[\d:.]+Z$/m);
@@ -65,6 +66,9 @@ test('hippo index builds, updates and rebuilds; nothing in the folder changes', 
   assert.match(rebuilt.stdout, /^Index: 7 captures · 7 added · 0 updated · 0 removed · 4 thumbnails$/m);
   const s = hippo(['status'], env);
   assert.match(s.stdout, /^Enriched: 0 of 7$/m);
+  // 0 + 2 + 5 + 0 pending + 0 failures: every capture is on a line.
+  assert.match(s.stdout, /^Nothing to describe: 2 \(no text or picture\)$/m);
+  assert.match(s.stdout, /^Not described yet: 5 \(run hippo enrich\)$/m);
   assert.match(s.stdout, /^Last enrich: never$/m);
   assert.deepEqual(snapshot(folder), before);
   assert.equal(hippo(['index', '--bogus'], env).status, 2);

@@ -149,6 +149,7 @@ async function statusCommand(args: string[]): Promise<number> {
   const kinds = (Object.entries(s.byKind) as [string, number][]).map(([k, n]) => `${n} ${k}`).join(' · ');
   out.push(`Captures: ${s.total} (${kinds})`, `Enriched: ${s.enriched} of ${s.total}`);
   if (s.nothingToDescribe) out.push(`Nothing to describe: ${s.nothingToDescribe} (no text or picture)`);
+  if (s.notDescribed) out.push(`Not described yet: ${s.notDescribed} (run hippo enrich)`);
   out.push(`Pending: ${s.pending}${s.pending ? ' (not complete in the folder yet, skipped until they sync)' : ''}`);
   out.push(`Failures: ${s.failures.length}`);
   for (const f of s.failures)
