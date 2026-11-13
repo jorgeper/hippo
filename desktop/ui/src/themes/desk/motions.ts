@@ -1,12 +1,14 @@
 // How things move on the desk (spec section 8, "Motion"): arrivals are dealt in from the nearest edge on an arc with a
 // little spin and settle with a small overshoot; leavers are swept off the nearest edge; stayers glide with a slight lift.
 // Every timing the desk uses lives here. With prefers-reduced-motion, arrivals and leavers become a short quick slide with
-// a fade, no spin and no overshoot.
-import type { Edge, MotionSpec, Motions } from '../types.ts';
+// a fade, no spin and no overshoot; lifting and turning over become short fades with no arc and no turn.
+import type { ArcMotion, Edge, MotionSpec, Motions } from '../types.ts';
 
 const ARRIVE_STAGGER = 28, LEAVE_STAGGER = 14, MOVE_STAGGER = 6;
 /** Staggers stop growing past this, so a big deal still lands within about two seconds. */
 const STAGGER_CAP = 1500;
+/** Spreading out of a pile and gathering back: quicker than a deal, a light stagger so the pile visibly opens. */
+const SPREAD_STAGGER = 9, SPREAD_STAGGER_CAP = 260;
 
 let query: MediaQueryList | undefined;
 function reduced(): boolean {
@@ -38,7 +40,19 @@ export const motions: Motions = {
     if (reduced()) return { type: 'spring', delay: 0, stiffness: 420, damping: 1, lift: 0 };
     return { type: 'spring', delay: stagger(index, MOVE_STAGGER), stiffness: 85, damping: 1, lift: 1.5 };
   },
-  lift: { type: 'arc', delay: 0, duration: 380, height: 12, spin: 0, easing: 'easeOut' },
-  flip: { type: 'arc', delay: 0, duration: 520, height: 3, spin: Math.PI, easing: 'easeInOut' },
+  get lift(): ArcMotion {
+    if (reduced()) return { type: 'arc', delay: 0, duration: 140, height: 0, spin: 0, easing: 'linear' };
+    return { type: 'arc', delay: 0, duration: 420, height: 2.5, spin: 0, easing: 'easeOut' };
+  },
+  get flip(): ArcMotion {
+    // Reduced motion: no turn at all; the overlay simply shows the other side.
+    if (reduced()) return { type: 'arc', delay: 0, duration: 0, height: 0, spin: 0, easing: 'linear' };
+    return { type: 'arc', delay: 0, duration: 520, height: 3, spin: Math.PI, easing: 'easeInOut' };
+  },
+  spread(index): MotionSpec {
+    if (reduced()) return { type: 'spring', delay: 0, stiffness: 520, damping: 1, lift: 0, reach: 1.5, fade: true };
+    return { type: 'spring', delay: Math.min(SPREAD_STAGGER_CAP, index * SPREAD_STAGGER), stiffness: 240, damping: 0.9, lift: 1.2 };
+  },
+  riffle: { pace: 220 },
   thinking: { period: 2600, amplitude: 0.28 },
 };

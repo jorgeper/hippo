@@ -1,8 +1,10 @@
 // One persistent object per capture id (spec section 8, "Motion"). An object is built from the theme the first time it has
 // to be seen, with small textures; a full-size one replaces it while it covers a large part of the screen and is released
 // when it no longer does. Its place is a set of springs, so a new target mid-flight carries on from where it is. A hidden
-// object keeps only its small version, and only the most recently hidden few hundred are kept at all.
-import { Group } from 'three';
+// object keeps only its small version, and only the most recently hidden few hundred are kept at all. An object can be held
+// by the person's hand (dragged, lifted): its pose then comes from outside, and the arrangement's motions for it wait until
+// it is let go.
+import { Euler, Group } from 'three';
 import type { Material, Mesh, Object3D, PerspectiveCamera, Texture } from 'three';
 import type { DeskItem } from '../../../src/server/wire.ts';
 import type { Easing, Edge, MotionSpec, Theme } from '../themes/types.ts';
@@ -43,6 +45,12 @@ export interface Entry {
   loadingFull?: Object3D;
   badge?: Object3D;
   badgeText?: string;
+  pin?: Object3D;
+  pinned: boolean;
+  /** In the person's hand: the pose is set from outside; motions asked for meanwhile wait in `deferred`. */
+  held: boolean;
+  heldCast: boolean;
+  deferred?: Pending;
   x: Spring; y: Spring; rot: Spring; z: Spring;
   baseZ: number; lift: number; dist0: number; fade: -1 | 0 | 1; opacity: number;
   pending?: Pending;
@@ -56,7 +64,9 @@ export interface Entry {
   screenPx: number;
 }
 
-export interface ShowOptions { castShadow: boolean; pile: string; badge?: string }
+export interface ShowOptions { castShadow: boolean; pile: string; badge?: string; pin?: boolean;
+  /** An arrival starts here (out of a pile) instead of off the desk. */
+  start?: { x: number; y: number } }
 
 export interface StepResult { moving: boolean; shadowsMoved: boolean }
 
@@ -78,7 +88,26 @@ export interface ObjectStore {
   pileOfId(id: string): string | undefined;
   pickables(): Object3D[];
   disposeObject(obj: Object3D): void;
-  stats(): { entries: number; built: number; onDesk: number; full: number; hiddenKept: number; active: number };
+  stats(): { entries: number; built: number; onDesk: number; full: number; hiddenKept: number; active: number; held: number };
+  /** Takes an object on the desk into the hand (no shadow while held); undefined when it is not on the desk. */
+  hold(id: string): Object3D | undefined;
+  /** Puts a held object at a pose on the desk at once (a drag). */
+  carry(id: string, pose: Pose): void;
+  /**
+   * Lets a held object go from wherever its slot now is: a motion that waited starts, else it rests there (and the next
+   * arrangement says where it goes). `velocity` (desk units per second) carries on into that motion: a throw.
+   */
+  release(id: string, now: number, velocity?: { x: number; y: number }): void;
+  /** Where a held object belongs on the desk now: the waiting motion's target, else where it was going. */
+  homeOf(id: string): Pose | undefined;
+  /** Shifts an object, where it is and where it is going, by dx,dy at once (its pile is being dragged). */
+  nudge(id: string, dx: number, dy: number): void;
+  isHeld(id: string): boolean;
+  /**
+   * For checks: the ids drawn on the desk; `stray`: objects in the scene that should not be (one no entry owns, or one not
+   * shown and not moving); `offTarget`: shown, at rest, not in the hand, and not where it was sent.
+   */
+  audit(): { drawn: string[]; stray: string[]; offTarget: string[] };
 }
 
 export interface ObjectHooks {
@@ -88,7 +117,7 @@ export interface ObjectHooks {
   changed(): void;
 }
 
-const EASE: Record<Easing, (u: number) => number> = {
+export const EASE: Record<Easing, (u: number) => number> = {
   linear: u => u,
   easeIn: u => u * u * u,
   easeOut: u => 1 - (1 - u) ** 3,
@@ -148,7 +177,8 @@ export function createObjects(world: Group, theme: Theme, hooks: ObjectHooks): O
     let e = entries.get(item.id);
     if (!e) {
       e = { id: item.id, item, sig: sigOf(item), gen, x: spring(0), y: spring(0), rot: spring(0), z: spring(0, { stiffness: Z_STIFFNESS }),
-        baseZ: 0, lift: 0, dist0: 0, fade: 0, opacity: 1, phase: 'hidden', onDesk: false, active: false, castShadow: false, screenPx: 0 };
+        baseZ: 0, lift: 0, dist0: 0, fade: 0, opacity: 1, phase: 'hidden', onDesk: false, active: false, castShadow: false, screenPx: 0,
+        pinned: false, held: false, heldCast: false };
       entries.set(item.id, e);
     }
     return e;
@@ -171,6 +201,7 @@ export function createObjects(world: Group, theme: Theme, hooks: ObjectHooks): O
     dropFull(e);
     if (e.small) { disposeObject(e.small); e.small = undefined; }
     if (e.badge) { disposeObject(e.badge); e.badge = undefined; e.badgeText = undefined; }
+    if (e.pin) { disposeObject(e.pin); e.pin = undefined; }
     e.slot?.removeFromParent();
     e.slot = undefined;
     hidden.delete(e.id);
@@ -201,6 +232,23 @@ export function createObjects(world: Group, theme: Theme, hooks: ObjectHooks): O
     b.position.set(-size.w / 2 + 1.2, size.h / 2 - 1.2, theme.depths[e.item.kind] + 0.01);
     e.slot.add(b);
     e.badge = b;
+  }
+
+  /** The pin mark on a kept item: on its far edge, upright. */
+  function setPin(e: Entry, on: boolean): void {
+    e.pinned = on;
+    if (!e.slot) return;
+    if (on && !e.pin) {
+      const size = theme.sizes[e.item.kind];
+      const p = theme.buildPin();
+      p.position.set(0, size.h / 2 - 0.9, theme.depths[e.item.kind] + 0.005);
+      e.slot.add(p);
+      e.pin = p;
+    } else if (!on && e.pin) {
+      e.pin.removeFromParent();
+      disposeObject(e.pin);
+      e.pin = undefined;
+    }
   }
 
   function show(e: Entry): void {
@@ -252,7 +300,9 @@ export function createObjects(world: Group, theme: Theme, hooks: ObjectHooks): O
   }
 
   function schedule(e: Entry, kind: Step, target: Pose, spec: MotionSpec, now: number, from?: Pose): void {
-    e.pending = { at: now + spec.delay, kind, target, spec, ...(from ? { from } : {}) };
+    const p: Pending = { at: now + spec.delay, kind, target, spec, ...(from ? { from } : {}) };
+    if (e.held) { e.deferred = p; return; }
+    e.pending = p;
     activate(e);
   }
 
@@ -298,6 +348,7 @@ export function createObjects(world: Group, theme: Theme, hooks: ObjectHooks): O
   }
 
   function stepOne(e: Entry, dt: number, now: number): boolean {
+    if (e.held) return false;     // its pose comes from the hand; it joins the active list again when let go
     if (e.pending && now >= e.pending.at) {
       if (e.pending.kind === 'arrive' && !e.slot && builds >= BUILDS_PER_FRAME) return true; // build next frame
       begin(e, e.pending, now);
@@ -409,19 +460,22 @@ export function createObjects(world: Group, theme: Theme, hooks: ObjectHooks): O
       const spin = spec.type === 'spring' ? spec.spin ?? 0 : 0;
       const reach = spec.type === 'spring' ? spec.reach : undefined;
       let start: { x: number; y: number };
-      if (reach !== undefined) { const d = toward(from); start = { x: target.x + d.dx * reach, y: target.y + d.dy * reach }; }
+      if (opts.start) start = opts.start;
+      else if (reach !== undefined) { const d = toward(from); start = { x: target.x + d.dx * reach, y: target.y + d.dy * reach }; }
       else start = offDesk(item, from, edges, target);
       schedule(e, 'arrive', target, spec, now, { x: start.x, y: start.y, z: target.z, rot: target.rot + spin });
       if (e.slot) setBadge(e, opts.badge); else e.badgeText = undefined;
       pendingBadges.set(e.id, opts.badge);
+      if (e.slot) setPin(e, !!opts.pin); else e.pinned = !!opts.pin;
     },
     move(id, target, spec, now, opts) {
       const e = entries.get(id);
       if (!e) return;
       e.phase = 'shown';
       e.pile = opts.pile;
-      setCaster(e, opts.castShadow);
+      if (e.held) e.heldCast = opts.castShadow; else setCaster(e, opts.castShadow);
       setBadge(e, opts.badge);
+      setPin(e, !!opts.pin);
       schedule(e, 'move', target, spec, now);
     },
     tuck(id, target, spec, now, pile) {
@@ -430,7 +484,7 @@ export function createObjects(world: Group, theme: Theme, hooks: ObjectHooks): O
       e.phase = 'tucking';
       e.pile = pile;
       if (!e.onDesk) { hide(e); return; }
-      setCaster(e, false);
+      if (e.held) e.heldCast = false; else setCaster(e, false);
       schedule(e, 'tuck', target, spec, now);
     },
     leave(id, to, edges, spec, now) {
@@ -456,7 +510,7 @@ export function createObjects(world: Group, theme: Theme, hooks: ObjectHooks): O
       if (pendingBadges.size) for (const [id, text] of pendingBadges) {
         const e = entries.get(id);
         if (!e) { pendingBadges.delete(id); continue; }
-        if (e.slot) { setBadge(e, text); pendingBadges.delete(id); }
+        if (e.slot) { setBadge(e, text); setPin(e, e.pinned); pendingBadges.delete(id); }
       }
       return r;
     },
@@ -505,14 +559,96 @@ export function createObjects(world: Group, theme: Theme, hooks: ObjectHooks): O
     pileOfId: id => entries.get(id)?.pile,
     pickables() {
       const out: Object3D[] = [];
-      for (const e of entries.values()) if (e.onDesk && e.phase === 'shown' && e.slot) out.push(e.slot);
+      for (const e of entries.values()) if (e.onDesk && e.phase === 'shown' && e.slot && !e.held) out.push(e.slot);
       return out;
     },
     disposeObject,
     stats() {
-      let built = 0, onDesk = 0;
-      for (const e of entries.values()) { if (e.small) built++; if (e.onDesk) onDesk++; }
-      return { entries: entries.size, built, onDesk, full: fullCount, hiddenKept: hidden.size, active: active.length };
+      let built = 0, onDesk = 0, held = 0;
+      for (const e of entries.values()) { if (e.small) built++; if (e.onDesk) onDesk++; if (e.held) held++; }
+      return { entries: entries.size, built, onDesk, full: fullCount, hiddenKept: hidden.size, active: active.length, held };
+    },
+    hold(id) {
+      const e = entries.get(id);
+      if (!e || !e.slot || !e.onDesk) return undefined;
+      if (e.held) return e.slot;
+      e.held = true;
+      if (e.pending) { e.deferred = e.pending; e.pending = undefined; }
+      if (e.arc) { const a = e.arc; e.arc = undefined; snap(e.x, a.to.x); snap(e.y, a.to.y); snap(e.rot, a.to.rot); snap(e.z, a.to.z); e.slot.rotation.x = 0; }
+      for (const sp of [e.x, e.y, e.z, e.rot]) sp.velocity = 0;
+      if (e.fade !== 0 || e.opacity !== 1) { e.fade = 0; e.opacity = 1; const c = current(e); if (c) setOpacity(c, 1); }
+      e.heldCast = e.castShadow;
+      setCaster(e, false);
+      writePose(e);
+      return e.slot;
+    },
+    carry(id, pose) {
+      const e = entries.get(id);
+      if (!e?.held) return;
+      snap(e.x, pose.x); snap(e.y, pose.y); snap(e.z, pose.z); snap(e.rot, pose.rot);
+      e.baseZ = pose.z; e.lift = 0;
+      writePose(e);
+      hooks.changed();
+    },
+    release(id, now, velocity) {
+      const e = entries.get(id);
+      if (!e?.held) return;
+      e.held = false;
+      const s = e.slot;
+      if (s) {
+        snap(e.x, s.position.x); snap(e.y, s.position.y); snap(e.z, s.position.z);
+        // The slot may have been turned freely (lifted, turned over): it lies flat again at its turn about the vertical.
+        const turn = new Euler().setFromQuaternion(s.quaternion, 'ZYX').z;
+        snap(e.rot, turn);
+        s.rotation.set(0, 0, turn);
+      }
+      e.baseZ = e.z.value; e.lift = 0; e.dist0 = 0;
+      setCaster(e, e.heldCast);
+      if (velocity) { e.x.velocity = velocity.x; e.y.velocity = velocity.y; }
+      if (e.deferred) { e.pending = { ...e.deferred, at: Math.min(e.deferred.at, now) }; e.deferred = undefined; }
+      writePose(e);
+      activate(e);
+      hooks.changed();
+    },
+    homeOf(id) {
+      const e = entries.get(id);
+      if (!e) return undefined;
+      const p = e.deferred ?? e.pending;
+      if (p) return { ...p.target };
+      return { x: e.x.target, y: e.y.target, z: e.baseZ, rot: e.rot.target };
+    },
+    nudge(id, dx, dy) {
+      const e = entries.get(id);
+      if (!e) return;
+      e.x.value += dx; e.x.target += dx; e.y.value += dy; e.y.target += dy;
+      for (const p of [e.pending, e.deferred]) {
+        if (!p) continue;
+        p.target = { ...p.target, x: p.target.x + dx, y: p.target.y + dy };
+        if (p.from) p.from = { ...p.from, x: p.from.x + dx, y: p.from.y + dy };
+      }
+      if (e.arc) {
+        e.arc.from = { ...e.arc.from, x: e.arc.from.x + dx, y: e.arc.from.y + dy };
+        e.arc.to = { ...e.arc.to, x: e.arc.to.x + dx, y: e.arc.to.y + dy };
+      }
+      if (!e.held) writePose(e);
+      hooks.changed();
+    },
+    isHeld: id => entries.get(id)?.held ?? false,
+    audit() {
+      const drawn: string[] = [], stray: string[] = [], offTarget: string[] = [];
+      for (const child of world.children) {
+        if (child.name !== 'desk-object') continue;
+        const e = owner.get(child);
+        if (!e || entries.get(e.id) !== e || e.slot !== child) { stray.push(e?.id ?? '(no owner)'); continue; }
+        if (!child.visible) continue;
+        if (e.phase === 'shown') drawn.push(e.id);
+        else if (!e.active && !e.held) stray.push(e.id);
+        if (e.phase === 'shown' && !e.active && !e.held && !e.pending) {
+          const off = Math.abs(e.x.value - e.x.target) > 0.05 || Math.abs(e.y.value - e.y.target) > 0.05 || Math.abs(e.z.value - e.baseZ) > 0.05;
+          if (off) offTarget.push(e.id);
+        }
+      }
+      return { drawn, stray, offTarget };
     },
   };
 }

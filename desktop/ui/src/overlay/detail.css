@@ -1,0 +1,155 @@
+/*
+ * The lifted item made sharp: a card laid exactly over the risen object, in the object's own material (the print's white
+ * border, the phone's bezel, the note's paper, the cassette's shell), its face scrolling inside it. The back is a plain
+ * catalogue card. Its buttons sit under it in the quiet glass of the other controls. Every colour comes from a custom
+ * property the theme sets on :root; nothing here names one.
+ */
+.detail { position: fixed; inset: 0; pointer-events: none; z-index: 20; opacity: 0; transition: opacity 170ms ease-out; }
+.detail[hidden] { display: none; }
+.detail.shown { opacity: 1; }
+.detail.concealed { opacity: 0; transition-duration: 90ms; }
+
+.detail-card {
+  --edge: 14px;
+  position: fixed; pointer-events: auto; display: flex; flex-direction: column;
+  padding: var(--edge); border-radius: 4px; outline: none; cursor: pointer;
+  background: var(--ui-print, Canvas); color: var(--ui-paper-ink, CanvasText);
+  box-shadow: 0 1px 0 var(--ui-paper-shade, transparent), 0 28px 60px var(--ui-shadow, transparent);
+}
+/* The card takes focus only so keys reach the page rather than the ask bar; nothing tabs to it, so it shows no ring. */
+.detail-card:focus-visible { outline: none; }
+
+.detail-face {
+  flex: 1; min-height: 0; overflow: auto; cursor: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--ui-paper-ink-faint, GrayText) transparent;
+  font: 14px/1.5 var(--ui-font, system-ui, sans-serif);
+}
+.detail-face[hidden] { display: none; }
+.detail-face h2.title { margin: 0 0 6px; font: 600 21px/1.25 var(--ui-reply-font, serif); letter-spacing: 0.002em; overflow-wrap: anywhere; }
+.detail-face .meta { margin: 0 0 10px; font-size: 12.5px; color: var(--ui-paper-ink-soft, GrayText); font-variant-numeric: tabular-nums; }
+.detail-face .description { margin: 0 0 12px; overflow-wrap: anywhere; white-space: pre-line; }
+.detail-face .url, .detail-face .path { margin: 0 0 6px; font-size: 12px; color: var(--ui-paper-ink-soft, GrayText); overflow-wrap: anywhere; word-break: break-all; }
+
+/* ------------------------------------------------------------ the front, by kind */
+
+.front-main { display: flex; flex-direction: column; min-height: 100%; }
+.front-main.has-more { min-height: calc(100% - 2.6em); }
+.front-main .picture { flex: 1; min-height: 0; width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; }
+.front-main .picture.missing { display: grid; place-items: center; color: var(--ui-paper-ink-faint, GrayText); }
+.front-main .caption { margin: 10px 2px 0; font: italic 15px/1.35 var(--ui-reply-font, serif); color: var(--ui-paper-ink-soft, GrayText); overflow-wrap: anywhere; }
+
+/* A print: picture on its white border, the caption written along the wider bottom edge. */
+.kind-photo .front-main { height: 100%; }
+.kind-photo .front-main.has-more { height: calc(100% - 2.6em); }
+
+/* A phone screenshot: the bezel is the edge. */
+.detail-card.kind-screenshot { --edge: 12px; border-radius: 26px; background: var(--ui-bezel, Canvas); color: var(--ui-ink, CanvasText); }
+.kind-screenshot .front-main { height: 100%; }
+.kind-screenshot .front-main.has-more { height: calc(100% - 2.6em); }
+.kind-screenshot .picture { border-radius: 16px; }
+
+/* A video print: dark, so the frame reads as a screen. */
+.detail-card.kind-video { background: var(--ui-media, Canvas); color: var(--ui-ink, CanvasText); }
+.kind-video .front-main { height: 100%; }
+.kind-video .front-main.has-more { height: calc(100% - 2.6em); }
+.kind-video .player-video { flex: 1; min-height: 0; width: 100%; background: var(--ui-media, Canvas); }
+.kind-video .caption { color: var(--ui-ink-soft, GrayText); }
+
+/* A note: ruled paper, the text written on the lines. */
+.detail-card.kind-note {
+  --rule: 27px;
+  background: var(--ui-note, Canvas);
+}
+.kind-note .detail-front { padding: 4px 10px 0; }
+.kind-note .front-main { min-height: 100%; }
+.kind-note .front-main.has-more { min-height: calc(100% - 2.6em); }
+.kind-note .note-text {
+  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 17px/var(--rule) var(--ui-reply-font, serif);
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(var(--rule) - 1px), var(--ui-note-line, GrayText) calc(var(--rule) - 1px), var(--ui-note-line, GrayText) var(--rule));
+  background-attachment: local; padding-bottom: var(--rule); flex: 1;
+}
+
+/* A cassette: the shell is the edge, everything is written on its label. */
+.detail-card.kind-recording { --edge: 18px; border-radius: 14px; background: var(--ui-tape-shell, Canvas); color: var(--ui-paper-ink, CanvasText); }
+.kind-recording .tape-label { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 14px 16px; border-radius: 6px; background: var(--ui-tape, Canvas); }
+.kind-recording audio { width: 100%; margin: 4px 0 12px; }
+.kind-recording .transcript { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 16px/1.55 var(--ui-reply-font, serif); }
+
+/* A link card: its picture on top, then what the page says it is. */
+.detail-card.kind-link { border-radius: 8px; }
+.kind-link .link-thumb { flex: none; height: calc(var(--card-h, 600px) * 0.48); margin: -2px -2px 14px; border-radius: 4px; overflow: hidden; background: var(--ui-media, Canvas); display: flex; }
+.kind-link .link-thumb .picture { object-fit: contain; }
+
+/* A sheet of paper with its corner folded. */
+.detail-card.kind-file { border-radius: 0; clip-path: polygon(0 0, calc(100% - 34px) 0, 100% 34px, 100% 100%, 0 100%); }
+.detail-card.kind-file::after {
+  content: ""; position: absolute; top: 0; right: 0; width: 34px; height: 34px;
+  background: linear-gradient(225deg, transparent 50%, var(--ui-paper-shade, GrayText) 50%);
+}
+.kind-file .detail-front { padding: 8px 10px; }
+
+/* What else the capture holds, under the main thing. */
+.more { padding-top: 10px; }
+.more h3 { margin: 0 0 8px; font: italic 14px/1.4 var(--ui-reply-font, serif); color: var(--ui-paper-ink-soft, GrayText); }
+.kind-screenshot .more h3, .kind-video .more h3 { color: var(--ui-ink-soft, GrayText); }
+.more .attachment, .more .comment { padding: 10px 0; border-top: 1px solid var(--ui-paper-line, GrayText); }
+.more .attachment .picture { max-width: 100%; max-height: 260px; object-fit: contain; display: block; margin-bottom: 6px; }
+.more audio, .more video { width: 100%; max-height: 260px; margin-bottom: 4px; }
+.more .meta { margin: 0; }
+.more .comment-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------ the back: a catalogue card */
+
+.detail[data-side="back"] .detail-card { background: var(--ui-paper, Canvas); color: var(--ui-paper-ink, CanvasText); border-radius: 4px; clip-path: none; }
+.detail[data-side="back"] .detail-card::after { display: none; }
+.detail-back { padding: 6px 8px 4px; }
+.detail-back > * { max-width: 660px; margin-inline: auto; }
+.detail-back h2.title { margin: 0 auto 12px; }
+.facts { display: grid; grid-template-columns: minmax(84px, max-content) 1fr; column-gap: 18px; margin: 0 auto; }
+.facts dt { padding: 9px 0; border-top: 1px solid var(--ui-paper-line, GrayText); font: italic 14px/1.45 var(--ui-reply-font, serif); color: var(--ui-paper-ink-soft, GrayText); }
+.facts dd { margin: 0; padding: 9px 0; border-top: 1px solid var(--ui-paper-line, GrayText); min-width: 0; overflow-wrap: anywhere; }
+.facts dd p { margin: 0 0 2px; }
+.facts .soft { color: var(--ui-paper-ink-soft, GrayText); font-size: 12.5px; }
+.facts .key { color: var(--ui-paper-ink-soft, GrayText); }
+.facts .likely + .likely { margin-top: 8px; }
+.facts .likely-label { font-weight: 600; margin-right: 8px; }
+.facts .confidence { font-size: 12px; color: var(--ui-paper-ink-soft, GrayText); }
+.facts .confidence[data-level="high"] { color: var(--ui-paper-ink, CanvasText); }
+.facts .evidence { margin: 3px 0 0; padding-left: 16px; font-size: 12.5px; color: var(--ui-paper-ink-soft, GrayText); }
+.facts .evidence li { margin: 1px 0; }
+.facts .tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.facts .tag { padding: 1px 8px; border-radius: 10px; border: 1px solid var(--ui-paper-line, GrayText); font-size: 12.5px; }
+.facts .path { font-size: 12px; word-break: break-all; }
+.facts .path .soft { font-size: 11.5px; word-break: normal; }
+.detail-error { margin: 12px auto 0; color: var(--ui-paper-ink-soft, GrayText); }
+
+/* ------------------------------------------------------------ the buttons under the card */
+
+.detail-actions { position: fixed; display: flex; justify-content: center; gap: 8px; pointer-events: none; }
+.detail-button {
+  pointer-events: auto; height: 32px; padding: 0 14px; border-radius: 9px; font-size: 13px;
+  color: var(--ui-ink, CanvasText); background: var(--ui-glass-strong, Canvas); border: 1px solid var(--ui-line, GrayText);
+  backdrop-filter: blur(10px); box-shadow: 0 6px 18px var(--ui-shadow, transparent);
+  transition: background-color 120ms, border-color 120ms;
+}
+.detail-button:hover { background: var(--ui-glass-hover, ButtonFace); border-color: var(--ui-line-strong, GrayText); }
+.detail-button.primary { background: var(--ui-paper, ButtonFace); color: var(--ui-paper-ink, ButtonText); border-color: transparent; font-weight: 600; }
+.detail-button.primary:hover { filter: brightness(1.04); }
+.detail-button[hidden] { display: none; }
+
+/* The open pile's title, top left under the tools. */
+.open-pile {
+  position: fixed; top: 60px; left: var(--gap, 18px); margin: 0; pointer-events: none;
+  display: flex; align-items: baseline; gap: 12px; color: var(--ui-ink, CanvasText);
+  text-shadow: 0 1px 8px var(--ui-ground, Canvas);
+}
+.open-pile[hidden] { display: none; }
+.open-pile b { font: 600 19px/1.2 var(--ui-reply-font, serif); }
+.open-pile span { font-size: 12.5px; color: var(--ui-ink-soft, GrayText); }
+
+@media (max-width: 640px) {
+  .facts { grid-template-columns: 1fr; }
+  .facts dt { padding-bottom: 0; }
+  .facts dd { border-top: 0; padding-top: 2px; }
+}

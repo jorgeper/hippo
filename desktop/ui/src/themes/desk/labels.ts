@@ -3,7 +3,8 @@
 import { CircleGeometry, Group, Mesh, MeshStandardMaterial, PlaneGeometry } from 'three';
 import type { Object3D } from 'three';
 import { faceTexture, fitLines, isRtl } from '../../scene/textures.ts';
-import { FONT, INK, MARK, PAPER } from './palette.ts';
+import { FONT, HANDLING, INK, MARK, PAPER } from './palette.ts';
+import type { PileStyle } from '../../layout/types.ts';
 import { hashOf } from './objects/slab.ts';
 
 /** Canvas pixels per desk unit for labels. */
@@ -25,7 +26,7 @@ function measureCtx(): CanvasRenderingContext2D {
 }
 
 /** A strip of tape `w` × `h` units with torn ends, drawn on `ctx` (already scaled to units). */
-function drawTape(ctx: CanvasRenderingContext2D, w: number, h: number, seed: number): void {
+function drawTape(ctx: CanvasRenderingContext2D, w: number, h: number, seed: number, colour: string = PAPER.tape): void {
   const teeth = Math.max(4, Math.round(h / 0.32));
   const tooth = 0.22;
   ctx.beginPath();
@@ -35,7 +36,7 @@ function drawTape(ctx: CanvasRenderingContext2D, w: number, h: number, seed: num
   ctx.lineTo(tooth, h);
   for (let k = teeth - 1; k >= 0; k--) ctx.lineTo((k % 2 ? 0 : tooth) + ((seed >> (k + 3)) & 1) * 0.06, (h * k) / teeth);
   ctx.closePath();
-  ctx.fillStyle = PAPER.tape;
+  ctx.fillStyle = colour;
   ctx.fill();
   // A fine dark outline: on the dark desk it is barely there, on the paper map it keeps the tape from melting into the sheet.
   ctx.strokeStyle = PAPER.tapeOutline;
@@ -59,7 +60,15 @@ function labelMesh(canvas: HTMLCanvasElement, w: number, h: number, seed: number
   return root;
 }
 
-export function buildPileLabel(text: string, count: number): Object3D {
+/** The tape and ink of each label style: the layouts' piles, and the handling's set-aside and kept piles. */
+const STYLES: Record<PileStyle | 'pile', { tape: string; ink: string }> = {
+  pile: { tape: PAPER.tape, ink: INK.hand },
+  aside: { tape: HANDLING.asideTape, ink: HANDLING.asideInk },
+  kept: { tape: HANDLING.keptTape, ink: HANDLING.keptInk },
+};
+
+export function buildPileLabel(text: string, count: number, style?: PileStyle): Object3D {
+  const look = STYLES[style ?? 'pile'];
   const seed = hashOf(text);
   const m = measureCtx();
   const empty = count === 0;
@@ -78,8 +87,8 @@ export function buildPileLabel(text: string, count: number): Object3D {
   canvas.height = Math.ceil(h * PX);
   const ctx = canvas.getContext('2d')!;
   ctx.scale(canvas.width / w, canvas.height / h);
-  drawTape(ctx, w, h, seed);
-  ctx.fillStyle = INK.hand;
+  drawTape(ctx, w, h, seed, look.tape);
+  ctx.fillStyle = look.ink;
   ctx.font = `${size}px ${FONT.hand}`;
   ctx.textBaseline = 'middle';
   const rtl = isRtl(text);
@@ -89,12 +98,12 @@ export function buildPileLabel(text: string, count: number): Object3D {
   lines.forEach((l, k) => ctx.fillText(l, empty ? w / 2 : rtl ? PAD + textW : PAD, top + k * size * 1.15));
   if (countText) {
     const cx = w - PAD - (countW - 1.1) / 2 - 0.2, cy = h / 2;
-    ctx.strokeStyle = INK.handSoft;
+    ctx.strokeStyle = style ? look.ink : INK.handSoft;
     ctx.lineWidth = 0.07;
     ctx.beginPath();
     ctx.ellipse(cx, cy, (countW - 1.1) / 2 + 0.45, COUNT * 0.62, -0.08, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = INK.handSoft;
+    ctx.fillStyle = style ? look.ink : INK.handSoft;
     ctx.font = `${COUNT}px ${FONT.hand}`;
     ctx.direction = 'ltr';
     ctx.textAlign = 'center';

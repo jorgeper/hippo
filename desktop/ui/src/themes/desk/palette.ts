@@ -84,6 +84,18 @@ export const CHROME: Record<string, string> = {
   '--ui-line-strong': 'rgba(170, 192, 230, 0.32)',
   '--ui-paper': '#efe9da',
   '--ui-paper-ink': '#1f2330',
+  /** On the paper of a lifted item's front and back: secondary ink, rules, the sheet's shade and its edge. */
+  '--ui-paper-ink-soft': '#5d6170',
+  '--ui-paper-ink-faint': '#8b8e98',
+  '--ui-paper-line': 'rgba(31, 35, 48, 0.12)',
+  '--ui-paper-shade': '#e4ddca',
+  '--ui-print': '#f7f5f0',
+  '--ui-bezel': '#15171c',
+  '--ui-tape': '#efe6cf',
+  '--ui-tape-shell': '#25262b',
+  '--ui-note': '#f5ecd2',
+  '--ui-note-line': 'rgba(120, 140, 175, 0.20)',
+  '--ui-media': '#0b0d12',
   '--ui-lamp': '#ffc978',
   '--ui-lamp-glow': 'rgba(255, 201, 120, 0.45)',
   '--ui-focus': 'rgba(255, 214, 150, 0.70)',
@@ -123,6 +135,22 @@ export const TAPE = {
   /** The coloured band across a label, chosen by the capture id. */
   bands: ['#d9774b', '#4f8fa8', '#c9a23e', '#6e9a5b', '#a8607a'],
 };
+
+/** The handling's own piles: the tape their labels are written on. */
+export const HANDLING = {
+  /** "Set aside": a grey, used-looking tape. */
+  asideTape: '#c9c6bd',
+  asideInk: '#4a4c57',
+  /** "Maybe these": the warm tape of something kept. */
+  keptTape: '#f2d27a',
+  keptInk: '#3a2c10',
+  /** The veil over the desk while a pile is open or an item is lifted: the desk's own darkest blue. */
+  scrim: '#050b16',
+  scrimOpacity: 0.78,
+};
+
+/** The pin pushed into a kept item: a red head on a steel point. */
+export const PIN = { head: '#d8432f', headLight: '#ff8a76', point: '#b9bcc4' };
 
 export const MARK = {
   play: 'rgba(12, 14, 20, 0.62)',

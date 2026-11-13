@@ -4,7 +4,7 @@
 import type { Object3D, PerspectiveCamera, Scene, WebGLRenderer } from 'three';
 import type { DeskItem } from '../../../src/server/wire.ts';
 import type { Kind } from '../../../src/core/types.ts';
-import type { Backdrop, Size, SizeTable } from '../layout/types.ts';
+import type { Backdrop, PileStyle, Size, SizeTable } from '../layout/types.ts';
 
 /** A side of the desk as the person sees it: `far` is away from them (+y), `near` toward them (-y). */
 export type Edge = 'left' | 'right' | 'far' | 'near';
@@ -34,8 +34,14 @@ export interface Motions {
   leave(index: number, to: Edge): MotionSpec;
   /** The `index`-th stayer, gliding to its new place. */
   move(index: number): MotionSpec;
-  lift: MotionSpec;
-  flip: MotionSpec;
+  /** An item rising from the desk to the person (and back down): `duration`, `easing`, and `height` toward them at its middle. */
+  lift: ArcMotion;
+  /** The lifted item turning over: `duration`, `easing`, `spin` (π: a half turn) and `height` toward the person at its middle. */
+  flip: ArcMotion;
+  /** The `index`-th item of a pile spreading out of it, gathering back into it, or scrolling by in an open pile. */
+  spread(index: number): MotionSpec;
+  /** Wheel over a closed pile: one card every `pace` ms, pulled out to the side and slid back under. */
+  riffle: { pace: number };
   /** While a question is with the model the key light breathes: one breath every `period` ms, swelling by `amplitude` (a share of its intensity). */
   thinking: { period: number; amplitude: number };
 }
@@ -46,6 +52,13 @@ export interface Motions {
  * changed, so the frame is drawn; `leave(now)` starts it going away, after which `step` answering false means it has gone.
  */
 export interface BackdropMotion { step(now: number): boolean; leave(now: number): void }
+
+/**
+ * The veil laid over the desk while a pile is open or an item is lifted: a flat object the stage places at a height above
+ * what it should dim (it lies level, like everything else). `set(on, now)` starts it fading in or out; `step(now)` is
+ * called every frame and answers whether it changed.
+ */
+export interface Scrim { object: Object3D; set(on: boolean, now: number): void; step(now: number): boolean; shown(): boolean }
 
 /** What a theme gets to set the stage: the scene to fill, the renderer to configure, the camera, the canvas size in CSS pixels. */
 export interface StageContext { scene: Scene; renderer: WebGLRenderer; camera: PerspectiveCamera; viewSize: { width: number; height: number } }
@@ -68,8 +81,11 @@ export interface Theme {
   setupStage(stage: StageContext): void;
   /** One capture as an object: `small` textures until the camera comes close, then `full`. */
   buildObject(item: DeskItem, lod: 'small' | 'full'): Object3D;
-  /** A pile's label; with `count` 0 (the empty-state line) or 1 it shows the text alone. */
-  buildPileLabel(text: string, count: number): Object3D;
+  /** A pile's label; with `count` 0 (the empty-state line) or 1 it shows the text alone; `style` for the handling's own piles. */
+  buildPileLabel(text: string, count: number, style?: PileStyle): Object3D;
+  /** The small pin laid on a kept item, its point at 0,0 (the stage sets it on the item's far edge). */
+  buildPin(): Object3D;
+  buildScrim(): Scrim;
   /** A small mark laid on an item's corner (in the person layout: how many more people it names). */
   buildBadge(text: string): Object3D;
   /** The block under a pile that draws only its top sheets; undefined when the pile needs none. */

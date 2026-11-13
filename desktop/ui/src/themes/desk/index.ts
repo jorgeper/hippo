@@ -9,6 +9,7 @@ import { CHROME } from './palette.ts';
 import { buildBadge, buildPileLabel } from './labels.ts';
 import { buildBackdrop, buildThickness } from './backdrop.ts';
 import { motions } from './motions.ts';
+import { buildPin, buildScrim } from './handling.ts';
 import { DEPTHS, SIZES } from './objects/slab.ts';
 import { buildPhoto } from './objects/photo.ts';
 import { buildScreenshot } from './objects/screenshot.ts';
@@ -30,6 +31,8 @@ export const theme: Theme = {
   buildObject: (item, lod) => (builders[item.kind] ?? buildFile)(item, lod),
   buildPileLabel,
   buildBadge,
+  buildPin,
+  buildScrim,
   buildThickness,
   buildBackdrop,
   motions,

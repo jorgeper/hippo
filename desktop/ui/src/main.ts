@@ -1,13 +1,12 @@
 /// <reference types="vite/client" />
 // The desk page's entry: boots, sets the stage with the theme the settings name, puts the controls over it (the count and
-// tools, the layout buttons, the ask bar and reply line, the settings panel) and fills the desk with the whole folder in the
-// `kind` layout. Text from captures and the model only ever reaches the page as text (textContent or canvas fillText).
+// tools, the layout buttons, the ask bar and reply line, the settings panel), gives the person their hands on the desk
+// (piles, lifting, dragging, throwing, keeping: ui/src/interact) and fills the desk with the whole folder in the `kind`
+// layout. Text from captures and the model only ever reaches the page as text (textContent or canvas fillText).
 import { createApi } from './api.ts';
 import type { Api, BootResponse } from './api.ts';
 import { createStore } from './state.ts';
-import type { DeskState } from './state.ts';
 import { layouts } from './layout/index.ts';
-import type { LayoutName } from '../../src/recall/spec.ts';
 import { themes } from './themes/index.ts';
 import { createStage } from './scene/stage.ts';
 import type { Theme } from './themes/types.ts';
@@ -15,9 +14,16 @@ import { mountAskBar } from './controls/askbar.ts';
 import { mountLayoutBar } from './controls/layoutbar.ts';
 import { mountToolbar } from './controls/toolbar.ts';
 import { mountSettings } from './controls/settings.ts';
+import { mountHand } from './interact/hand.ts';
+import type { HandProbe } from './interact/hand.ts';
 
-/** What browser tests read: the ids on the desk, the layout, and whether everything has come to rest. */
-export interface DeskProbe { ids(): string[]; layout(): string; settled(): boolean }
+/**
+ * What browser tests read: the ids on the desk, the layout, whether everything has come to rest, and the handling (read
+ * only): the open pile, the lifted item, the set-aside, kept and dropped ids, the piles as composed, the ids the scene
+ * draws, and the scene's own count of objects drawn and in the hand.
+ */
+export interface DeskProbe extends HandProbe { ids(): string[]; layout(): string; settled(): boolean;
+  scene(): { onDesk: number; held: number; active: number; entries: number; built: number; drawn: string[]; stray: string[]; offTarget: string[] } }
 declare global { interface Window { __desk?: DeskProbe } }
 
 /** Quiet this long (no frame drawn, no request out, no question with the model) and the desk counts as settled. */
@@ -65,12 +71,10 @@ async function start(): Promise<void> {
   const store = createStore(api);
   let ready = false;
   let lastChange = performance.now();
-  let shown: { items: DeskState['items']; layout: LayoutName } | undefined;
-  const arrange = (s: DeskState, force = false) => {
-    if (!force && shown && shown.items === s.items && shown.layout === s.layout) return;
-    shown = { items: s.items, layout: s.layout };
+  const hand = mountHand(el('stage'), { stage, store, api, theme, overlayHost: el('desk'), title: el('open-pile') });
+  const arrange = (force = false) => {
     lastChange = performance.now();
-    stage.setItems(s.items, layouts[s.layout](s.items, stage.view(), theme.sizes));
+    hand.render(force);
   };
 
   const toolbar = mountToolbar(el('count'), el('tools'), el('progress'), {
@@ -91,22 +95,24 @@ async function start(): Promise<void> {
       boot = { ...boot, settings: now };
       if (now.mapTiles !== before.mapTiles) {
         stage.setMapTiles(now.mapTiles);
-        arrange(store.get(), true);
+        arrange(true);
       }
     },
   });
 
   store.subscribe(s => {
     stage.setThinking(s.thinking);
-    arrange(s);
+    arrange();
   });
-  stage.on('view', () => arrange(store.get(), true));
+  stage.on('view', () => arrange(true));
   stage.on('frame', () => { lastChange = performance.now(); });
 
   window.__desk = {
+    ...hand.probe,
     ids: () => store.get().items.map(i => i.id),
     layout: () => store.get().layout,
-    settled: () => ready && !store.get().thinking && inFlight() === 0 && performance.now() - lastChange > SETTLED_MS,
+    settled: () => ready && !store.get().thinking && inFlight() === 0 && !hand.busy() && performance.now() - lastChange > SETTLED_MS,
+    scene: () => stage.check(),
   };
   if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).hippoDesk = { stage, store, layouts, theme };
 

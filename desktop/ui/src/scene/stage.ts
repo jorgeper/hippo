@@ -1,19 +1,56 @@
-// The stage: the renderer, a camera looking down at the desk tilted a little from vertical, zoom toward the pointer and
-// panning by dragging empty desk (both eased), picking, and a frame loop that draws only when something changed and redraws
+// The stage: the renderer, a camera looking down at the desk tilted a little from vertical, zoom toward a point and panning
+// (both eased; the pointer gestures that ask for them live in ui/src/interact), picking, the hand (holding, carrying and
+// lifting objects for the gestures), and a frame loop that draws only when something changed and redraws
 // the shadow map only while a shadow caster moves. It knows nothing about how things look: the theme supplies the surface,
 // lights, objects, labels and motions. It survives window resizes, device-pixel-ratio changes and a lost WebGL context.
-import { DirectionalLight, Group, PerspectiveCamera, Plane, Raycaster, Scene, Vector2, Vector3, WebGLRenderer } from 'three';
+import { DirectionalLight, Group, PerspectiveCamera, Plane, Quaternion, Raycaster, Scene, Vector2, Vector3, WebGLRenderer } from 'three';
 import type { Object3D } from 'three';
 import type { DeskItem } from '../../../src/server/wire.ts';
-import type { LayoutResult, View } from '../layout/types.ts';
+import type { LayoutResult, Size, View } from '../layout/types.ts';
 import type { Theme } from '../themes/types.ts';
 import { createArranger } from './arrange.ts';
 import type { Bounds, Rect } from './arrange.ts';
 import { createObjects } from './objects.ts';
+import type { Pose } from './objects.ts';
 import { setAnisotropy } from './textures.ts';
 
 export interface FrameInfo { time: number; dt: number; moving: boolean }
 export interface PickResult { id?: string; pile?: string }
+/** A pose off the desk: where a lifted object stands and how it is turned. */
+export interface FreePose { position: Vector3; quaternion: Quaternion }
+export interface ScreenRect { left: number; top: number; width: number; height: number }
+
+/** What the gestures do with the objects (ui/src/interact): every call is about the object standing for a capture id. */
+export interface Hand {
+  /** Takes the object into the hand: its pose is set from here until it is let go; the arrangement's motions for it wait. */
+  hold(id: string): boolean;
+  /** Puts a held object down at a desk pose at once (dragging it). */
+  carry(id: string, pose: Pose): void;
+  /** Sets a held object's pose anywhere (lifting it toward the person, turning it over). */
+  place(id: string, pose: FreePose): void;
+  /** The held object's pose now. */
+  poseOf(id: string): FreePose | undefined;
+  /** Lets a held object go; `velocity` (desk units per second) carries into its next motion. */
+  release(id: string, velocity?: { x: number; y: number }): void;
+  /** Where the object belongs on the desk, as a pose off the desk (lying flat there). */
+  homeOf(id: string): FreePose | undefined;
+  /**
+   * Where a `size` object stands to fill about `share` of the view height (less when that would be too wide), facing the
+   * person; its face, `thick` in front of its origin, is what fills it.
+   */
+  liftPose(size: Size, share: number, thick?: number): FreePose;
+  /**
+   * The window rectangle (CSS pixels) a held object's face covers: `size` centred on the object, on whichever of its two
+   * faces (its base, or `depth` above it) is nearer the camera. Not its bounding box, which a turned slab overstates.
+   */
+  screenRect(id: string, size: Size, depth: number): ScreenRect | undefined;
+  /** Moves a pile (label, block, drawn objects) by dx,dy desk units at once. */
+  shiftPile(key: string, dx: number, dy: number): void;
+  /** The veil over everything while an item is lifted. */
+  setLifting(on: boolean): void;
+  /** Runs `step` every frame (before drawing) while it answers true. */
+  animate(step: (now: number, dt: number) => boolean): void;
+}
 
 export interface Stage {
   /** Puts these items on the desk where the layout says: animated, and redirected from where things are if called mid-flight. */
@@ -32,6 +69,23 @@ export interface Stage {
   /** The desk area, in desk units, the layouts should fill: at least VIEW_MIN_WIDTH wide, shaped like the room the controls leave. */
   view(): View;
   setMapTiles(on: boolean): void;
+  /** The desk point under a window point, seen by the camera as it is now (on the level `z` desk units above the desk). */
+  groundAt(clientX: number, clientY: number, z?: number): { x: number; y: number } | undefined;
+  /** The window point (CSS pixels) where a desk point x,y at height z shows now. */
+  toWindow(x: number, y: number, z?: number): { x: number; y: number };
+  /** The part of the desk the window shows now (the near edge's width, the narrower one). */
+  visible(): Rect;
+  /** Starts panning from a window point (dragging empty desk); false when that point is not over the desk. */
+  panStart(clientX: number, clientY: number): boolean;
+  /** Pans so the desk point the pan started from stays under this window point. */
+  panTo(clientX: number, clientY: number): void;
+  /** Zooms toward a window point by `factor` (below 1 is closer). */
+  zoomAt(clientX: number, clientY: number, factor: number): void;
+  /** Zooms for a wheel event: scroll, or a trackpad pinch (which arrives as a wheel with ctrlKey). */
+  wheelZoom(e: WheelEvent): void;
+  hand: Hand;
+  /** For checks: what the scene draws and holds, and anything stray or not where it was sent (see ObjectStore.audit). */
+  check(): { onDesk: number; held: number; active: number; entries: number; built: number; drawn: string[]; stray: string[]; offTarget: string[] };
   /** `low` draws at device pixel ratio 1 with a smaller shadow map; the stage drops to it by itself when frames are slow. */
   setQuality(q: 'high' | 'low'): void;
   /** Counts for checks: the renderer's, the objects', the renderer string. */
@@ -324,64 +378,31 @@ export function createStage(canvas: HTMLCanvasElement, theme: Theme, opts: { map
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  function onWheel(e: WheelEvent): void {
-    e.preventDefault();
-    const p = local(e);
+  function wheelZoom(e: WheelEvent): void {
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? cssH : 1;
     const k = e.ctrlKey ? 0.01 : 0.0016;   // a trackpad pinch arrives as a wheel with ctrlKey
-    zoomAt(p.x, p.y, Math.exp(e.deltaY * unit * k));
+    zoomAt(local(e).x, local(e).y, Math.exp(e.deltaY * unit * k));
   }
 
-  const pointers = new Map<number, { x: number; y: number }>();
-  let pan: { anchor: Vector3 } | undefined;
-  let pinch: { dist: number } | undefined;
-  function onPointerDown(e: PointerEvent): void {
-    if (e.button !== 0) return;
-    const p = local(e);
-    pointers.set(e.pointerId, p);
-    if (pointers.size === 2) {
-      const [a, b] = [...pointers.values()];
-      pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) };
-      pan = undefined;
-      return;
-    }
-    if (pick(e.clientX, e.clientY)) return;     // items and piles belong to the gestures a later task adds
+  // Panning keeps the desk point it started from under the pointer (the pointer gestures are in ui/src/interact/pointer.ts).
+  let panAnchor: Vector3 | undefined;
+  function panStart(clientX: number, clientY: number): boolean {
+    const p = local({ clientX, clientY });
     place(probe, goal);
     const g = groundAt(probe, p.x, p.y, new Vector3());
-    if (!g) return;
-    pan = { anchor: g };
-    canvas.setPointerCapture(e.pointerId);
+    panAnchor = g;
+    return !!g;
   }
-  function onPointerMove(e: PointerEvent): void {
-    if (!pointers.has(e.pointerId)) return;
-    const p = local(e);
-    pointers.set(e.pointerId, p);
-    if (pinch && pointers.size === 2) {
-      const [a, b] = [...pointers.values()];
-      const d = Math.hypot(a.x - b.x, a.y - b.y);
-      if (d > 0 && pinch.dist > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, pinch.dist / d);
-      pinch.dist = d;
-      return;
-    }
-    if (!pan) return;
+  function panTo(clientX: number, clientY: number): void {
+    if (!panAnchor) return;
+    const p = local({ clientX, clientY });
     place(probe, goal);
     const g = groundAt(probe, p.x, p.y, hit);
     if (!g) return;
-    goal.tx += pan.anchor.x - g.x;
-    goal.ty += pan.anchor.y - g.y;
+    goal.tx += panAnchor.x - g.x;
+    goal.ty += panAnchor.y - g.y;
     follow = false;
   }
-  function onPointerUp(e: PointerEvent): void {
-    pointers.delete(e.pointerId);
-    if (pointers.size < 2) pinch = undefined;
-    if (!pointers.size) pan = undefined;
-    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
-  }
-  canvas.addEventListener('wheel', onWheel, { passive: false });
-  canvas.addEventListener('pointerdown', onPointerDown);
-  canvas.addEventListener('pointermove', onPointerMove);
-  canvas.addEventListener('pointerup', onPointerUp);
-  canvas.addEventListener('pointercancel', onPointerUp);
   canvas.style.touchAction = 'none';
 
   // ------------------------------------------------------------ picking
@@ -400,6 +421,71 @@ export function createStage(canvas: HTMLCanvasElement, theme: Theme, opts: { map
     }
     return undefined;
   }
+
+  // ------------------------------------------------------------ the hand
+
+  const steppers = new Set<(now: number, dt: number) => boolean>();
+  const tmpV = new Vector3(), fwd = new Vector3();
+
+  function liftPose(size: Size, share: number, thick = 0): FreePose {
+    const u = usable(), uw = Math.max(50, u.x1 - u.x0), uh = Math.max(50, u.y1 - u.y0);
+    const focal = cssH / (2 * Math.tan((FOV * Math.PI) / 360));    // CSS px per desk unit at depth 1
+    const wantH = Math.min(cssH * share, uh * 0.9), wantW = uw * 0.86;
+    const depth = Math.max((size.h * focal) / wantH, (size.w * focal) / wantW) + thick;
+    // Through the middle of the room the controls leave, at that depth along the camera's axis.
+    ndc.set(((u.x0 + u.x1) / 2 / cssW) * 2 - 1, -(((u.y0 + u.y1) / 2) / cssH) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    camera.getWorldDirection(fwd);
+    const t = depth / Math.max(0.2, ray.ray.direction.dot(fwd));
+    return { position: ray.ray.origin.clone().addScaledVector(ray.ray.direction, t), quaternion: camera.quaternion.clone() };
+  }
+
+  const hand: Hand = {
+    hold(id) {
+      const ok = !!objects.hold(id);
+      if (ok) needsRender = true;
+      return ok;
+    },
+    carry(id, pose) { objects.carry(id, pose); },
+    place(id, pose) {
+      const slot = objects.objectOf(id);
+      if (!slot || !objects.isHeld(id)) return;
+      slot.position.copy(pose.position);
+      slot.quaternion.copy(pose.quaternion);
+      slot.updateMatrixWorld(true);
+      needsRender = true;
+      lodDirty = true;
+    },
+    poseOf(id) {
+      const slot = objects.objectOf(id);
+      return slot ? { position: slot.position.clone(), quaternion: slot.quaternion.clone() } : undefined;
+    },
+    release(id, velocity) { objects.release(id, performance.now(), velocity); needsRender = true; },
+    homeOf(id) {
+      const h = objects.homeOf(id);
+      if (!h) return undefined;
+      return { position: new Vector3(h.x, h.y, h.z), quaternion: new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), h.rot) };
+    },
+    liftPose,
+    screenRect(id, size, depth) {
+      const slot = objects.objectOf(id);
+      if (!slot) return undefined;
+      slot.updateMatrixWorld(true);
+      const near = (z: number) => tmpV.set(0, 0, z).applyMatrix4(slot.matrixWorld).distanceTo(camera.position);
+      const z = near(depth) <= near(0) ? depth : 0;
+      const c = canvas.getBoundingClientRect();
+      const r = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+      for (const x of [-size.w / 2, size.w / 2]) for (const y of [-size.h / 2, size.h / 2]) {
+        tmpV.set(x, y, z).applyMatrix4(slot.matrixWorld).project(camera);
+        const sx = (tmpV.x + 1) / 2 * cssW, sy = (1 - tmpV.y) / 2 * cssH;
+        r.x0 = Math.min(r.x0, sx); r.x1 = Math.max(r.x1, sx); r.y0 = Math.min(r.y0, sy); r.y1 = Math.max(r.y1, sy);
+      }
+      return { left: c.left + r.x0, top: c.top + r.y0, width: r.x1 - r.x0, height: r.y1 - r.y0 };
+    },
+    shiftPile(key, dx, dy) { arranger.shiftPile(key, dx, dy); needsRender = true; shadowDirty = true; },
+    setLifting(on) { arranger.setLifting(on, performance.now()); needsRender = true; },
+    animate(step) { steppers.add(step); },
+  };
 
   // ------------------------------------------------------------ the frame loop
 
@@ -420,6 +506,9 @@ export function createStage(canvas: HTMLCanvasElement, theme: Theme, opts: { map
     if (grown.moving) dirty = true;
     if (grown.shadows) shadowDirty = true;
     if (easeCamera(dt)) { dirty = true; lodDirty = true; }
+    for (const fn of steppers) {
+      if (fn(t, dt)) { dirty = true; lodDirty = true; } else steppers.delete(fn);
+    }
     if (thinking || breath !== 0) {
       const { period, amplitude } = theme.motions.thinking;
       breath = thinking ? (1 - Math.cos(((t - thinkingSince) / period) * Math.PI * 2)) / 2 : Math.max(0, breath - dt * 2);
@@ -485,6 +574,38 @@ export function createStage(canvas: HTMLCanvasElement, theme: Theme, opts: { map
     },
     view: () => lastView ?? computeView(),
     setMapTiles(on) { arranger.setMapTiles(on); },
+    groundAt(clientX, clientY, z = 0) {
+      const p = local({ clientX, clientY });
+      ndc.set((p.x / cssW) * 2 - 1, -(p.y / cssH) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      const g = ray.ray.intersectPlane(new Plane(new Vector3(0, 0, 1), -z), new Vector3());
+      return g ? { x: g.x, y: g.y } : undefined;
+    },
+    toWindow(x, y, z = 0) {
+      const c = canvas.getBoundingClientRect();
+      tmpV.set(x, y, z).project(camera);
+      return { x: c.left + (tmpV.x + 1) / 2 * cssW, y: c.top + (1 - tmpV.y) / 2 * cssH };
+    },
+    visible() {
+      const r = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+      for (const [px, py] of [[0, 0], [cssW, 0], [0, cssH], [cssW, cssH]]) {
+        const g = groundAt(camera, px, py, hit);
+        if (!g) continue;
+        r.x0 = Math.min(r.x0, g.x); r.x1 = Math.max(r.x1, g.x); r.y0 = Math.min(r.y0, g.y); r.y1 = Math.max(r.y1, g.y);
+      }
+      const near0 = groundAt(camera, 0, cssH, hit)?.x, near1 = groundAt(camera, cssW, cssH, new Vector3())?.x;
+      if (near0 !== undefined && near1 !== undefined) { r.x0 = Math.max(r.x0, near0); r.x1 = Math.min(r.x1, near1); }
+      return Number.isFinite(r.x0) ? r : { x0: -60, x1: 60, y0: -30, y1: 30 };
+    },
+    panStart,
+    panTo,
+    zoomAt(clientX, clientY, factor) { const p = local({ clientX, clientY }); zoomAt(p.x, p.y, factor); },
+    wheelZoom,
+    hand,
+    check() {
+      const st = objects.stats();
+      return { onDesk: st.onDesk, held: st.held, active: st.active, entries: st.entries, built: st.built, ...objects.audit() };
+    },
     setQuality(q) { autoQuality = false; quality = q; applyQuality(); },
     info() {
       const i = renderer.info;
@@ -497,11 +618,6 @@ export function createStage(canvas: HTMLCanvasElement, theme: Theme, opts: { map
       dprQuery?.removeEventListener('change', onDpr);
       canvas.removeEventListener('webglcontextlost', onLost);
       canvas.removeEventListener('webglcontextrestored', onRestored);
-      canvas.removeEventListener('wheel', onWheel);
-      canvas.removeEventListener('pointerdown', onPointerDown);
-      canvas.removeEventListener('pointermove', onPointerMove);
-      canvas.removeEventListener('pointerup', onPointerUp);
-      canvas.removeEventListener('pointercancel', onPointerUp);
       renderer.dispose();
     },
   };

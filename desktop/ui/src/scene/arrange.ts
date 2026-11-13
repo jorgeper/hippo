@@ -6,8 +6,8 @@
 import { Box3, Vector3 } from 'three';
 import type { Group, Object3D } from 'three';
 import type { DeskItem } from '../../../src/server/wire.ts';
-import type { Backdrop, LayoutResult, Placement, Size } from '../layout/types.ts';
-import type { BackdropMotion, Edge, Theme } from '../themes/types.ts';
+import type { Backdrop, LayoutResult, PileInfo, Placement, Size } from '../layout/types.ts';
+import type { BackdropMotion, Edge, Scrim, Theme } from '../themes/types.ts';
 import type { ObjectStore, Pose } from './objects.ts';
 import { spring, step, settled, snap } from './spring.ts';
 import { blockSizeOf, PILE_CAP } from '../layout/pile.ts';
@@ -166,8 +166,16 @@ const BLOCK_NEAR = 14;
 const BLOCK_LATEST_MS = 900;
 /** Room above a time layout's columns for their labels, in desk units. */
 const COLUMN_LABEL_ROOM = 3.6;
+/** The veil lies this far above the highest thing it dims; an open pile's spread lies this far above the veil. */
+const SCRIM_GAP = 0.3, RAISED_GAP = 0.25;
+/** Positions closer than this (desk units) are the same place. */
+const SAME_PLACE = 1e-6;
 
-interface PileParts { key: string; label?: Object3D; labelSize?: Size; block?: Object3D; blockTop: number; sig: string;
+interface PileParts { key: string; label?: Object3D; labelSize?: Size; block?: Object3D; blockTop: number;
+  /** What the label says and what the block stands for: either changing builds that part again. */
+  labelSig: string; blockSig: string;
+  /** Where the label and block stand: a pile moved by the hand keeps them, a pile the layout moved elsewhere builds them again. */
+  at: { x: number; y: number };
   scale: ReturnType<typeof spring>; startAt: number; labelPos?: LabelSpot;
   /** A new block grows up from the desk as its pile's first card comes in, rather than standing there bare. */
   grow?: ReturnType<typeof spring>; growAt: number; dealt?: string[] }
@@ -189,6 +197,12 @@ export interface Arranger {
   settled(id: string): void;
   phases(): ReadonlyMap<string, Phase>;
   setMapTiles(on: boolean): void;
+  /** While an item is lifted: the veil also covers an open pile's spread. */
+  setLifting(on: boolean, now: number): void;
+  /** Moves a pile (its label, block and drawn objects) by dx,dy at once: the person is dragging it by its label. */
+  shiftPile(key: string, dx: number, dy: number): void;
+  /** The ids a pile draws, top last. */
+  drawnOf(key: string): readonly string[];
 }
 
 const tmpBox = new Box3();
@@ -218,6 +232,23 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
   let empty: { obj: Object3D; text: string } | undefined;
   let mapTiles = false;
   const pileByObject = new WeakMap<Object3D, string>();
+  /** The last layout's piles by key, the ids each draws, and where members not drawn tuck in. */
+  let pileInfo = new Map<string, PileInfo>();
+  const drawnBy = new Map<string, string[]>();
+  const tuckZ = new Map<string, number>();
+  // The veil: under an open pile's spread, or over everything while an item is lifted.
+  let scrim: Scrim | undefined;
+  let raisedNow = false, lifting = false, scrimLow = 0, scrimHigh = 0;
+  function placeScrim(now: number): void {
+    const on = raisedNow || lifting;
+    if (!scrim) {
+      if (!on) return;
+      scrim = theme.buildScrim();
+      scene.add(scrim.object);
+    }
+    scrim.object.position.set(0, 0, lifting ? scrimHigh : scrimLow);
+    scrim.set(on, now);
+  }
 
   const dispose = (o: Object3D | undefined) => { if (o) { o.removeFromParent(); objects.disposeObject(o); } };
   const motionOf = (o: Object3D) => o.userData.motion as BackdropMotion | undefined;
@@ -257,13 +288,25 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
     return r;
   }
 
-  function measure(items: DeskItem[], layout: LayoutResult): Rect {
+  /** The area to frame: while a pile is open, only its spread. */
+  function measure(items: DeskItem[], layout: LayoutResult): Rect { return measureOf(items, layout, true); }
+
+  function measureOf(items: DeskItem[], layout: LayoutResult, framing: boolean): Rect {
     if (layout.empty !== undefined) {
       const f = empty ? footprint(empty.obj) : { w: 40, h: 4 };
       return { x0: -f.w / 2 - 4, x1: f.w / 2 + 4, y0: -f.h / 2 - 4, y1: f.h / 2 + 4 };
     }
     const byId = new Map(items.map(i => [i.id, i]));
-    const r = bodyOf(layout.placements, byId);
+    // What is drawn: not a pile that draws none of its members; while a pile is open, only its spread (the camera frames it).
+    const info = new Map(layout.piles.map(p => [p.key, p]));
+    if (framing && layout.frame) return { ...layout.frame };
+    const raised = framing && layout.piles.some(p => p.raised);
+    const counted = layout.placements.filter(pl => {
+      const p = info.get(pl.pile);
+      return p?.cap !== 0 && (!raised || !!p?.raised);
+    });
+    const r = bodyOf(counted, byId);
+    if (raised) { if (Number.isFinite(r.y0)) r.y0 -= 4; return r; }
     if (layout.backdrop?.type === 'columns') {
       const b = layout.backdrop;
       for (const c of b.columns) { r.x0 = Math.min(r.x0, c.x - c.width / 2); r.x1 = Math.max(r.x1, c.x + c.width / 2); }
@@ -281,6 +324,8 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
 
   function apply(items: DeskItem[], layout: LayoutResult, frame: (b: Bounds) => Rect, now: number): void {
     const byId = new Map(items.map(i => [i.id, i]));
+    drawnBy.clear();
+    tuckZ.clear();
     const byPile = new Map<string, Placement[]>();
     const placementOf = new Map<string, Placement>();
     for (const p of layout.placements) {
@@ -305,35 +350,58 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
       }
     } else if (empty) { dispose(empty.obj); empty = undefined; }
 
-    // Which ids each pile draws, their targets and stacking.
+    // Which ids each pile draws, their targets and stacking. Piles on the desk first, then items dropped loose on top of
+    // them, then (above the veil) an open pile's spread.
     const drawn: string[] = [];
-    const targets = new Map<string, Pose & { cast: boolean; pile: string; badge?: string }>();
+    const targets = new Map<string, Pose & { cast: boolean; pile: string; badge?: string; pin?: boolean }>();
     const nextPiles = new Map<string, PileParts>();
     const bodies: PileBody[] = [];
     const labelSizes: Record<string, Size> = {};
     /** How high each pile's top sheet lies, for a label that has to lie on it. */
     const pileTops = new Map<string, number>();
-    for (const pile of layout.piles) {
+    const rank = (p: PileInfo) => (p.raised ? 2 : p.loose ? 1 : 0);
+    const ordered = layout.piles.map((p, k) => ({ p, k })).sort((a, b) => rank(a.p) - rank(b.p) || a.k - b.k).map(x => x.p);
+    let lowTop = floor, raisedFloor = floor;
+    let raisedReady = false;
+    for (const pile of ordered) {
       const members = (byPile.get(pile.key) ?? []).slice().sort((a, b) => a.order - b.order);
       if (!members.length) continue;
-      const plan = planPile(pile.ids);
+      if (pile.raised && !raisedReady) { raisedReady = true; raisedFloor = lowTop + SCRIM_GAP + RAISED_GAP; }
+      const plan = planPile(pile.ids, pile.cap ?? PILE_CAP);
       const drawnIds = new Set(plan.drawn);
       const shown = members.filter(m => drawnIds.has(m.id));
+      // Where the pile's bottom lies: the desk (or the backdrop sheet), on top of the piles under a loose item, or above the veil.
+      let base = floor;
+      if (pile.raised) base = raisedFloor;
+      else if (pile.loose && shown.length) {
+        const own = bodyOf(shown, byId);
+        for (const b of bodies) {
+          if (own.x0 < b.x1 && b.x0 < own.x1 && own.y0 < b.y1 && b.y0 < own.y1) base = Math.max(base, (pileTops.get(b.key) ?? floor) + SHEET_GAP);
+        }
+      }
       // The block under the pile has the middle footprint of the drawn sheets, so it reads as more of the same underneath.
       const blockSize = blockSizeOf(shown.map(m => theme.sizes[byId.get(m.id)!.kind]));
-      const sig = `${pile.label}|${pile.count}|${plan.hidden}|${blockSize.w}x${blockSize.h}|${pile.x}|${pile.y}|${floor}`;
+      const wantsBlock = !pile.bare && plan.hidden > 0;
+      const labelSig = pile.bare ? '' : `${pile.label}|${pile.count}|${pile.style ?? ''}`;
+      const blockSig = wantsBlock ? `${plan.hidden}|${blockSize.w}x${blockSize.h}|${base}` : '';
       const old = piles.get(pile.key);
-      let parts: PileParts;
-      if (old && old.sig === sig) { parts = old; piles.delete(pile.key); }
-      else {
-        // A block that only changes height where it stands swaps in place; anywhere else it grows in.
-        const standing = !!old?.block && old.block.position.x === pile.x && old.block.position.y === pile.y && !old.grow;
-        if (old) { dispose(old.label); dispose(old.block); piles.delete(pile.key); }
-        parts = { key: pile.key, sig, scale: spring(0, { stiffness: LABEL_STIFFNESS, damping: 0.8 }), startAt: now + LABEL_DELAY_MS, blockTop: floor, growAt: now };
-        if (plan.hidden > 0) {
+      piles.delete(pile.key);
+      const samePlace = !!old && Math.abs(old.at.x - pile.x) < SAME_PLACE && Math.abs(old.at.y - pile.y) < SAME_PLACE;
+      const parts: PileParts = old && samePlace ? old
+        : { key: pile.key, labelSig: '', blockSig: '', at: { x: pile.x, y: pile.y }, blockTop: base,
+          scale: spring(0, { stiffness: LABEL_STIFFNESS, damping: 0.8 }), startAt: now + LABEL_DELAY_MS, growAt: now };
+      if (old && !samePlace) { dispose(old.label); dispose(old.block); }
+      // The block: kept while it stands for the same; one that only changes height where it stands swaps in place;
+      // anywhere else it grows in.
+      if (parts.blockSig !== blockSig || !wantsBlock) {
+        const standing = !!parts.block && !parts.grow;
+        if (parts.block) { dispose(parts.block); parts.block = undefined; }
+        parts.grow = undefined;
+        parts.blockTop = base;
+        if (wantsBlock) {
           const block = theme.buildThickness(plan.hidden, blockSize);
           if (block) {
-            block.position.set(pile.x, pile.y, floor);
+            block.position.set(pile.x, pile.y, base);
             scene.add(block);
             parts.block = block;
             parts.blockTop = footprint(block).top;
@@ -343,39 +411,63 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
               parts.grow.target = 1;
               block.scale.z = 0.001;
               block.visible = false;
+              parts.growAt = now;
             }
           }
         }
-        const label = theme.buildPileLabel(pile.label, pile.count);
-        const f = footprint(label);
-        parts.labelSize = { w: f.w, h: f.h };
-        label.scale.setScalar(0.001);
-        label.visible = false;
-        scene.add(label);
-        label.traverse(o => pileByObject.set(o, pile.key));
-        parts.label = label;
+        parts.blockSig = blockSig;
+      }
+      if (!parts.block) parts.blockTop = base;
+      // The label: kept while it says the same.
+      if (parts.labelSig !== labelSig) {
+        if (parts.label) { dispose(parts.label); parts.label = undefined; parts.labelSize = undefined; }
+        parts.scale = spring(0, { stiffness: LABEL_STIFFNESS, damping: 0.8 });
+        parts.startAt = now + LABEL_DELAY_MS;
+        if (!pile.bare) {
+          const label = theme.buildPileLabel(pile.label, pile.count, pile.style);
+          const f = footprint(label);
+          parts.labelSize = { w: f.w, h: f.h };
+          label.scale.setScalar(0.001);
+          label.visible = false;
+          scene.add(label);
+          label.traverse(o => pileByObject.set(o, pile.key));
+          parts.label = label;
+        }
+        parts.labelSig = labelSig;
       }
       nextPiles.set(pile.key, parts);
       let z = parts.blockTop;
       const zs = shown.map(m => { const at = z; z += theme.depths[byId.get(m.id)!.kind] + SHEET_GAP; return at; });
-      // The highest objects that still lie near the desk cast the pile's shadow (shown is bottom first).
+      // The highest objects that still lie near the desk cast the pile's shadow (shown is bottom first); nothing above the
+      // veil casts one.
       let lastLow = -1;
-      zs.forEach((at, k) => { if (at < SHADOW_MAX_Z || k === 0) lastLow = k; });
+      zs.forEach((at, k) => { if (at - base < SHADOW_MAX_Z || k === 0) lastLow = k; });
       shown.forEach((m, k) => {
-        const cast = k <= lastLow && k > lastLow - SHADOW_CASTERS;
-        targets.set(m.id, { x: m.x, y: m.y, z: zs[k], rot: m.rot, cast, pile: pile.key, ...(m.badge ? { badge: m.badge } : {}) });
+        const cast = !pile.raised && k <= lastLow && k > lastLow - SHADOW_CASTERS;
+        targets.set(m.id, { x: m.x, y: m.y, z: zs[k], rot: m.rot, cast, pile: pile.key, ...(m.badge ? { badge: m.badge } : {}), ...(m.pin ? { pin: true } : {}) });
         drawn.push(m.id);
       });
+      // Members not drawn tuck into the pile at its foot.
+      for (const m of members) if (!drawnIds.has(m.id)) tuckZ.set(m.id, base);
       pileTops.set(pile.key, z);
-      const body = bodyOf(shown, byId);
-      bodies.push({ key: pile.key, weight: pile.count, ...body });
+      if (!pile.raised) lowTop = Math.max(lowTop, z, parts.blockTop);
+      drawnBy.set(pile.key, shown.map(m => m.id));
+      if (shown.length) {
+        const body = bodyOf(shown, byId);
+        bodies.push({ key: pile.key, weight: pile.count, ...body });
+      }
       if (parts.labelSize) labelSizes[pile.key] = parts.labelSize;
     }
     for (const old of piles.values()) { dispose(old.label); dispose(old.block); }
     piles = nextPiles;
+    pileInfo = new Map(layout.piles.map(p => [p.key, p]));
+    raisedNow = raisedReady;
+    scrimLow = lowTop + SCRIM_GAP;
+    scrimHigh = Math.max(lowTop, ...[...targets.values()].map(t => t.z + 0.7)) + SCRIM_GAP;
+    placeScrim(now);
 
     // Labels beside their piles, never over another pile or label; smaller, or on the pile itself, when there is no room.
-    const view = measure(items, layout);
+    const view = measureOf(items, layout, false);
     const bounds = { x0: view.x0 - 6, x1: view.x1 + 6, y0: view.y0 - 4, y1: view.y1 + 4 };
     const spots = placeLabels(bodies, labelSizes, bounds, LABEL_GAP);
     for (const parts of piles.values()) {
@@ -401,21 +493,34 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
     const order = dealOrder(drawn.filter(id => arriveSet.has(id)).map(id => ({ id, x: targets.get(id)!.x, y: targets.get(id)!.y })), edges);
 
     const firstDeal = new Map<string, number>(), dealt = new Map<string, string[]>();
+    // Out of a pile (it opens, it is scrolled, a card is pulled from under it): quickly, from that point, in order.
+    let outOf = 0;
     order.forEach((o, k) => {
       const t = targets.get(o.id)!;
-      const spec = theme.motions.arrive(k, o.edge);
-      firstDeal.set(t.pile, Math.min(firstDeal.get(t.pile) ?? Infinity, spec.delay));
-      dealt.set(t.pile, [...(dealt.get(t.pile) ?? []), o.id]);
-      objects.arrive(byId.get(o.id)!, t, o.edge, edges, spec, now, { castShadow: t.cast, pile: t.pile, badge: t.badge });
+      const from = pileInfo.get(t.pile)?.from;
+      const spec = from ? theme.motions.spread(outOf++) : theme.motions.arrive(k, o.edge);
+      if (!from) {
+        firstDeal.set(t.pile, Math.min(firstDeal.get(t.pile) ?? Infinity, spec.delay));
+        dealt.set(t.pile, [...(dealt.get(t.pile) ?? []), o.id]);
+      }
+      objects.arrive(byId.get(o.id)!, t, o.edge, edges, spec, now,
+        { castShadow: t.cast, pile: t.pile, badge: t.badge, pin: t.pin, ...(from ? { start: from } : {}) });
     });
-    move.forEach((id, k) => {
+    // Only what goes somewhere new takes its turn in the stagger; what stays put (a gesture moved one thing) starts at once.
+    let quick = 0, stagger = 0;
+    move.forEach(id => {
       const t = targets.get(id)!;
-      objects.move(id, t, theme.motions.move(k), now, { castShadow: t.cast, pile: t.pile, badge: t.badge });
+      const info = pileInfo.get(t.pile);
+      const was = objects.homeOf(id);
+      const goes = !was || Math.hypot(was.x - t.x, was.y - t.y) > 0.01 || Math.abs(was.rot - t.rot) > 0.001;
+      const spec = info?.quick || info?.raised ? theme.motions.spread(goes ? quick++ : 0) : theme.motions.move(goes ? stagger++ : 0);
+      objects.move(id, t, spec, now, { castShadow: t.cast, pile: t.pile, badge: t.badge, pin: t.pin });
     });
     change.tuck.forEach((id, k) => {
       const p = placementOf.get(id)!;
-      const pile = layout.piles.find(x => x.key === p.pile);
-      objects.tuck(id, { x: pile?.x ?? p.x, y: pile?.y ?? p.y, z: floor, rot: p.rot }, theme.motions.move(k), now, p.pile);
+      const pile = pileInfo.get(p.pile);
+      const spec = pile?.quick || pile?.raised || pile?.cap === 0 ? theme.motions.spread(k) : theme.motions.move(k);
+      objects.tuck(id, { x: pile?.x ?? p.x, y: pile?.y ?? p.y, z: tuckZ.get(id) ?? floor, rot: p.rot }, spec, now, p.pile);
     });
     const leaving = change.leave.map(id => ({ id, at: objects.positionOf(id) }))
       .map(l => ({ ...l, ...(l.at ? nearestEdge(l.at.x, l.at.y, edges) : { edge: 'near' as Edge, distance: 0 }) }))
@@ -432,6 +537,7 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
   function stepLabels(dt: number, now: number): { moving: boolean; shadows: boolean } {
     let moving = false, shadows = false;
     if (backdrop && motionOf(backdrop.obj)?.step(now)) moving = true;
+    if (scrim?.step(now)) moving = true;
     if (goingAway.length) {
       goingAway = goingAway.filter(o => {
         if (motionOf(o)?.step(now)) return true;
@@ -486,5 +592,15 @@ export function createArranger(scene: Group, theme: Theme, objects: ObjectStore)
     settled: id => { phases = settle(phases, id); },
     phases: () => phases,
     setMapTiles: on => { mapTiles = on; },
+    setLifting(on, now) { lifting = on; placeScrim(now); },
+    shiftPile(key, dx, dy) {
+      const parts = piles.get(key);
+      if (parts) {
+        parts.at = { x: parts.at.x + dx, y: parts.at.y + dy };
+        for (const o of [parts.label, parts.block]) if (o) { o.position.x += dx; o.position.y += dy; }
+      }
+      for (const id of drawnBy.get(key) ?? []) objects.nudge(id, dx, dy);
+    },
+    drawnOf: key => drawnBy.get(key) ?? [],
   };
 }
