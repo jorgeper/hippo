@@ -9,8 +9,13 @@ import type { CaptureDetail, DetailAttachment, DetailComment } from '../../../sr
 import type { ScreenRect } from '../scene/stage.ts';
 import { el } from '../controls/dom.ts';
 
-/** The card never gets smaller than this (CSS pixels), so the back's sections have room on a narrow item. */
-export const MIN_CARD = { w: 460, h: 380 };
+/**
+ * The card never gets smaller than this (CSS pixels), so the back's sections have room on a narrow item. The front of a
+ * narrow upright picture (a phone screenshot) may be as narrow as `frontW`, so no wide slab of edge surrounds it.
+ */
+export const MIN_CARD = { w: 460, h: 380, frontW: 240 };
+/** The back lies a little beyond the object's face on every side, so the object's rim (a cassette's shell) does not show. */
+const BACK_SPILL = 8;
 /** Room kept free around the card, and under it for its buttons. */
 const MARGIN = 16, ACTIONS_ROOM = 64;
 
@@ -63,20 +68,77 @@ export function bytes(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[k]}`;
 }
 
+/** A length as m:ss, counting whole seconds as the browser's own players do, so the label and the player agree. */
 export function duration(s: number | undefined): string {
   if (s === undefined || !Number.isFinite(s)) return '';
-  const t = Math.round(s), m = Math.floor(t / 60), r = t % 60;
+  const t = Math.max(0, Math.floor(s)), m = Math.floor(t / 60), r = t % 60;
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
-/** A value of the capture's context as one line of text. */
-function contextText(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'string') return v;
-  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-  if (Array.isArray(v)) return v.map(contextText).filter(Boolean).join(', ');
-  if (typeof v === 'object') return Object.entries(v as Record<string, unknown>).map(([k, x]) => `${humanise(k).toLowerCase()} ${contextText(x)}`).join(', ');
-  return '';
+/** A gap in plain words: "9 s", "45 min", "2 h 4 min", "1 day 4 h". */
+export function gapWords(seconds: number): string {
+  if (seconds < 59.5) return `${Math.round(seconds)} s`;
+  if (seconds < 86400 - 30) {
+    const m = Math.round(seconds / 60), h = Math.floor(m / 60), mm = m % 60;
+    return h ? `${h} h${mm ? ` ${mm} min` : ''}` : `${mm} min`;
+  }
+  const hours = Math.round(seconds / 3600), d = Math.floor(hours / 24), h = hours % 24;
+  return `${d} ${d === 1 ? 'day' : 'days'}${h ? ` ${h} h` : ''}`;
+}
+
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
+const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+
+/** Where sound went, by port: the built-in ones by what they are, the others by their own names. */
+const BUILT_IN_PORTS: Record<string, string> = { built_in_speaker: 'the speaker', built_in_receiver: 'the earpiece' };
+const PORTS: Record<string, string> = { headphones: 'headphones', car_audio: 'the car', bluetooth_a2dp: 'Bluetooth audio',
+  bluetooth_le: 'Bluetooth audio', bluetooth_hfp: 'a Bluetooth headset', airplay: 'AirPlay', hdmi: 'a screen', usb_audio: 'a USB device' };
+const ORIENTATIONS: Record<string, string> = { portrait: 'Held upright', portrait_upside_down: 'Held upside down',
+  landscape_left: 'Held sideways', landscape_right: 'Held sideways', face_up: 'Lying face up', face_down: 'Lying face down' };
+const NETWORKS: Record<string, string> = { wifi: 'On Wi-Fi', cellular: 'On mobile data', wired: 'On a wired network', other: 'On a network', none: 'Offline' };
+const BATTERY: Record<string, string> = { unplugged: 'not charging', charging: 'charging', full: 'full' };
+
+/**
+ * The phone's state when the capture was saved, one short plain line per fact (spec docs/context-signals.md): where sound
+ * was going, the battery, low power mode, dark appearance, heat, how it was held, the network, the gap since the previous
+ * capture, the height and speed of the location fix. Ids, the switches that were on, and defaults that say nothing (light
+ * appearance, normal heat, the locale and clock) are left out, as are signals this does not know.
+ */
+export function deviceLines(context: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const route = obj(context['context.audio_route']);
+  const outputs = Array.isArray(route.outputs) ? route.outputs.map(obj) : [];
+  const where = [...new Set(outputs.map(o => {
+    const type = str(o.port_type) ?? '';
+    return BUILT_IN_PORTS[type] ?? str(o.port_name) ?? PORTS[type];
+  }).filter((x): x is string => !!x))];
+  if (where.length) out.push(`Sound going to ${where.join(' and ')}`);
+
+  const dev = obj(context['context.device']);
+  const level = num(dev.battery_level), state = BATTERY[str(dev.battery_state) ?? ''];
+  if (level !== undefined) out.push(`Battery at ${Math.round(level * 100)}%${state ? `, ${state}` : ''}`);
+  else if (state) out.push(`Battery ${state}`);
+  if (dev.low_power_mode === true) out.push('Low power mode on');
+  if (dev.interface_style === 'dark') out.push('Dark appearance');
+  if (dev.thermal_state === 'serious' || dev.thermal_state === 'critical') out.push('Running hot');
+  else if (dev.thermal_state === 'fair') out.push('Running warm');
+  const held = ORIENTATIONS[str(dev.orientation) ?? ''];
+  if (held) out.push(held);
+
+  const net = obj(context['context.network']);
+  const on = NETWORKS[str(net.interface) ?? ''];
+  if (on) out.push([on, net.expensive === true ? 'metered' : '', net.constrained === true ? 'low data mode' : ''].filter(Boolean).join(', '));
+
+  const gap = num(obj(context['context.burst']).seconds_since_previous);
+  if (gap !== undefined && gap >= 0) out.push(`${gapWords(gap)} after the previous capture`);
+
+  const loc = obj(context.capture_location);
+  const alt = num(loc.altitude_meters);
+  if (alt !== undefined) out.push(alt < 0 ? `${Math.round(-alt)} m below sea level` : `${Math.round(alt)} m above sea level`);
+  const speed = num(loc.speed_meters_per_second);
+  if (speed !== undefined && speed >= 0.5) out.push(`Moving at ${Math.round(speed * 3.6)} km/h`);
+  return out;
 }
 
 export interface DetailHooks { flip(): void; close(): void }
@@ -118,6 +180,8 @@ export function mountDetail(host: HTMLElement, hooks: DetailHooks): DetailOverla
   let url: string | undefined;
   let token = 0;
   let side: 'front' | 'back' = 'front';
+  /** What had focus before the card took it, given back when the card closes. */
+  let before: Element | null = null;
 
   card.addEventListener('click', e => { if (e.target === card) hooks.flip(); });
   flip.addEventListener('click', () => hooks.flip());
@@ -139,7 +203,9 @@ export function mountDetail(host: HTMLElement, hooks: DetailHooks): DetailOverla
 
   function layout(rect: ScreenRect): void {
     const vw = window.innerWidth, vh = window.innerHeight;
-    let w = Math.max(MIN_CARD.w, rect.width), h = Math.max(MIN_CARD.h, rect.height);
+    const spill = side === 'back' ? BACK_SPILL : 0;
+    const upright = side === 'front' && rect.height > rect.width;
+    let w = Math.max(upright ? MIN_CARD.frontW : MIN_CARD.w, rect.width + 2 * spill), h = Math.max(MIN_CARD.h, rect.height + 2 * spill);
     w = Math.min(w, vw - 2 * MARGIN);
     h = Math.min(h, vh - MARGIN - ACTIONS_ROOM);
     let left = rect.left + rect.width / 2 - w / 2, top = rect.top + rect.height / 2 - h / 2;
@@ -180,11 +246,12 @@ export function mountDetail(host: HTMLElement, hooks: DetailHooks): DetailOverla
     },
     show(rect, b) {
       if (!current) return;
-      layout(rect);
       setSide(b);
+      layout(rect);
       root.hidden = false;
       root.classList.remove('concealed');
       requestAnimationFrame(() => root.classList.add('shown'));
+      if (!root.contains(document.activeElement)) before = document.activeElement;
       card.focus({ preventScroll: true });
     },
     place(rect) { if (!root.hidden) layout(rect); },
@@ -197,6 +264,10 @@ export function mountDetail(host: HTMLElement, hooks: DetailHooks): DetailOverla
       root.hidden = true;
       front.replaceChildren();
       back.replaceChildren();
+      // Focus goes back where it was (the ask bar, say), if that is still on the page.
+      const was = before;
+      before = null;
+      if (was instanceof HTMLElement && was !== document.body && was.isConnected) was.focus({ preventScroll: true });
     },
     isOpen: () => !root.hidden,
   };
@@ -338,12 +409,7 @@ function backOf(item: DeskItem, d: CaptureDetail | undefined): Node[] {
     where.push(line(soft(`${place.lat.toFixed(5)}, ${place.lon.toFixed(5)}${acc !== undefined ? `, within ${Math.round(acc)} m` : ''}`)));
     add('Where', ...where);
   }
-  if (d) {
-    const method = METHODS[d.method] ?? humanise(d.method);
-    add('Captured', line(d.source_app ? `${method}, from ${d.source_app}` : method));
-    const ctx = Object.entries(d.context).map(([k, v]) => [humanise(k), contextText(v)] as const).filter(([, v]) => v);
-    if (ctx.length) add('Device', ...ctx.map(([k, v]) => line(el('span', { class: 'key', text: `${k}: ` }), v)));
-  }
+  // What it means first; how it was captured and the phone's state after that; the files last.
   const circumstances = d?.circumstances ?? item.circumstances;
   if (circumstances.length) {
     add('Likely', ...circumstances.map(c => {
@@ -360,6 +426,11 @@ function backOf(item: DeskItem, d: CaptureDetail | undefined): Node[] {
   if (item.people.length) add('People', ...item.people.map(p => line(p.name, ' ', soft(`found in ${p.source}`))));
   if (d?.image_descriptions.length) add('In the picture', ...d.image_descriptions.map(x => line(x.text)));
   if (d?.comments.length) add('Comments', ...d.comments.map(c => line(c.text ?? c.transcript ?? 'A spoken comment', ' ', soft(c.added_at.slice(0, 10)))));
+  if (d) {
+    const method = METHODS[d.method] ?? humanise(d.method);
+    add('Captured', line(d.source_app ? `${method}, from ${d.source_app}` : method));
+    add('Device', ...deviceLines(d.context).map(t => line(t)));
+  }
   if (d?.files.length) add('Files', ...d.files.map(f => el('p', { class: 'path' }, el('span', { class: 'path-text', text: f.path }), soft(` ${f.mime}`))));
   if (!d) facts.append(...section('', line(soft('Reading the rest…'))));
   return [el('h2', { class: 'title', text: item.title || humanise(item.kind) }), facts];

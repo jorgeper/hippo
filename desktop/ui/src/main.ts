@@ -23,7 +23,12 @@ import type { HandProbe } from './interact/hand.ts';
  * draws, and the scene's own count of objects drawn and in the hand.
  */
 export interface DeskProbe extends HandProbe { ids(): string[]; layout(): string; settled(): boolean;
-  scene(): { onDesk: number; held: number; active: number; entries: number; built: number; drawn: string[]; stray: string[]; offTarget: string[] } }
+  scene(): { onDesk: number; held: number; active: number; entries: number; built: number; drawn: string[]; stray: string[]; offTarget: string[] };
+  /**
+   * The scene against the layout, for the end of a test: `clean` when the scene draws exactly the ids the layout draws,
+   * nothing is stray, off its target or still in the hand.
+   */
+  audit(): { clean: boolean; drawn: number; slots: number; missing: string[]; extra: string[]; stray: string[]; offTarget: string[]; held: number } }
 declare global { interface Window { __desk?: DeskProbe } }
 
 /** Quiet this long (no frame drawn, no request out, no question with the model) and the desk counts as settled. */
@@ -113,6 +118,13 @@ async function start(): Promise<void> {
     layout: () => store.get().layout,
     settled: () => ready && !store.get().thinking && inFlight() === 0 && !hand.busy() && performance.now() - lastChange > SETTLED_MS,
     scene: () => stage.check(),
+    audit() {
+      const sc = stage.check(), slots = hand.probe.slots();
+      const drawn = new Set(sc.drawn), want = new Set(slots);
+      const missing = slots.filter(id => !drawn.has(id)), extra = sc.drawn.filter(id => !want.has(id));
+      return { clean: !missing.length && !extra.length && !sc.stray.length && !sc.offTarget.length && sc.held === 0,
+        drawn: sc.drawn.length, slots: slots.length, missing, extra, stray: sc.stray, offTarget: sc.offTarget, held: sc.held };
+    },
   };
   if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).hippoDesk = { stage, store, layouts, theme };
 

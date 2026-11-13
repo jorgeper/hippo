@@ -14,17 +14,25 @@ export const THROW_EDGE = 4;
 /** A lifted item fills about this share of the window's height. */
 export const LIFT_SHARE = 0.7;
 
+/** Within this distance of the middle of the view (desk units) every direction leads out. */
+const MIDDLE = 1;
+
 /**
  * Whether letting go of a dragged item throws it away: released within THROW_EDGE of an edge of `view` (what the window
- * shows, centred on 0,0, with `pos` in the same frame), or moving faster than THROW_SPEED toward the edges rather than back
- * toward the middle.
+ * shows, centred on 0,0, with `pos` in the same frame), or moving faster than THROW_SPEED and outward. "Toward the edge" is
+ * read as moving outward, away from the middle of the view (the velocity has a part along the line from the middle to
+ * where it was let go): fast back toward the middle is bringing it back, and fast straight along the desk, neither out nor
+ * in, is moving it somewhere else. Both are drops.
  */
 export function isThrow(velocity: { x: number; y: number }, pos: { x: number; y: number }, view: View): boolean {
   const hw = view.width / 2, hh = view.height / 2;
   const edge = Math.min(hw - pos.x, pos.x + hw, hh - pos.y, pos.y + hh);
   if (edge <= THROW_EDGE) return true;
   if (Math.hypot(velocity.x, velocity.y) <= THROW_SPEED) return false;
-  return velocity.x * pos.x + velocity.y * pos.y >= 0;
+  if (Math.hypot(pos.x, pos.y) <= MIDDLE) return true;
+  // Outward by more than a hair: straight along the desk (a right angle to the middle) is not.
+  const r = Math.hypot(pos.x, pos.y), v = Math.hypot(velocity.x, velocity.y);
+  return (velocity.x * pos.x + velocity.y * pos.y) / (r * v) > 1e-6;
 }
 
 export interface LifterHooks {

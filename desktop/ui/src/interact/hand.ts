@@ -13,7 +13,7 @@ import type { LayoutResult, PileInfo, Placement } from '../layout/types.ts';
 import { layouts } from '../layout/index.ts';
 import { createPointer, releaseVelocity } from './pointer.ts';
 import type { Press } from './pointer.ts';
-import { maxScroll, cellOf, openPile, pullOut, restack, riffle, SPREAD_PREFIX } from './pile.ts';
+import { maxScroll, cellOf, openPile, pullOut, queueRiffle, restack, riffle, SPREAD_PREFIX, wheelSteps } from './pile.ts';
 import { createLifter, isThrow } from './item.ts';
 import { ASIDE_KEY, ASIDE_LABEL, asidePile, bodiesOf } from './setaside.ts';
 import { KEPT_KEY, KEPT_LABEL, keptPile } from './keep.ts';
@@ -22,8 +22,8 @@ import { PILE_CAP } from '../layout/pile.ts';
 
 /** Wheel travel (CSS pixels) for one row of an open pile, and for one card of a riffle. */
 export const ROW_WHEEL = 70, RIFFLE_WHEEL = 50;
-/** At most this many riffle steps wait their turn. */
-const RIFFLE_QUEUE = 6;
+/** For this long (ms) after a pile opens, a click on its spread is the second half of a double click: ignored. */
+export const OPEN_GUARD_MS = 400;
 /** A dragged item rides this far (desk units) above where it lay. */
 const CARRY_LIFT = 2.5;
 const DROP_PREFIX = 'drop:';
@@ -77,7 +77,7 @@ export function mountHand(canvas: HTMLElement, deps: HandDeps): Hand {
 
   // ---------------------------------------------------------------- what the handling has done in this arrangement
   let arrangement = '';
-  let open: { key: string; scroll: number; shown?: number } | undefined;
+  let open: { key: string; scroll: number; shown?: number; at: number } | undefined;
   const riffled = new Map<string, number>();
   const dropped = new Map<string, { x: number; y: number; rot: number }>();
   const shifted = new Map<string, { dx: number; dy: number }>();
@@ -187,7 +187,8 @@ export function mountHand(canvas: HTMLElement, deps: HandDeps): Hand {
 
   function render(force = false): void {
     const s = store.get();
-    const key = JSON.stringify([s.spec, s.layout, s.history.length]);
+    // Another question, layout, undo or start over (counted, so even one on an empty desk) is a new arrangement.
+    const key = JSON.stringify([s.spec, s.layout, s.history.length, s.resets]);
     if (key !== arrangement) { arrangement = key; newArrangement(); }
     for (const it of s.items) known.set(it.id, it);
     if (restoringSince && s.items !== restoringSince) { restoring.clear(); restoringSince = undefined; }
@@ -237,7 +238,7 @@ export function mountHand(canvas: HTMLElement, deps: HandDeps): Hand {
 
   function openOne(key: string): void {
     if (!openable(pileOf(key))) return;
-    open = { key, scroll: 0 };
+    open = { key, scroll: 0, at: performance.now() };
     pulled = undefined; riffleQueue = undefined; riffleGen++;
     stage.resetView();
     changed();
@@ -252,9 +253,9 @@ export function mountHand(canvas: HTMLElement, deps: HandDeps): Hand {
   // Riffling: one card at a time, pulled out to the side, then slid under (or, backward, out from under and on top).
   let riffleQueue: { key: string; steps: number } | undefined;
   let riffleGen = 0, riffleTimer = 0;
-  function riffleBy(key: string, dir: number): void {
+  function riffleBy(key: string, steps: number): void {
     if (!riffleQueue || riffleQueue.key !== key) riffleQueue = { key, steps: 0 };
-    riffleQueue.steps = Math.max(-RIFFLE_QUEUE, Math.min(RIFFLE_QUEUE, riffleQueue.steps + dir));
+    riffleQueue.steps = queueRiffle(riffleQueue.steps, steps);
     if (!riffleTimer) riffleStep();
   }
   function riffleStep(): void {
@@ -407,6 +408,8 @@ export function mountHand(canvas: HTMLElement, deps: HandDeps): Hand {
   }
 
   function click(t: Target): void {
+    // The second click of a double click on a closed pile lands on its spread as it opens: it neither lifts nor gathers.
+    if (open && performance.now() - open.at < OPEN_GUARD_MS) return;
     if (t.type === 'outside') {
       if (lifter.current()) putBack(); else gather();
       return;
@@ -480,17 +483,17 @@ export function mountHand(canvas: HTMLElement, deps: HandDeps): Hand {
     if (e.ctrlKey) { stage.wheelZoom(e); return; }
     const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? window.innerHeight : 1);
     if (open) {
-      rowWheel += dy;
-      const rows = Math.trunc(rowWheel / ROW_WHEEL);
-      if (rows) { rowWheel -= rows * ROW_WHEEL; open.scroll = Math.max(0, open.scroll + rows); changed(); }
+      const { steps: rows, rest } = wheelSteps(rowWheel + dy, ROW_WHEEL);
+      rowWheel = rest;
+      if (rows) { open.scroll = Math.max(0, open.scroll + rows); changed(); }
       return;
     }
     const hit = stage.pick(e.clientX, e.clientY);
     const p = pileOf(hit?.pile);
     if (openable(p)) {
-      riffleWheel += dy;
-      const steps = Math.trunc(riffleWheel / RIFFLE_WHEEL);
-      if (steps) { riffleWheel -= steps * RIFFLE_WHEEL; riffleBy(p!.key, Math.sign(steps)); }
+      const { steps, rest } = wheelSteps(riffleWheel + dy, RIFFLE_WHEEL);
+      riffleWheel = rest;
+      if (steps) riffleBy(p!.key, steps);
       return;
     }
     riffleWheel = 0;

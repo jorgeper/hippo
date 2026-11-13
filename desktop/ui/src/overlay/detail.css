@@ -111,7 +111,6 @@
 .facts dd { margin: 0; padding: 9px 0; border-top: 1px solid var(--ui-paper-line, GrayText); min-width: 0; overflow-wrap: anywhere; }
 .facts dd p { margin: 0 0 2px; }
 .facts .soft { color: var(--ui-paper-ink-soft, GrayText); font-size: 12.5px; }
-.facts .key { color: var(--ui-paper-ink-soft, GrayText); }
 .facts .likely + .likely { margin-top: 8px; }
 .facts .likely-label { font-weight: 600; margin-right: 8px; }
 .facts .confidence { font-size: 12px; color: var(--ui-paper-ink-soft, GrayText); }

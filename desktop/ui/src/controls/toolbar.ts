@@ -88,7 +88,7 @@ export function mountToolbar(count: HTMLElement, tools: HTMLElement, progress: H
     tools.append(b);
     return b;
   };
-  const undo = tool('undo', 'Undo: back to the previous question', 'M9 14 4 9l5-5', 'M4 9h10.5a5.5 5.5 0 0 1 0 11H11');
+  const undo = tool('undo', 'Undo the last step: a throw, a pin, or the question', 'M9 14 4 9l5-5', 'M4 9h10.5a5.5 5.5 0 0 1 0 11H11');
   const reset = tool('reset-view', 'Reset view', 'M3 8V5a2 2 0 0 1 2-2h3', 'M16 3h3a2 2 0 0 1 2 2v3', 'M21 16v3a2 2 0 0 1-2 2h-3', 'M8 21H5a2 2 0 0 1-2-2v-3');
   const update = tool('update', 'Update: read new captures', 'M20.5 12a8.5 8.5 0 1 1-2.5-6', 'M20.5 3.5V9H15');
   const settings = tool('settings', 'Settings', 'M4 7h9', 'M17 7h3', 'M15 5a2 2 0 1 0 0 4a2 2 0 1 0 0-4', 'M4 17h3', 'M11 17h9',

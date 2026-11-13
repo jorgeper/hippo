@@ -40,7 +40,7 @@ test('the store starts empty in the kind layout; refresh runs the current spec',
   const s = stubApi();
   const store = createStore(s.api);
   assert.deepEqual(store.get(), { spec: {}, layout: 'kind', items: [], total: 0, reply: '', pinned: [], dismissed: [], history: [],
-    sentences: [], thinking: false });
+    sentences: [], thinking: false, resets: 0 });
   await store.refresh();
   assert.deepEqual(ids(store.get().items), ids(s.searchItems));
   assert.deepEqual(lastBody(s.calls, 'search'), { spec: {}, pinned: [], dismissed: [] });
@@ -283,4 +283,81 @@ test('a subscriber that throws breaks neither the store nor the other subscriber
     assert.equal(store.get().history.length, 2);
     assert.equal(errors.length, 2);
   } finally { console.error = consoleError; }
+});
+
+test('undo takes back a throw first: the item is back on the desk and the question is kept', async () => {
+  const s = stubApi();
+  const store = createStore(s.api);
+  await store.ask('first');
+  const shown = ids(store.get().items);
+  s.searchItems = [item(4)];
+  await store.dismiss('d1');
+  assert.deepEqual(store.get().dismissed, ['d1']);
+  assert.equal(store.canUndo(), true);
+  store.undo();
+  const st = store.get();
+  assert.deepEqual(st.dismissed, []);
+  assert.deepEqual(st.spec, { kinds: ['link'] }, 'the question stays');
+  assert.deepEqual(st.history, [{ sentence: 'first', reply: '1 found for first' }]);
+  assert.deepEqual(ids(st.items), shown, 'the items from before the throw, at once');
+  store.undo();
+  assert.deepEqual(store.get().spec, {}, 'a second undo goes to the previous question');
+});
+
+test('undo takes back a pin, an unpin and a take-back, most recent first', async () => {
+  const s = stubApi();
+  const store = createStore(s.api);
+  await store.pin(['p1']);
+  await store.dismiss('d1');
+  await store.restore('d1');
+  await store.unpin('p1');
+  store.undo();
+  assert.deepEqual([store.get().pinned, store.get().dismissed], [['p1'], []]);
+  store.undo();
+  assert.deepEqual([store.get().pinned, store.get().dismissed], [['p1'], ['d1']]);
+  store.undo();
+  assert.deepEqual([store.get().pinned, store.get().dismissed], [['p1'], []]);
+  store.undo();
+  assert.deepEqual([store.get().pinned, store.get().dismissed], [[], []]);
+  assert.equal(store.canUndo(), false);
+});
+
+test('a throw, then a new question: undo goes back to the earlier question with the throw still made; undo again takes it back', async () => {
+  const s = stubApi();
+  const store = createStore(s.api);
+  await store.ask('first');
+  await store.dismiss('d1');
+  await store.ask('second');
+  store.undo();
+  assert.deepEqual(store.get().history.map(t => t.sentence), ['first']);
+  assert.deepEqual(store.get().dismissed, ['d1'], 'the lists as they were when the second question was asked');
+  store.undo();
+  assert.deepEqual(store.get().dismissed, []);
+  assert.deepEqual(store.get().history.map(t => t.sentence), ['first']);
+});
+
+test('undo with nothing to undo changes nothing and sends nothing; a pin or throw that changes nothing is no step', async () => {
+  const s = stubApi();
+  const store = createStore(s.api);
+  await store.refresh();
+  const before = store.get(), calls = s.calls.length;
+  store.undo();
+  assert.equal(store.get(), before);
+  assert.equal(s.calls.length, calls);
+  await store.pin(['p1']);
+  await store.pin(['p1']);
+  store.undo();
+  assert.deepEqual(store.get().pinned, []);
+  assert.equal(store.canUndo(), false);
+});
+
+test('every start over is counted, even on an empty desk, so the handling can clear what it did', async () => {
+  const s = stubApi();
+  const store = createStore(s.api);
+  await store.startOver();
+  assert.equal(store.get().resets, 1);
+  await store.startOver();
+  assert.equal(store.get().resets, 2);
+  store.undo();
+  assert.equal(store.get().resets, 2, 'undo does not count back');
 });

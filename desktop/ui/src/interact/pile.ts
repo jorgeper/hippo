@@ -53,6 +53,23 @@ export function riffle(ids: readonly string[], steps: number): string[] {
   return [...ids.slice(k), ...ids.slice(0, k)];
 }
 
+/** At most this many riffle steps wait their turn, either way. */
+export const RIFFLE_QUEUE = 6;
+
+/**
+ * Whole steps in `travel` of wheel (CSS pixels) at `per` a step, and the travel left over for the next turn; a large turn
+ * is several steps, not one.
+ */
+export function wheelSteps(travel: number, per: number): { steps: number; rest: number } {
+  const steps = Math.trunc(travel / per);
+  return { steps, rest: travel - steps * per };
+}
+
+/** The riffle steps waiting after adding `add` to `queued` (positive: top to bottom), never more than `cap` either way. */
+export function queueRiffle(queued: number, add: number, cap = RIFFLE_QUEUE): number {
+  return Math.max(-cap, Math.min(cap, queued + add));
+}
+
 /** The pile's members restacked in a new order (top first): its ids and each member's place in the stack. */
 export function restack(layout: LayoutResult, key: string, ids: string[]): LayoutResult {
   const pile = layout.piles.find(p => p.key === key);

@@ -14,7 +14,9 @@ export const HISTORY_KEPT = 20;
 export interface DeskState { spec: SearchSpec; layout: LayoutName; items: DeskItem[]; total: number; reply: string;
   pinned: string[]; dismissed: string[]; history: Turn[]; sentences: string[];
   /** A question is with the model. */
-  thinking: boolean }
+  thinking: boolean;
+  /** How many times the person has started over: each one clears whatever the handling did on the desk. */
+  resets: number }
 
 export interface Store {
   get(): DeskState;
@@ -28,16 +30,26 @@ export interface Store {
   restore(id: string): Promise<void>;
   pin(ids: string[]): Promise<void>;
   unpin(id: string): Promise<void>;
-  /** Steps back to the previous question's spec, layout, items, reply and conversation (and, after start over, its lists). */
+  /**
+   * Steps back one action, most recent first: a throw, a take-back, a pin or an unpin brings the lists (and the items shown
+   * then) back as they were before it and keeps the question; a question steps back to the previous question's spec,
+   * layout, items, reply and conversation (and, after start over, its lists). Steps are kept in the order they were made.
+   */
   undo(): void;
   canUndo(): boolean;
   /** Clears the spec, pinned, dismissed and the conversation, and fills the desk with everything. */
   startOver(): Promise<void>;
 }
 
-/** One undo step. `applied` is the result key its items were fetched for; `lists` is kept only by start over, which clears them. */
-interface Snapshot { spec: SearchSpec; layout: LayoutName; items: DeskItem[]; total: number; reply: string; history: Turn[];
-  applied: string | undefined; lists?: { pinned: string[]; dismissed: string[] } }
+/**
+ * One undo step. A question (or start over): what the desk showed before it; `applied` is the result key its items were
+ * fetched for; `lists` is kept only by start over, which clears them. A handling step (a throw, take-back, pin or unpin): the
+ * lists before it and the items they had brought.
+ */
+type Snapshot =
+  | { type: 'question'; spec: SearchSpec; layout: LayoutName; items: DeskItem[]; total: number; reply: string; history: Turn[];
+      applied: string | undefined; lists?: { pinned: string[]; dismissed: string[] } }
+  | { type: 'lists'; pinned: string[]; dismissed: string[]; items: DeskItem[]; total: number; applied: string | undefined };
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** What a result was fetched for: the spec and both lists. */
@@ -46,7 +58,7 @@ const without = (list: string[], ids: string[]) => list.filter(x => !ids.include
 
 export function createStore(api: Api): Store {
   let state: DeskState = { spec: {}, layout: 'kind', items: [], total: 0, reply: '', pinned: [], dismissed: [], history: [],
-    sentences: [], thinking: false };
+    sentences: [], thinking: false, resets: 0 };
   const listeners = new Set<(s: DeskState) => void>();
   const undoStack: Snapshot[] = [];
   let ticket = 0;            // every request takes the next number
@@ -83,11 +95,22 @@ export function createStore(api: Api): Store {
    */
   const settle = () => { if (resultKey(state) !== applied) void runSearch(); };
 
-  const pushUndo = (withLists = false) => {
-    undoStack.push({ spec: state.spec, layout: state.layout, items: state.items, total: state.total, reply: state.reply,
-      history: state.history, applied, ...(withLists ? { lists: { pinned: state.pinned, dismissed: state.dismissed } } : {}) });
+  const push = (step: Snapshot) => {
+    undoStack.push(step);
     if (undoStack.length > UNDO_DEPTH) undoStack.shift();
   };
+  const pushUndo = (withLists = false) => {
+    push({ type: 'question', spec: state.spec, layout: state.layout, items: state.items, total: state.total, reply: state.reply,
+      history: state.history, applied, ...(withLists ? { lists: { pinned: state.pinned, dismissed: state.dismissed } } : {}) });
+  };
+  /** A handling action: changes the lists to `next` (an undo step when they change) and searches again. */
+  async function changeLists(next: { pinned: string[]; dismissed: string[] }): Promise<void> {
+    const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, k) => x === b[k]);
+    if (same(next.pinned, state.pinned) && same(next.dismissed, state.dismissed)) return;
+    push({ type: 'lists', pinned: state.pinned, dismissed: state.dismissed, items: state.items, total: state.total, applied });
+    set(next);
+    await runSearch();
+  }
 
   return {
     get: () => state,
@@ -119,31 +142,28 @@ export function createStore(api: Api): Store {
 
     setLayout(name) { if (name !== state.layout) set({ layout: name }); },
 
-    async dismiss(id) {
-      set({ dismissed: state.dismissed.includes(id) ? state.dismissed : [...state.dismissed, id], pinned: without(state.pinned, [id]) });
-      await runSearch();
-    },
-    async restore(id) {
-      set({ dismissed: without(state.dismissed, [id]) });
-      await runSearch();
-    },
-    async pin(ids) {
+    dismiss: id => changeLists({ dismissed: state.dismissed.includes(id) ? state.dismissed : [...state.dismissed, id],
+      pinned: without(state.pinned, [id]) }),
+    restore: id => changeLists({ pinned: state.pinned, dismissed: without(state.dismissed, [id]) }),
+    pin(ids) {
       const pinned = [...state.pinned];
       for (const id of ids) if (!pinned.includes(id)) pinned.push(id);
-      set({ pinned, dismissed: without(state.dismissed, ids) });
-      await runSearch();
+      return changeLists({ pinned, dismissed: without(state.dismissed, ids) });
     },
-    async unpin(id) {
-      set({ pinned: without(state.pinned, [id]) });
-      await runSearch();
-    },
+    unpin: id => changeLists({ pinned: without(state.pinned, [id]), dismissed: state.dismissed }),
 
     undo() {
       const s = undoStack.pop();
       if (!s) return;
-      askTicket = ++ticket;      // a question still with the model is dropped
-      searchTicket = ++ticket;
+      searchTicket = ++ticket;   // a search for the lists being undone is dropped
       applied = s.applied;
+      if (s.type === 'lists') {
+        // A question still with the model goes on: its answer lands as usual, and is searched again for these lists.
+        set({ pinned: s.pinned, dismissed: s.dismissed, items: s.items, total: s.total });
+        settle();
+        return;
+      }
+      askTicket = ++ticket;      // a question still with the model is dropped
       set({ spec: s.spec, layout: s.layout, items: s.items, total: s.total, reply: s.reply, history: s.history, thinking: false,
         ...(s.lists ?? {}) });
       settle();
@@ -153,7 +173,7 @@ export function createStore(api: Api): Store {
     async startOver() {
       pushUndo(true);
       askTicket = ++ticket;
-      set({ spec: {}, pinned: [], dismissed: [], history: [], reply: '', thinking: false });
+      set({ spec: {}, pinned: [], dismissed: [], history: [], reply: '', thinking: false, resets: state.resets + 1 });
       await runSearch();
     },
   };
