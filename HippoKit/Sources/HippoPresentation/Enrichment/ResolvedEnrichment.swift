@@ -20,7 +20,7 @@ public struct ResolvedLink: Equatable, Sendable {
 }
 
 /// Which parts of the resolved result gold supplied. Item keys are attachment IDs (transcripts, recognized
-/// text) or place targets.
+/// text, picture descriptions) or place targets.
 public struct ServerOrigin: Equatable, Sendable {
     public var places: Set<String>
     public var transcripts: Set<String>
@@ -29,10 +29,19 @@ public struct ServerOrigin: Equatable, Sendable {
     public var sourceApp: Bool
     public var summary: Bool
     public var tags: Bool
+    public var title: Bool
+    public var topic: Bool
+    public var imageDescriptions: Set<String>
+    public var people: Bool
+    public var circumstances: Bool
     public init(places: Set<String> = [], transcripts: Set<String> = [], recognizedText: Set<String> = [],
-                detections: Bool = false, sourceApp: Bool = false, summary: Bool = false, tags: Bool = false) {
+                detections: Bool = false, sourceApp: Bool = false, summary: Bool = false, tags: Bool = false,
+                title: Bool = false, topic: Bool = false, imageDescriptions: Set<String> = [], people: Bool = false,
+                circumstances: Bool = false) {
         self.places = places; self.transcripts = transcripts; self.recognizedText = recognizedText
         self.detections = detections; self.sourceApp = sourceApp; self.summary = summary; self.tags = tags
+        self.title = title; self.topic = topic; self.imageDescriptions = imageDescriptions; self.people = people
+        self.circumstances = circumstances
     }
 }
 
@@ -47,6 +56,15 @@ public struct ResolvedEnrichment: Equatable, Sendable {
     public var sourceAppGuess: String?
     public var summary: String?
     public var tags: [String]
+    /// Format 1.2 `display.title`; keywords are not resolved.
+    public var title: String? = nil
+    public var topic: String? = nil
+    /// Picture descriptions, by attachment ID.
+    public var imageDescriptions: [String: String] = [:]
+    /// People named in the capture; never one with a blank name.
+    public var people: [PersonItem] = []
+    /// Likely circumstances; never one with a blank label.
+    public var circumstances: [CircumstanceItem] = []
     /// Any field came from gold.
     public var usesServer: Bool
     /// What gold supplied, for the layer stripes. Links carry their own `fromServer`.
@@ -161,6 +179,44 @@ public struct ResolvedEnrichment: Equatable, Sendable {
             out.tags = g.values; out.usesServer = true; out.fromServer.tags = true
         } else {
             out.tags = data(device, .tags, TagsData.self)?.values ?? []
+        }
+
+        // Format 1.2 kinds, by the same rule: gold when `ok` and present, else silver if it ever carries them.
+        let goldDisplay = data(server, .display, DisplayData.self), silverDisplay = data(device, .display, DisplayData.self)
+        if let g = blank(goldDisplay?.title) {
+            out.title = g; out.usesServer = true; out.fromServer.title = true
+        } else {
+            out.title = blank(silverDisplay?.title)
+        }
+        if let g = blank(goldDisplay?.topic) {
+            out.topic = g; out.usesServer = true; out.fromServer.topic = true
+        } else {
+            out.topic = blank(silverDisplay?.topic)
+        }
+        for i in data(device, .imageDescription, ImageDescriptionData.self)?.items ?? [] where blank(i.text) != nil {
+            out.imageDescriptions[i.attachmentID] = i.text
+        }
+        for i in data(server, .imageDescription, ImageDescriptionData.self)?.items ?? [] where blank(i.text) != nil {
+            out.imageDescriptions[i.attachmentID] = i.text; out.usesServer = true
+            out.fromServer.imageDescriptions.insert(i.attachmentID)
+        }
+        func people(_ doc: EnrichmentDocument?) -> [PersonItem] {
+            (data(doc, .people, PeopleData.self)?.items ?? []).filter { blank($0.name) != nil }
+        }
+        let goldPeople = people(server)
+        if !goldPeople.isEmpty {
+            out.people = goldPeople; out.usesServer = true; out.fromServer.people = true
+        } else {
+            out.people = people(device)
+        }
+        func circumstances(_ doc: EnrichmentDocument?) -> [CircumstanceItem] {
+            (data(doc, .circumstance, CircumstanceData.self)?.items ?? []).filter { blank($0.label) != nil }
+        }
+        let goldCircumstances = circumstances(server)
+        if !goldCircumstances.isEmpty {
+            out.circumstances = goldCircumstances; out.usesServer = true; out.fromServer.circumstances = true
+        } else {
+            out.circumstances = circumstances(device)
         }
         return out
     }

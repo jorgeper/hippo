@@ -5,8 +5,10 @@ import Foundation
 public enum EnrichmentSearchText {
     /// Reads the `ok` facets of both layers (silver first, then gold, per kind). Lines are joined with
     /// newlines in this order: link titles, site names, channels and descriptions; place sub-locality,
-    /// locality, region, country and nearby name; OCR text; transcript text; summary; tags. Empty
-    /// values and repeated lines are skipped.
+    /// locality, region, country and nearby name; OCR text; transcript text; summary; tags; then the
+    /// format 1.2 kinds: display title and topic, picture descriptions, people's names, and for each
+    /// circumstance its label in words and as written. Display keywords are not added. Empty values and
+    /// repeated lines are skipped.
     public static func make(device: EnrichmentDocument?, server: EnrichmentDocument?) -> String {
         let docs = [device, server].compactMap { $0 }
         func payloads<T: Decodable>(_ kind: FacetKind, _ type: T.Type) -> [T] {
@@ -26,6 +28,13 @@ public enum EnrichmentSearchText {
         lines += payloads(.transcript, TranscriptData.self).flatMap(\.items).map(\.text)
         lines += payloads(.summary, SummaryData.self).map(\.text)
         lines += payloads(.tags, TagsData.self).flatMap(\.values)
+        let display = payloads(.display, DisplayData.self)
+        lines += display.map(\.title) + display.map(\.topic)
+        lines += payloads(.imageDescription, ImageDescriptionData.self).flatMap(\.items).map(\.text)
+        lines += payloads(.people, PeopleData.self).flatMap(\.items).map(\.name)
+        for item in payloads(.circumstance, CircumstanceData.self).flatMap(\.items) {
+            lines += [CircumstanceWording.text(for: item.label), item.label]
+        }
 
         var seen = Set<String>()
         return lines.compactMap { line -> String? in
