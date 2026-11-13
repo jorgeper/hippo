@@ -919,3 +919,317 @@ private func enrichment7(server: Bool = true) throws -> ResolvedEnrichment {
         #expect(d.likely.map(\.confidence) == ["Low confidence"])
     }
 }
+
+// MARK: Tier switches
+
+private let id2 = "00000000-0000-4000-8000-000000000002"
+
+/// A tracked fixture capture's metadata (nothing is written).
+private func fixtureMetadata(_ id: String) throws -> CaptureMetadata {
+    try HippoJSON.decodeMetadata(Data(contentsOf: packagesRoot.appendingPathComponent(
+        "captures/2026/11/07/\(id)/metadata.json")))
+}
+
+/// A tracked fixture capture's device document merged with its server document, or with none.
+private func fixtureEnrichment(_ id: String, server: Bool) throws -> ResolvedEnrichment {
+    func doc(_ layer: EnrichmentLayer) throws -> EnrichmentDocument {
+        try EnrichmentJSON.decode(Data(contentsOf: packagesRoot.appendingPathComponent(
+            "enrichments/\(layer.rawValue)/2026/11/07/\(id)/enrichment.json")))
+    }
+    return ResolvedEnrichment.make(device: try doc(.device), server: server ? try doc(.server) : nil,
+                                   assetURL: { _, a in URL(fileURLWithPath: "/assets/\(a.relativePath)") })
+}
+
+/// What the model builds for a switch setting: Server off resolves without the server document.
+private func fixtureDetail(_ id: String, _ v: TierVisibility, jobs: [UploadJob] = []) throws -> CaptureDetail {
+    make(try fixtureMetadata(id), jobs: jobs, enrichment: try fixtureEnrichment(id, server: v.server)).filtered(by: v)
+}
+
+private func vis(raw: Bool = true, phone: Bool = true, server: Bool = true, sync: Bool = true,
+                 log: Bool = false) -> TierVisibility {
+    TierVisibility(raw: raw, phone: phone, server: server, sync: sync, log: log)
+}
+
+private let a2Picture = CaptureCore.Attachment(attachmentID: "a2", relativePath: "content/a2.bin", originalFilename: "b.jpg",
+                                               uti: "public.jpeg", mimeType: "image/jpeg", byteCount: 1, sha256: "x",
+                                               representationSource: "item_provider_file", media: nil)
+
+@Suite struct DetailTierFilterTests {
+    // Title from the server, topic from the device, one picture description from each, one likely row from the
+    // device: each row carries its own layer, and each switch keeps exactly its own rows.
+    @Test func mixedLayersAreKeptRowByRow() {
+        var e = ResolvedEnrichment.empty
+        e.title = "Server title"
+        e.topic = "food"
+        e.imageDescriptions = ["a1": "from the phone", "a2": "from the server"]
+        e.circumstances = [CircumstanceItem(label: "daylight", confidence: "high")]
+        e.fromServer = ServerOrigin(title: true, imageDescriptions: ["a2"])
+        let d = make(meta(attachments: [att(), a2Picture]), enrichment: e)
+        #expect(d.title == "Server title" && d.titleLayer == .gold)
+        #expect(d.topic == "food" && d.topicLayer == .silver)
+        #expect(d.imageDescriptions == [TitledText(title: "Attachment 1", text: "from the phone", layer: .silver),
+                                        TitledText(title: "Attachment 2", text: "from the server", layer: .gold)])
+        #expect(d.likely.map(\.layer) == [.silver])
+
+        let serverOff = d.filtered(by: vis(server: false))
+        #expect(serverOff.title == nil)
+        #expect(serverOff.topic == "food")
+        #expect(serverOff.imageDescriptions.map(\.text) == ["from the phone"])
+        #expect(serverOff.likely.map(\.id) == ["daylight"])
+
+        let phoneOff = d.filtered(by: vis(phone: false))
+        #expect(phoneOff.title == "Server title")
+        #expect(phoneOff.topic == nil)
+        #expect(phoneOff.imageDescriptions.map(\.text) == ["from the server"])
+        #expect(phoneOff.likely.isEmpty)
+    }
+
+    @Test func serverOffOnCapture7ShowsNoServerKinds() throws {
+        let d = try fixtureDetail(id7, vis(server: false))
+        #expect(d.title == nil)
+        #expect(d.people.isEmpty)
+        #expect(d.likely.isEmpty)
+        #expect(d.imageDescriptions.isEmpty && d.topic == nil)
+        #expect(d.summary == nil && d.tags.isEmpty)
+        #expect(!d.status.contains { $0.layer == .gold })
+        // The phone's own values are still there.
+        let phoneOnly = make(try capture7(), enrichment: try enrichment7(server: false))
+        #expect(d.context == phoneOnly.context)
+    }
+
+    @Test func serverOffOnCapture2BringsBackTheDeviceLinkCard() throws {
+        let on = try fixtureDetail(id2, .standard)
+        #expect(on.linkCards.map(\.title) == ["Example Domain (server)"])
+        #expect(on.summary == "A placeholder page used in documentation examples.")
+
+        let d = try fixtureDetail(id2, vis(server: false))
+        #expect(d.linkCards.map(\.title) == ["Example Domain"])
+        #expect(d.linkCards.allSatisfy { !$0.fromServer })
+        #expect(d.summary == nil && d.tags.isEmpty)
+        #expect(d.captured.contains { $0.label == "Source" && $0.layer == .silver })
+    }
+
+    @Test func phoneOffOnCapture2KeepsTheServerSummary() throws {
+        let d = try fixtureDetail(id2, vis(phone: false))
+        #expect(d.summary == "A placeholder page used in documentation examples.")
+        #expect(d.tags == ["example", "reference"])
+        #expect(!d.captured.contains { $0.label == "Source" })
+        #expect(d.linkCards.allSatisfy { $0.fromServer })
+        #expect(d.pending.isEmpty)
+        #expect(!d.status.contains { $0.layer == .silver })
+    }
+
+    @Test func rawOffRemovesWhatWasCaptured() throws {
+        let full = try fixtureDetail(id2, .standard)
+        #expect(full.sharedTitle == "Example item" && !full.links.isEmpty)
+        let d = try fixtureDetail(id2, vis(raw: false))
+        #expect(d.sharedTitle == nil && d.sharedText == nil)
+        #expect(d.links.isEmpty)
+        #expect(d.preview == full.preview)
+        #expect(d.exportURLs == full.exportURLs)
+        let rows = d.captured + d.context + d.attachments.flatMap { $0 }
+        #expect(!rows.contains { $0.layer == .bronze })
+        #expect(!d.status.contains { $0.layer == .bronze })
+        #expect(d.captured.contains { $0.label == "Source" })
+
+        let seven = try fixtureDetail(id7, vis(raw: false))
+        let sevenRows = seven.captured + seven.context + seven.attachments.flatMap { $0 }
+        #expect(!sevenRows.contains { $0.layer == .bronze })
+        #expect(seven.attachments.allSatisfy { !$0.isEmpty })
+        let sevenFull = make(try capture7(), enrichment: try enrichment7())
+        #expect(seven.preview == sevenFull.preview)
+    }
+
+    @Test func syncOffEmptiesSyncAndStorage() throws {
+        let jobs = [job(.synced)]
+        let full = make(try fixtureMetadata(id2), jobs: jobs, enrichment: try fixtureEnrichment(id2, server: true),
+                        destinationName: "Dropbox")
+        #expect(!full.sync.isEmpty && full.storage != nil)
+        let d = full.filtered(by: vis(sync: false))
+        #expect(d.sync.isEmpty)
+        #expect(d.storage == nil)
+        #expect(d.changedPaths.isEmpty && d.unrestorableNote == nil)
+        #expect(d.summary == full.summary && d.linkCards == full.linkCards)
+    }
+
+    @Test func syncOffDropsChangedPathsAndNote() {
+        let m = meta(attachments: [att()])
+        let d = make(m, jobs: [job(.synced)], changed: RemoteChangedRecord(captureID: "c1", destinationID: "d1",
+                                                                           paths: ["content/a1.bin"], detectedAt: now),
+                     trimmedPaths: ["content/a1.bin"], destinationName: "Dropbox")
+        #expect(!d.changedPaths.isEmpty && d.unrestorableNote != nil)
+        let off = d.filtered(by: vis(sync: false))
+        #expect(off.changedPaths.isEmpty && off.unrestorableNote == nil && off.storage == nil && off.sync.isEmpty)
+    }
+
+    @Test func everythingOffKeepsThePreviewOnly() throws {
+        let off = vis(raw: false, phone: false, server: false, sync: false, log: false)
+        for id in [id2, id7] {
+            let full = make(try fixtureMetadata(id), jobs: [job(.synced)], enrichment: try fixtureEnrichment(id, server: true),
+                            destinationName: "Dropbox")
+            let d = make(try fixtureMetadata(id), jobs: [job(.synced)], enrichment: try fixtureEnrichment(id, server: false),
+                         destinationName: "Dropbox").filtered(by: off)
+            #expect(d.preview == full.preview)
+            #expect(d.exportURLs == full.exportURLs)
+            #expect(d.comments.isEmpty && d.sharedTitle == nil && d.sharedText == nil && d.links.isEmpty)
+            #expect(d.captured.isEmpty && d.context.isEmpty && d.attachments.isEmpty)
+            #expect(d.sync.isEmpty && d.storage == nil && d.status.isEmpty && d.pending.isEmpty)
+            #expect(d.linkCards.isEmpty && d.transcripts.isEmpty && d.recognizedText.isEmpty && d.found.isEmpty)
+            #expect(d.summary == nil && d.tags.isEmpty && d.title == nil && d.topic == nil)
+            #expect(d.imageDescriptions.isEmpty && d.people.isEmpty && d.likely.isEmpty)
+        }
+    }
+
+    @Test func standardChangesNothing() throws {
+        for id in [id2, id7] {
+            let d = make(try fixtureMetadata(id), jobs: [job(.synced)], enrichment: try fixtureEnrichment(id, server: true),
+                         destinationName: "Dropbox")
+            #expect(d.filtered(by: .standard) == d)
+            var logOn = TierVisibility.standard
+            logOn.log = true
+            #expect(d.filtered(by: logOn) == d)
+        }
+    }
+
+    // Even when the detail was built with gold, Server off removes every row marked gold.
+    @Test func serverOffRemovesEveryGoldRow() throws {
+        let d = make(try fixtureMetadata(id7), enrichment: try fixtureEnrichment(id7, server: true))
+            .filtered(by: vis(server: false))
+        #expect(d.title == nil && d.topic == nil && d.summary == nil && d.tags.isEmpty)
+        #expect(d.people.isEmpty && d.likely.isEmpty && d.imageDescriptions.isEmpty)
+        let rows = d.captured + d.context + d.attachments.flatMap { $0 }
+        #expect(!rows.contains { $0.layer == .gold })
+        #expect(!d.status.contains { $0.layer == .gold })
+        #expect(d.linkCards.allSatisfy { !$0.fromServer })
+        #expect(!(d.transcripts + d.recognizedText).contains { $0.layer == .gold })
+    }
+
+    // Comment bodies are raw; a recording's transcript keeps its own layer and stays as a row of its own.
+    @Test func rawOffKeepsACommentTranscriptOnly() {
+        var m = meta(method: .typedNote)
+        m.userNote = "Ask about the lease"
+        let audio = CaptureComment(captureID: "c1", commentID: "k2", addedAt: now,
+                                   localDatetime: "2026-11-07T10:30:00-08:00", timezoneIdentifier: "America/Los_Angeles",
+                                   utcOffsetSeconds: -28800, producer: Producer(appVersion: "1", build: "1", osVersion: "t"),
+                                   audio: CommentAudio(relativePath: "comments/k2.m4a", uti: "com.apple.m4a-audio",
+                                                       mimeType: "audio/mp4", byteCount: 10, sha256: "x",
+                                                       media: MediaFacts(durationSeconds: 7.4)))
+        let silent = CaptureComment(captureID: "c1", commentID: "k3", addedAt: now,
+                                    localDatetime: "2026-11-07T10:31:00-08:00", timezoneIdentifier: "America/Los_Angeles",
+                                    utcOffsetSeconds: -28800, producer: Producer(appVersion: "1", build: "1", osVersion: "t"),
+                                    audio: CommentAudio(relativePath: "comments/k3.m4a", uti: "com.apple.m4a-audio",
+                                                        mimeType: "audio/mp4", byteCount: 10, sha256: "x", media: nil))
+        let t = TranscriptItem(attachmentID: "k2", text: "they said yes", locale: "en_US", segments: [])
+        let d = CaptureDetail.make(metadata: m, packageURL: pkg, noteBody: "note", jobs: [],
+                                   enrichment: resolved(transcripts: ["k2": t]), comments: [audio, silent],
+                                   destination: { _ in nil }, now: now, locale: locale, calendar: calendar)
+        #expect(d.comments.map(\.id) == ["user_note", "k2", "k3"])
+        #expect(d.comments.allSatisfy { $0.showsBody })
+
+        let rawOff = d.filtered(by: vis(raw: false))
+        #expect(rawOff.comments.map(\.id) == ["k2"])
+        #expect(rawOff.comments.first?.showsBody == false)
+        #expect(rawOff.comments.first?.caption == nil)
+        #expect(rawOff.comments.first?.transcript == "they said yes")
+        #expect(rawOff.comments.first?.transcriptLayer == .silver)
+
+        let phoneOff = d.filtered(by: vis(phone: false))
+        #expect(phoneOff.comments.map(\.id) == ["user_note", "k2", "k3"])
+        #expect(phoneOff.comments.allSatisfy { $0.showsBody && $0.transcript == nil && $0.transcriptLayer == nil })
+
+        #expect(d.filtered(by: vis(raw: false, phone: false)).comments.isEmpty)
+    }
+
+    // With Raw off, a trimmed file's row is gone with the rest of what was captured; the preview's own stays,
+    // so its download still works.
+    @Test func rawOffKeepsOnlyThePreviewsTrimmedFile() {
+        let photo = CaptureCore.Attachment(attachmentID: "p1", relativePath: "content/p1.heic", originalFilename: nil,
+                                           uti: "public.heic", mimeType: "image/heic", byteCount: 1_000, sha256: "x",
+                                           representationSource: "camera", media: nil)
+        let other = CaptureCore.Attachment(attachmentID: "p2", relativePath: "content/p2.heic", originalFilename: nil,
+                                           uti: "public.heic", mimeType: "image/heic", byteCount: 1_000, sha256: "y",
+                                           representationSource: "camera", media: nil)
+        let trims = ["p1", "p2"].map {
+            TrimmedAttachment(captureID: "c1", attachmentID: $0, relativePath: "content/\($0).heic", byteCount: 1_000,
+                              sha256: "x", destinationID: "d1", state: .trimmed, trimmedAt: now)
+        }
+        let d = CaptureDetail.make(metadata: meta(method: .camera, attachments: [photo, other]), packageURL: pkg,
+                                   noteBody: nil, jobs: [job(.synced)], enrichment: .empty, trimmed: trims,
+                                   activeDestination: dropbox, destination: { $0 == "d1" ? dropbox : nil },
+                                   now: now, locale: locale, calendar: calendar)
+        #expect(Set(d.remoteOnly.keys) == ["p1", "p2"])
+        let off = d.filtered(by: vis(raw: false))
+        #expect(off.preview == d.preview)
+        #expect(Set(off.remoteOnly.keys) == ["p1"])
+        #expect(d.filtered(by: vis(phone: false)).remoteOnly == d.remoteOnly)
+    }
+
+    @Test func pendingLinesFollowThePhoneSwitch() {
+        let m = meta(urls: ["https://example.com/x"])
+        let d = CaptureDetail.make(metadata: m, packageURL: pkg, noteBody: nil, jobs: [], enrichment: .empty,
+                                   tasks: [EnrichmentTask(captureID: "c1", kind: .linkPreview, version: 1, status: "pending",
+                                                          attemptCount: 0, nextAttemptAt: nil, lastErrorCode: nil)],
+                                   destination: { _ in nil }, now: now, locale: locale, calendar: calendar)
+        #expect(d.pending[.linkPreview] != nil)
+        #expect(d.filtered(by: vis(phone: false)).pending.isEmpty)
+        #expect(d.filtered(by: vis(server: false)).pending == d.pending)
+    }
+
+    @MainActor @Test func modelSavesTheSwitchesAndReloads() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let suite = "hippo-tiers-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        let p = try await t.note("lunch with Ana", at: now)
+        let id = p.metadata.captureID
+        let digest = try #require(try t.store.index.packageDigest(captureID: id))
+        try t.store.enrichments.write(GoldSample.make(metadata: p.metadata, packageDigest: digest, now: now), newAssets: [:])
+        let packageDir = t.store.layout.packageURL(relativeDirectory: p.relativeDirectory)
+        let before = try FileManager.default.subpathsOfDirectory(atPath: packageDir.path).sorted()
+
+        let model = CaptureDetailModel(store: t.store, captureID: id, now: { now }, calendar: calendar, locale: locale,
+                                       settings: settings)
+        #expect(model.visibility == .standard)
+        await model.load()
+        #expect(model.detail?.title == "Sample title from server")
+        #expect(model.detail?.status.contains { $0.text.hasPrefix("From your server") } == true)
+        #expect(model.logLines.isEmpty)
+
+        var v = TierVisibility.standard
+        v.server = false
+        v.log = true
+        await model.setVisibility(v)
+        #expect(model.visibility == v)
+        #expect(settings.tierVisibility == v)
+        #expect(model.detail?.title == nil)
+        #expect(model.detail?.summary == nil)
+        #expect(model.detail?.status.contains { $0.text.hasPrefix("From your server") } == false)
+        #expect(model.logLines.contains { $0.text.hasPrefix("Saved") })
+        #expect(model.logMayBePruned == false)
+
+        // The next details screen starts from the saved switches.
+        let next = CaptureDetailModel(store: t.store, captureID: id, settings: settings)
+        #expect(next.visibility == v)
+
+        // Server back on restores gold in the same screen; Log off clears the lines.
+        v.server = true
+        v.log = false
+        await model.setVisibility(v)
+        #expect(model.detail?.title == "Sample title from server")
+        #expect(model.logLines.isEmpty)
+
+        // Nothing was written into the package.
+        #expect(try FileManager.default.subpathsOfDirectory(atPath: packageDir.path).sorted() == before)
+    }
+
+    @MainActor @Test func oldCaptureLogMayBePruned() async throws {
+        let t = try TestStore()
+        defer { t.cleanup() }
+        let p = try await t.note("old", at: Date().addingTimeInterval(-31 * 86_400))
+        let model = CaptureDetailModel(store: t.store, captureID: p.metadata.captureID)
+        await model.load()
+        #expect(model.logMayBePruned)
+    }
+}

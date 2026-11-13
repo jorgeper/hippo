@@ -86,3 +86,25 @@ public struct AppSettings: @unchecked Sendable {
         defaults.set(on, forKey: "enrichment.\(kind.rawValue)")
     }
 }
+
+extension AppSettings {
+    /// Which tiers the details screen shows, for every capture. An unset switch has its `TierVisibility.standard` value.
+    public var tierVisibility: TierVisibility {
+        get {
+            func value(_ key: String, _ standard: Bool) -> Bool {
+                defaults.object(forKey: key) == nil ? standard : defaults.bool(forKey: key)
+            }
+            let s = TierVisibility.standard
+            return TierVisibility(raw: value("tier_raw", s.raw), phone: value("tier_phone", s.phone),
+                                  server: value("tier_server", s.server), sync: value("tier_sync", s.sync),
+                                  log: value("tier_log", s.log))
+        }
+        nonmutating set {
+            defaults.set(newValue.raw, forKey: "tier_raw")
+            defaults.set(newValue.phone, forKey: "tier_phone")
+            defaults.set(newValue.server, forKey: "tier_server")
+            defaults.set(newValue.sync, forKey: "tier_sync")
+            defaults.set(newValue.log, forKey: "tier_log")
+        }
+    }
+}

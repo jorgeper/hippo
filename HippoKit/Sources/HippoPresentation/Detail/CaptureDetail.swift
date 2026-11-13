@@ -67,6 +67,8 @@ public struct CommentRow: Equatable, Sendable, Identifiable {
     /// Set when a capture-time recording was trimmed from this iPhone (Save space); its file is in the destination
     /// only. Always nil for `user_note` and comment rows: comment files are never trimmed.
     public var remoteOnly: RemoteOnlyAttachment?
+    /// False when the Raw switch hides the comment itself and only its transcript is shown.
+    public var showsBody = true
 
     public init(id: String, body: Body, caption: String? = nil, transcript: String? = nil, transcriptLayer: Layer? = nil,
                 remoteOnly: RemoteOnlyAttachment? = nil) {

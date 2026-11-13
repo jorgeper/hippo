@@ -148,7 +148,8 @@ struct EnrichmentSections: View {
                     Text(line).font(.callout).textSelection(.enabled)
                 }
             } label: {
-                label
+                // One element, like the row with no evidence: the circumstance and its confidence together.
+                label.accessibilityElement(children: .combine)
             }
         }
     }

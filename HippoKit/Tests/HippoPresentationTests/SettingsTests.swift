@@ -743,6 +743,31 @@ struct SettingsTests {
         #expect(AppSettings(defaults: defaults).locationEnabled)
     }
 
+    @Test func tierVisibilityDefaultsAndPersists() throws {
+        let suite = "hippo-defaults-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.tierVisibility == .standard)
+        #expect(settings.tierVisibility.raw && settings.tierVisibility.phone && settings.tierVisibility.server
+                && settings.tierVisibility.sync && !settings.tierVisibility.log)
+
+        var v = TierVisibility.standard
+        v.server = false
+        v.log = true
+        settings.tierVisibility = v
+        #expect(AppSettings(defaults: defaults).tierVisibility == v)
+        #expect(defaults.object(forKey: "tier_server") as? Bool == false)
+        #expect(defaults.object(forKey: "tier_log") as? Bool == true)
+
+        var all = TierVisibility(raw: false, phone: false, server: false, sync: false, log: false)
+        settings.tierVisibility = all
+        #expect(AppSettings(defaults: defaults).tierVisibility == all)
+        all.phone = true
+        settings.tierVisibility = all
+        #expect(AppSettings(defaults: defaults).tierVisibility == all)
+    }
+
     @Test func enrichmentDefaultsOn() throws {
         let suite = "hippo-defaults-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

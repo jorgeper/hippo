@@ -48,7 +48,8 @@ struct CaptureDetailView: View {
             isOnline: { EnrichmentScheduling.isOnline },
             sync: { [coordinator = environment.coordinator] in _ = await coordinator?.syncNow(trigger: "manual") },
             adapterFor: adapterFor,
-            accountName: { destination in await registry?.provider(kind: destination.providerKind)?.accountName(destination) }))
+            accountName: { destination in await registry?.provider(kind: destination.providerKind)?.accountName(destination) },
+            settings: LocationService.settings))
     }
 
     var body: some View {
@@ -98,10 +99,12 @@ struct CaptureDetailView: View {
                 }
             }
             .onDisappear { taskReload?.cancel(); taskReload = nil }
-            // The stripes switch lives in Settings; pick up a change on return.
+            // The stripes switch lives in Settings, and the tier switches are app-wide: pick up a change on return.
             .onAppear {
                 showsStripes = LocationService.settings.showsLayerStripes
                 developerMode = LocationService.settings.developerMode
+                let tiers = LocationService.settings.tierVisibility
+                if tiers != model.visibility { Task { await model.setVisibility(tiers) } }
             }
             .confirmationDialog(model.deletionPrompt?.title ?? "Delete from iPhone?", isPresented: $confirmingDelete,
                                 titleVisibility: .visible, presenting: model.deletionPrompt) { prompt in
@@ -149,6 +152,19 @@ struct CaptureDetailView: View {
     /// One comment: its text or player, when it was added, then its transcript as a row of its own so it
     /// carries its own layer stripe.
     @ViewBuilder private func commentRows(_ comment: CommentRow) -> some View {
+        if comment.showsBody { commentBody(comment) }
+        if let transcript = comment.transcript {
+            Text(transcript)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .listRowSeparator(.hidden, edges: .top)
+                .layerStripe(comment.transcriptLayer ?? .silver, shown: showsStripes)
+        }
+    }
+
+    /// The comment itself: its text or player, and when it was added. Raw.
+    private func commentBody(_ comment: CommentRow) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if let remoteOnly = comment.remoteOnly {
                 RemoteOnlyAttachmentView(attachment: remoteOnly, model: model, large: false)
@@ -165,14 +181,6 @@ struct CaptureDetailView: View {
             }
         }
         .layerStripe(.bronze, shown: showsStripes)
-        if let transcript = comment.transcript {
-            Text(transcript)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .listRowSeparator(.hidden, edges: .top)
-                .layerStripe(comment.transcriptLayer ?? .silver, shown: showsStripes)
-        }
     }
 
     @ViewBuilder private var content: some View {
@@ -184,6 +192,11 @@ struct CaptureDetailView: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
+                // Always shown, whatever is switched off.
+                TierSwitches(visibility: model.visibility) { next in Task { await model.setVisibility(next) } }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 ForEach(otherRemoteOnly(detail), id: \.attachmentID) { attachment in
                     RemoteOnlyAttachmentView(attachment: attachment, model: model, large: false)
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -237,8 +250,10 @@ struct CaptureDetailView: View {
                         }
                     }
                 }
-                StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry,
-                              uploadingAgain: uploadingAgain, onUploadAgain: uploadAgain)
+                if !detail.status.isEmpty || detail.storage != nil || !detail.sync.isEmpty {
+                    StatusSection(detail: detail, showsStripes: showsStripes, retrying: retrying, onRetry: retry,
+                                  uploadingAgain: uploadingAgain, onUploadAgain: uploadAgain)
+                }
                 if developerMode, let capturedAt = model.capturedAt {
                     Section {
                         NavigationLink("Activity") {
@@ -247,6 +262,7 @@ struct CaptureDetailView: View {
                         .accessibilityIdentifier("detail-activity")
                     }
                 }
+                if model.visibility.log { logSection }
             }
             .listStyle(.insetGrouped)
             .contentMargins(.top, detail.preview == .none ? 16 : 0, for: .scrollContent)
@@ -259,6 +275,22 @@ struct CaptureDetailView: View {
         } else {
             ProgressView()
         }
+    }
+
+    /// The Log switch: this capture's log lines, oldest first, at the bottom of the screen.
+    private var logSection: some View {
+        Section {
+            if model.logLines.isEmpty {
+                Text("Nothing logged yet").foregroundStyle(.secondary)
+            } else {
+                ForEach(model.logLines) { LogLineRow(line: $0) }
+            }
+        } header: {
+            Text("Log")
+        } footer: {
+            if model.logMayBePruned { Text("Earlier events may have been removed (Hippo keeps 30 days).") }
+        }
+        .accessibilityIdentifier("detail-log")
     }
 
     /// Shared content is quoted in a tinted block so it never reads as the user's own words.
