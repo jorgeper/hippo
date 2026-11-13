@@ -94,7 +94,7 @@ To work on the page itself, run `hippo ui --dev` and `npm run dev` in `desktop/`
 
 ### Running it on your own folder
 
-Replace `"<path>"` with the folder that holds `captures/`. The first `hippo enrich` is the first write into that folder: it adds one `enrichments/server/YYYY/MM/DD/<capture-id>/enrichment.json` per capture and nothing else (no assets, no log, no state file), and it sends each capture's text and pictures to the provider you chose. Look first:
+Replace `"<path>"` with the folder that holds `captures/`. The first `hippo enrich` is the first write into that folder: it adds one `enrichments/server/YYYY/MM/DD/<capture-id>/enrichment.json` per capture and nothing else (no assets, no log, no state file; the only other thing it does there is remove its own leftover temp files from an interrupted run), and it sends each capture's text and pictures to the provider you chose. Look first:
 
 ```sh
 hippo enrich --dry-run --folder "<path>"   # lists what would be sent and written; writes nothing
@@ -125,7 +125,7 @@ The `fake` provider answers by simple rules and calls no model. It understands, 
 - **Lift:** click an item. It comes up to read. "Turn over" or F turns it to its back, which shows the details and the evidence behind each guess; "Turn back" returns. "Put back" or Escape sets it down.
 - **Set aside:** throw an item toward an edge of the desk. Thrown items collect in a pile in a corner; open it and click one to take it back.
 - **Pin:** drop an item with Shift held, or drop it on the "Maybe these" pile. A pinned item stays on the desk whatever you ask next.
-- **Move:** drag an item to put it down somewhere else. Drag the empty desk to pan.
+- **Move:** drag an item to put it down somewhere else. Drag the empty desk to pan. The wheel, or a pinch on a trackpad, zooms toward the pointer.
 - **Undo:** the Undo button, or Cmd/Ctrl+Z. It steps back one action at a time, newest first: a throw, a take-back, a pin or an unpin is undone before the question it was made under. "Start over" clears the desk and what you set aside.
 - **Layouts:** the buttons at the top right arrange the same captures by kind, time, place, topic or person. Asking can change the layout too ("by place").
 - **Ask bar:** Enter sends; Up and Down walk through earlier sentences; Escape clears it.
@@ -141,6 +141,7 @@ Map tiles come from OpenStreetMap, which then sees the area you are looking at. 
 The desk shows the provider's message in the reply line, and nothing on the desk changes.
 
 - `claude-cli` or `codex-cli`: run `claude` or `codex` once in a terminal and sign in there, then ask again. The desk uses whatever that command is signed in as.
+- `Stopped early (unavailable): the claude command was not found on PATH` (or `the codex command ...`): the command is not on the PATH of the terminal you started `hippo` from. Install it or fix the PATH, then run again. Nothing was written for the captures that were not reached.
 - API providers: set the key in the environment or in `desktop/.env` (see [Providers](#providers)) and restart `hippo ui`. The page never takes a key.
 - To look around without a model, run `hippo ui --provider fake`.
 

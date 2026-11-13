@@ -5,6 +5,9 @@ import type { Page } from '@playwright/test';
 // Type-only: brings in the `window.__desk` declaration the page's own code makes.
 import type {} from '../ui/src/main.ts';
 
+/** interact/hand.ts OPEN_GUARD_MS: a click on a spread item sooner than this after opening is ignored. */
+const OPEN_GUARD_MS = 400;
+
 const url = () => process.env.HIPPO_E2E_URL as string;
 const settled = (page: Page) => page.waitForFunction(() => window.__desk?.settled() === true);
 const ids = (page: Page): Promise<string[]> => page.evaluate(() => window.__desk!.ids());
@@ -40,7 +43,10 @@ test('ask, correct, refine', async ({ page }) => {
 
   await ask(page, 'from last week');
   const recent = await ids(page);
-  expect(recent.length).toBeLessThanOrEqual(shots.length);
+  // The week filter must really narrow: some screenshots from last week, but not all of them. The sample is seeded (7), and for
+  // every weekday of today it holds 3 to 4 of its 18 screenshots in the previous Monday-to-Sunday week.
+  expect(recent.length).toBeGreaterThan(0);
+  expect(recent.length).toBeLessThan(shots.length);
   expect(recent.every(id => shots.includes(id))).toBe(true);
 
   await page.getByTestId('layout-place').click();
@@ -49,6 +55,7 @@ test('ask, correct, refine', async ({ page }) => {
   expect(await ids(page)).toEqual(recent);
   await expect(page.getByTestId('reply')).toContainText('found');
   expect((await page.evaluate(() => window.__desk!.audit())).clean).toBe(true);
+  expect(consoleProblems).toEqual([]);
 });
 
 test('undo steps back through the questions, newest first', async ({ page }) => {
@@ -78,7 +85,11 @@ test('an item lifts, turns over and goes back', async ({ page }) => {
   await page.mouse.click(at!.x, at!.y);
   await settled(page);
   await page.waitForFunction(() => window.__desk!.open() !== undefined);
-  await page.waitForTimeout(500);
+  await settled(page);
+  // `settled` needs 250 ms of quiet and the spread to be built; the click guard (OPEN_GUARD_MS, 400 ms) is measured from the
+  // open, so wait for a spread item to exist, then for the guard.
+  await page.waitForFunction(() => window.__desk!.piles().some(q => q.key.startsWith('spread:')));
+  await page.waitForTimeout(OPEN_GUARD_MS + 50);
   const first = (await page.evaluate(() => window.__desk!.piles())).find((q: { key: string }) => q.key.startsWith('spread:'));
   const p = await page.evaluate(k => window.__desk!.pointOf(k), first!.key);
   await page.mouse.click(p!.x, p!.y);
@@ -94,8 +105,4 @@ test('an item lifts, turns over and goes back', async ({ page }) => {
 test('a request without the cookie or token is refused', async ({ request }) => {
   const res = await request.get(`${process.env.HIPPO_E2E_ORIGIN}/api/boot`);
   expect(res.status()).toBe(403);
-});
-
-test('no console errors during the first test', () => {
-  expect(consoleProblems).toEqual([]);
 });
